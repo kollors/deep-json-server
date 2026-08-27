@@ -45,7 +45,23 @@ const hasReference = (value, relationKeys, id) => {
   });
 };
 
-const findRelatedValue = (database, item, sourceResource, relation, targetResource) => {
+const getResourceIndex = (database, resource, indexes) => {
+  if (!indexes.has(resource)) {
+    const index = new Map();
+
+    database.data[resource].forEach((item) => {
+      if (isObject(item) && item.id != null && !index.has(item.id)) {
+        index.set(item.id, item);
+      }
+    });
+
+    indexes.set(resource, index);
+  }
+
+  return indexes.get(resource);
+};
+
+const findRelatedValue = (database, item, sourceResource, relation, targetResource, indexes) => {
   const targetItems = database.data[targetResource];
   const localRelation = findLocalRelation(item, relation, targetResource);
 
@@ -54,7 +70,8 @@ const findRelatedValue = (database, item, sourceResource, relation, targetResour
   }
 
   if (localRelation != null) {
-    const relatedItems = localRelation.ids.map((id) => targetItems.find((targetItem) => isObject(targetItem) && isEqual(targetItem.id, id))).filter((targetItem) => targetItem != null);
+    const targetIndex = getResourceIndex(database, targetResource, indexes);
+    const relatedItems = localRelation.ids.map((id) => targetIndex.get(id)).filter((targetItem) => targetItem != null);
 
     return localRelation.isMany ? relatedItems : relatedItems[0] ?? null;
   }
@@ -72,29 +89,31 @@ const findRelatedValue = (database, item, sourceResource, relation, targetResour
   return targetItems.filter((targetItem) => hasReference(targetItem, reverseRelationKeys, item.id));
 };
 
-const embedPath = (database, item, sourceResource, [relation, ...nestedRelations]) => {
+const embedPath = (database, item, sourceResource, [relation, ...nestedRelations], indexes) => {
   if (relation == null || !isSafeKey(relation)) {
     return item;
   }
 
   const currentValue = item[relation];
-  const nestedSourceResource = resolveResource(database, relation, sourceResource) ?? relation;
-
-  if (Array.isArray(currentValue)) {
-    return nestedRelations.length === 0 ? item : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedPath(database, value, nestedSourceResource, nestedRelations) : value)) };
-  }
-
-  if (isObject(currentValue)) {
-    return nestedRelations.length === 0 ? item : { ...item, [relation]: embedPath(database, currentValue, nestedSourceResource, nestedRelations) };
-  }
-
   const targetResource = resolveResource(database, relation, sourceResource);
+  const nestedSourceResource = targetResource ?? relation;
+  const localRelation = targetResource == null ? undefined : findLocalRelation(item, relation, targetResource);
+
+  if (localRelation == null) {
+    if (Array.isArray(currentValue)) {
+      return nestedRelations.length === 0 ? item : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedPath(database, value, nestedSourceResource, nestedRelations, indexes) : value)) };
+    }
+
+    if (isObject(currentValue)) {
+      return nestedRelations.length === 0 ? item : { ...item, [relation]: embedPath(database, currentValue, nestedSourceResource, nestedRelations, indexes) };
+    }
+  }
 
   if (targetResource == null) {
     return item;
   }
 
-  const relatedValue = findRelatedValue(database, item, sourceResource, relation, targetResource);
+  const relatedValue = findRelatedValue(database, item, sourceResource, relation, targetResource, indexes);
 
   if (relatedValue == null || nestedRelations.length === 0) {
     return relatedValue === undefined ? item : { ...item, [relation]: relatedValue };
@@ -103,8 +122,8 @@ const embedPath = (database, item, sourceResource, [relation, ...nestedRelations
   return {
     ...item,
     [relation]: Array.isArray(relatedValue)
-      ? relatedValue.map((value) => embedPath(database, value, targetResource, nestedRelations))
-      : embedPath(database, relatedValue, targetResource, nestedRelations),
+      ? relatedValue.map((value) => embedPath(database, value, targetResource, nestedRelations, indexes))
+      : embedPath(database, relatedValue, targetResource, nestedRelations, indexes),
   };
 };
 
@@ -113,4 +132,4 @@ export const parseEmbedPaths = (embed) => toArray(embed)
   .map((path) => path.split('.').filter(Boolean))
   .filter((path) => path.length > 0 && path.every(isSafeKey));
 
-export const embedItem = (database, item, resource, embedPaths) => embedPaths.reduce((embeddedItem, path) => embedPath(database, embeddedItem, resource, path), item);
+export const embedItem = (database, item, resource, embedPaths, indexes = new Map()) => embedPaths.reduce((embeddedItem, path) => embedPath(database, embeddedItem, resource, path, indexes), item);

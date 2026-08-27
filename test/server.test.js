@@ -25,16 +25,16 @@ const fixture = {
     { id: '2', name: 'Paramount Pictures' },
   ],
   users: [
-    { countryId: '1', fullName: 'Alexander Petrov', id: '1' },
+    { country: { id: 'stale', name: 'Stale country' }, countryId: '1', fullName: 'Alexander Petrov', id: '1' },
     { countryId: '2', fullName: 'Ryan Gosling', id: '2' },
   ],
 };
 
-const withServer = async(run) => {
+const withServer = async(run, data = fixture) => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-'));
   const databasePath = join(directory, 'database.json');
 
-  await writeFile(databasePath, JSON.stringify(fixture));
+  await writeFile(databasePath, JSON.stringify(data));
 
   const server = await createServer({ databasePath, logger: false });
 
@@ -50,12 +50,49 @@ test('filters nested fields and combines conditions with AND', async() => {
   await withServer(async({ server }) => {
     const response = await server.inject({
       method: 'GET',
-      query: { _where: JSON.stringify({ actors: { some: { userId: { eq: '1' } } }, title: { contains: 'father' } }) },
+      query: { _where: JSON.stringify({ actors: { some: { and: [{ userId: { eq: '1' } }, { genreIds: { some: { eq: '2' } } }] } }, title: { contains: 'father' } }) },
       url: '/movies',
     });
 
+    const emptyAndResponse = await server.inject({ method: 'GET', query: { _where: JSON.stringify({ and: [] }) }, url: '/movies' });
+
     assert.equal(response.statusCode, 200);
-    assert.deepEqual(response.json().map(({ title }) => title), ['The Godfather']);
+    assert.deepEqual(response.json().data.map(({ title }) => title), ['The Godfather']);
+    assert.equal(emptyAndResponse.json().items, 2);
+  });
+});
+
+test('parses primitive filters and rejects invalid filters', async() => {
+  await withServer(async({ server }) => {
+    const amountResponse = await server.inject({ method: 'GET', query: { amount: '20' }, url: '/items' });
+    const idResponse = await server.inject({ method: 'GET', query: { id: '1' }, url: '/items' });
+    const codeResponse = await server.inject({ method: 'GET', query: { code: '001' }, url: '/items' });
+    const unknownSimpleOperatorResponse = await server.inject({ method: 'GET', query: { 'name:contain': 'Original' }, url: '/items' });
+    const unknownWhereOperatorResponse = await server.inject({ method: 'GET', query: { _where: JSON.stringify({ name: { contain: 'Original' } }) }, url: '/items' });
+    const invalidLogicalOperatorResponse = await server.inject({ method: 'GET', query: { _where: JSON.stringify({ or: {} }) }, url: '/items' });
+    const invalidPathResponse = await server.inject({ method: 'GET', query: { 'name..value': 'Original' }, url: '/items' });
+    const invalidArrayOperatorResponse = await server.inject({ method: 'GET', query: { _where: JSON.stringify({ name: { some: { eq: 'Original' } } }) }, url: '/items' });
+    const invalidStringOperatorResponse = await server.inject({ method: 'GET', query: { _where: JSON.stringify({ amount: { startsWith: '2' } }) }, url: '/items' });
+
+    assert.equal(amountResponse.json().items, 1);
+    assert.equal(idResponse.json().items, 1);
+    assert.equal(codeResponse.json().items, 1);
+    assert.equal(unknownSimpleOperatorResponse.statusCode, 400);
+    assert.equal(unknownWhereOperatorResponse.statusCode, 400);
+    assert.equal(invalidLogicalOperatorResponse.statusCode, 400);
+    assert.equal(invalidPathResponse.statusCode, 400);
+    assert.equal(invalidArrayOperatorResponse.statusCode, 400);
+    assert.equal(invalidStringOperatorResponse.statusCode, 400);
+  }, { items: [{ amount: 20, code: '001', id: '1', name: 'Original' }] });
+});
+
+test('rejects invalid pagination values', async() => {
+  await withServer(async({ server }) => {
+    for (const query of [{ _page: 'abc' }, { _page: '0' }, { _page: '1.5' }, { _perPage: '-1' }, { _perPage: '0' }]) {
+      const response = await server.inject({ method: 'GET', query, url: '/movies' });
+
+      assert.equal(response.statusCode, 400);
+    }
   });
 });
 
@@ -77,8 +114,11 @@ test('embeds direct, nested, reverse and self relations', async() => {
 
 test('supports pagination, sorting and persistent CRUD', async() => {
   await withServer(async({ databasePath, server }) => {
+    const defaultListResponse = await server.inject({ method: 'GET', url: '/movies' });
     const listResponse = await server.inject({ method: 'GET', query: { _page: 1, _perPage: 1, _sort: '-id' }, url: '/movies' });
 
+    assert.equal(defaultListResponse.json().items, 2);
+    assert.equal(defaultListResponse.json().data.length, 2);
     assert.equal(listResponse.json().items, 2);
     assert.equal(listResponse.json().data[0].id, '2');
 
@@ -95,4 +135,50 @@ test('supports pagination, sorting and persistent CRUD', async() => {
     assert.equal(database.publishers.length, publisherCount);
     assert.equal(database.publishers.at(-1).name, 'Universal');
   });
+});
+
+test('serializes writes and preserves the stored ID type', async() => {
+  await withServer(async({ databasePath, server }) => {
+    await Promise.all([
+      server.inject({ method: 'PATCH', payload: { left: true }, url: '/items/1' }),
+      server.inject({ method: 'PATCH', payload: { right: true }, url: '/items/1' }),
+    ]);
+
+    const patchedDatabase = JSON.parse(await readFile(databasePath, 'utf8'));
+    const replaceResponse = await server.inject({ method: 'PUT', payload: { name: 'Replaced' }, url: '/items/1' });
+    const createResponses = await Promise.all(Array.from({ length: 20 }, (_, index) => server.inject({ method: 'POST', payload: { name: `Item ${index}` }, url: '/items' })));
+    const database = JSON.parse(await readFile(databasePath, 'utf8'));
+
+    assert.equal(patchedDatabase.items[0].left, true);
+    assert.equal(patchedDatabase.items[0].right, true);
+    assert.equal(replaceResponse.json().id, 1);
+    assert.equal(typeof replaceResponse.json().id, 'number');
+    assert.equal(createResponses.every(({ statusCode }) => statusCode === 201), true);
+    assert.equal(database.items.length, 21);
+    assert.equal(database.items[0].id, 1);
+    assert.equal(typeof database.items[0].id, 'number');
+  }, { items: [{ id: 1, name: 'Original' }] });
+});
+
+test('rejects a missing file and invalid database structures', async() => {
+  const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-invalid-'));
+  const databasePath = join(directory, 'database.json');
+
+  try {
+    await assert.rejects(() => createServer({ databasePath, logger: false }), /Файл базы данных не найден/);
+
+    await writeFile(databasePath, '[]');
+    await assert.rejects(() => createServer({ databasePath, logger: false }), /JSON-объект/);
+
+    await writeFile(databasePath, JSON.stringify({ items: {} }));
+    await assert.rejects(() => createServer({ databasePath, logger: false }), /JSON-массив/);
+
+    await writeFile(databasePath, JSON.stringify({ $schema: './database-schema.json', items: [] }));
+
+    const server = await createServer({ databasePath, logger: false });
+
+    await server.close();
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });

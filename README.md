@@ -8,6 +8,8 @@ A small JSON REST mock server with CRUD, pagination, deep filters and recursive 
 
 ## Installation
 
+Node.js 20 or newer is required.
+
 ```bash
 npm install --save-dev @kollors/deep-json-server
 ```
@@ -33,7 +35,7 @@ The default address is `http://127.0.0.1:4001`. You can also pass `--host` and `
 
 ## Example database
 
-This example is based on a movie catalog. The genre names are real film genres, while `Gangster film` demonstrates a self-referencing subgenre.
+This example is based on a movie catalog. `Gangster film` demonstrates a relationship with a parent genre.
 
 ```json
 {
@@ -104,7 +106,7 @@ PATCH  /movies/:id
 DELETE /movies/:id
 ```
 
-`POST` generates a string ID. `PUT`, `PATCH` and `DELETE` persist their changes in the JSON file.
+`POST` generates a string ID, while `PUT` and `PATCH` preserve the stored ID type. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — persist their changes in the JSON file. The database file must exist before startup and contain a JSON object whose resources are arrays. Top-level metadata keys prefixed with `$`, such as `$schema`, may contain non-array values.
 
 ## Pagination and sorting
 
@@ -112,7 +114,7 @@ DELETE /movies/:id
 GET /movies?_page=1&_perPage=10&_sort=-id,title
 ```
 
-Without `_page`, a GET collection returns an array. With `_page`, it returns:
+A GET collection always returns a page object. `_page` defaults to `1`, and `_perPage` defaults to `10`:
 
 ```json
 {
@@ -125,6 +127,8 @@ Without `_page`, a GET collection returns an array. With `_page`, it returns:
   "prev": null
 }
 ```
+
+Both pagination parameters must be positive integers. Invalid values return `400` instead of being silently corrected.
 
 Prefix a sort field with `-` for descending order.
 
@@ -164,6 +168,8 @@ Simple query parameters are supported too:
 GET /movies?title:contains=father
 ```
 
+Simple filter values recognize JSON primitives: numbers, `true`, `false` and `null`. Values with leading zeroes, such as `001`, remain strings. Unknown operators, invalid logical conditions and filter paths that do not exist in a non-empty resource return `400`.
+
 ## Relationships
 
 Use `_embed` to replace IDs with related records:
@@ -194,6 +200,8 @@ Relations are inferred by convention:
 - `parentIds` points back to the current resource when `_embed=parents` is requested.
 
 They are soft references: the server resolves them when requested but does not enforce referential integrity when data is written.
+
+An explicit `...Id` or `...Ids` field is the source of truth. If a record also contains an outdated embedded value, `_embed` replaces it with the current related record. Relationship lookups use lazy per-request ID indexes, so each referenced resource is indexed only when needed.
 
 ## OpenAPI generation
 
@@ -229,7 +237,27 @@ Generate an OpenAPI 3.0.3 file and exit:
 deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml --host 127.0.0.1 --port 4001
 ```
 
-The generator infers resources and field types from all database records. Every inferred field is optional by default, while the top-level resource record's primary key `id` is always required. Add other required fields to `required`; nested fields use dot paths such as `actors.userId`. The `formats` object adds OpenAPI formats such as `date` and `uri`.
+The generator infers resources and field types from all database records. Every inferred field is optional by default, while a top-level `id` present in the resulting resource schema is always required. Add other required fields to `required`; nested fields use dot paths such as `actors.userId`. The `formats` object adds OpenAPI formats such as `date` and `uri`.
+
+Different value types are inferred independently and combined through `oneOf`. Configuration is validated before generation: `$info`, resource and schema names, and the structure of `properties` are validated, while paths from `required` and `formats` must exist in the resulting schema.
+
+Use `properties` to describe fields that cannot be inferred, particularly for an empty resource. Explicit properties are merged with inferred properties:
+
+```json
+{
+  "$schema": {
+    "reviews": {
+      "properties": {
+        "rating": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "text": { "type": "string" }
+      },
+      "required": ["rating"]
+    }
+  }
+}
+```
+
+An empty resource still receives a required string `id` property because IDs created by the server are strings. Generation stops with an actionable error when resources produce duplicate schema names or operation IDs; use an explicit `name` to resolve schema-name collisions.
 
 `$info` becomes the OpenAPI `info` object, while resource settings live under `$schema`. The OpenAPI `servers` entry is generated automatically from `--host` and `--port`, their `HOST` and `PORT` environment variable equivalents, or the default `http://127.0.0.1:4001`.
 

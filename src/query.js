@@ -2,6 +2,19 @@ import { createHttpError, isEqual, isObject, isSafeKey, toArray } from './utils.
 
 const FIELD_OPERATORS = new Set(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
 const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_perPage', '_sort', '_where']);
+const NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+const isFilterEqual = (left, right) => {
+  if (isEqual(left, right)) {
+    return true;
+  }
+
+  if (typeof left === 'number' && typeof right === 'string' && NUMBER_PATTERN.test(right)) {
+    return left === Number(right);
+  }
+
+  return typeof right === 'number' && typeof left === 'string' && NUMBER_PATTERN.test(left) && right === Number(left);
+};
 
 const compareValues = (left, right) => {
   if (Object.is(left, right)) {
@@ -32,11 +45,11 @@ const matchesOperator = (field, operator, expectedValue) => {
     case 'contains':
       return typeof field === 'string'
         ? field.toLowerCase().includes(String(expectedValue).toLowerCase())
-        : Array.isArray(field) && field.some((value) => isEqual(value, expectedValue));
+        : Array.isArray(field) && field.some((value) => isFilterEqual(value, expectedValue));
     case 'endsWith':
       return typeof field === 'string' && field.toLowerCase().endsWith(String(expectedValue).toLowerCase());
     case 'eq':
-      return isEqual(field, expectedValue);
+      return isFilterEqual(field, expectedValue);
     case 'every':
       return Array.isArray(field) && field.every((value) => matchesValue(value, expectedValue));
     case 'gt':
@@ -47,15 +60,15 @@ const matchesOperator = (field, operator, expectedValue) => {
       const expectedValues = toArray(expectedValue);
 
       return Array.isArray(field)
-        ? field.some((value) => expectedValues.some((expectedItem) => isEqual(value, expectedItem)))
-        : expectedValues.some((expectedItem) => isEqual(field, expectedItem));
+        ? field.some((value) => expectedValues.some((expectedItem) => isFilterEqual(value, expectedItem)))
+        : expectedValues.some((expectedItem) => isFilterEqual(field, expectedItem));
     }
     case 'lt':
       return field != null && field < expectedValue;
     case 'lte':
       return field != null && field <= expectedValue;
     case 'ne':
-      return !isEqual(field, expectedValue);
+      return !isFilterEqual(field, expectedValue);
     case 'none':
       return Array.isArray(field) && !field.some((value) => matchesValue(value, expectedValue));
     case 'not':
@@ -71,7 +84,7 @@ const matchesOperator = (field, operator, expectedValue) => {
 
 function matchesValue(field, condition) {
   if (!isObject(condition)) {
-    return isEqual(field, condition);
+    return isFilterEqual(field, condition);
   }
 
   const conditionEntries = Object.entries(condition);
@@ -108,6 +121,10 @@ function matchesWhere(value, where) {
 }
 
 const parsePrimitive = (value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
   if (value === 'true') {
     return true;
   }
@@ -116,7 +133,11 @@ const parsePrimitive = (value) => {
     return false;
   }
 
-  return value === 'null' ? null : value;
+  if (value === 'null') {
+    return null;
+  }
+
+  return NUMBER_PATTERN.test(value) && Number.isFinite(Number(value)) ? Number(value) : value;
 };
 
 const parseFilterKey = (key) => {
@@ -126,7 +147,11 @@ const parseFilterKey = (key) => {
     const path = key.slice(0, colonIndex);
     const operator = key.slice(colonIndex + 1);
 
-    return FIELD_OPERATORS.has(operator) ? { operator, path } : undefined;
+    if (!FIELD_OPERATORS.has(operator)) {
+      throw createHttpError(400, `Неизвестный оператор «${operator}» в фильтре «${key}»`);
+    }
+
+    return { operator, path };
   }
 
   const legacyOperator = key.match(/^(.*)_([a-zA-Z]+)$/);
@@ -139,10 +164,10 @@ const parseFilterKey = (key) => {
 };
 
 const setWhereOperator = (where, path, operator, value) => {
-  const keys = path.split('.').filter(Boolean);
+  const keys = path.split('.');
 
-  if (keys.length === 0 || keys.some((key) => !isSafeKey(key))) {
-    return;
+  if (keys.some((key) => key === '' || !isSafeKey(key))) {
+    throw createHttpError(400, `Недопустимый путь фильтра «${path}»`);
   }
 
   const fieldKey = keys.pop();
@@ -190,6 +215,120 @@ export const parseWhere = (query) => {
 
   return where;
 };
+
+const validateCondition = (condition, samples, path) => {
+  if (!isObject(condition)) {
+    return;
+  }
+
+  Object.entries(condition).forEach(([key, value]) => {
+    if (key === 'and' || key === 'or') {
+      if (!Array.isArray(value) || key === 'or' && value.length === 0 || value.some((nestedWhere) => !isObject(nestedWhere))) {
+        throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
+      }
+
+      value.forEach((nestedWhere) => validateWhere(nestedWhere, samples, path));
+      return;
+    }
+
+    if (FIELD_OPERATORS.has(key)) {
+      if (['every', 'none', 'some'].includes(key)) {
+        if (samples.length > 0 && !samples.some(Array.isArray)) {
+          throw createHttpError(400, `Оператор «${key}» в фильтре «${path}» можно применить только к массиву`);
+        }
+
+        const nestedSamples = samples.flatMap((sample) => Array.isArray(sample) ? sample : []);
+
+        validateCondition(value, nestedSamples, `${path}.${key}`);
+      } else if (key === 'not') {
+        validateCondition(value, samples, `${path}.not`);
+      } else if (['endsWith', 'startsWith'].includes(key) && samples.length > 0 && !samples.some((sample) => typeof sample === 'string')) {
+        throw createHttpError(400, `Оператор «${key}» в фильтре «${path}» можно применить только к строке`);
+      } else if (key === 'contains' && samples.length > 0 && !samples.some((sample) => typeof sample === 'string' || Array.isArray(sample))) {
+        throw createHttpError(400, `Оператор «contains» в фильтре «${path}» можно применить только к строке или массиву`);
+      }
+
+      return;
+    }
+
+    if (!isSafeKey(key)) {
+      throw createHttpError(400, `Недопустимый путь фильтра «${path}.${key}»`);
+    }
+
+    const objectSamples = samples.filter(isObject);
+
+    if (samples.length > 0 && objectSamples.length === 0) {
+      throw createHttpError(400, `Неизвестный оператор или вложенное поле «${path}.${key}»`);
+    }
+
+    const nestedSamples = objectSamples.filter((sample) => Object.hasOwn(sample, key)).map((sample) => sample[key]);
+
+    if (objectSamples.length > 0 && nestedSamples.length === 0) {
+      throw createHttpError(400, `Неизвестное поле фильтра «${path}.${key}»`);
+    }
+
+    validateCondition(value, nestedSamples, `${path}.${key}`);
+  });
+};
+
+export const validateWhere = (where, items, path = '') => {
+  Object.entries(where).forEach(([key, condition]) => {
+    if (key === 'and' || key === 'or') {
+      if (!Array.isArray(condition) || key === 'or' && condition.length === 0 || condition.some((nestedWhere) => !isObject(nestedWhere))) {
+        throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
+      }
+
+      condition.forEach((nestedWhere) => validateWhere(nestedWhere, items, path));
+      return;
+    }
+
+    if (key === 'not') {
+      if (!isObject(condition)) {
+        throw createHttpError(400, 'Оператор «not» должен содержать JSON-объект');
+      }
+
+      validateWhere(condition, items, path);
+      return;
+    }
+
+    if (!isSafeKey(key)) {
+      throw createHttpError(400, `Недопустимый путь фильтра «${path === '' ? key : `${path}.${key}`}»`);
+    }
+
+    const fieldPath = path === '' ? key : `${path}.${key}`;
+    const objectItems = items.filter(isObject);
+    const samples = objectItems.filter((item) => Object.hasOwn(item, key)).map((item) => item[key]);
+
+    if (objectItems.length > 0 && samples.length === 0) {
+      throw createHttpError(400, `Неизвестное поле фильтра «${fieldPath}»`);
+    }
+
+    validateCondition(condition, samples, fieldPath);
+  });
+};
+
+const parsePositiveInteger = (value, name, defaultValue) => {
+  if (value == null) {
+    return defaultValue;
+  }
+
+  if (Array.isArray(value) || !/^[1-9]\d*$/.test(String(value))) {
+    throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
+  }
+
+  const number = Number(value);
+
+  if (!Number.isSafeInteger(number)) {
+    throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
+  }
+
+  return number;
+};
+
+export const parsePagination = (query) => ({
+  page: parsePositiveInteger(query._page, '_page', 1),
+  pageSize: parsePositiveInteger(query._perPage, '_perPage', 10),
+});
 
 export const paginateItems = (items, page, pageSize) => {
   const safePageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 10;

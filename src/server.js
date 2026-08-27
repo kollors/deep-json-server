@@ -1,7 +1,8 @@
 import Fastify from 'fastify';
 import { JSONFilePreset } from 'lowdb/node';
 import { randomBytes } from 'node:crypto';
-import { matchesWhere, paginateItems, parseWhere, sortItems } from './query.js';
+import { readFile } from 'node:fs/promises';
+import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query.js';
 import { embedItem, parseEmbedPaths } from './relations.js';
 import { createHttpError, getResourceNames, isObject, isSafeKey, resolveDatabasePath } from './utils.js';
 
@@ -31,16 +32,73 @@ const getRequestBody = (body) => {
 
 const findItem = (collection, id) => collection.find((item) => isObject(item) && String(item.id) === id);
 
+const validateDatabase = (data) => {
+  if (!isObject(data)) {
+    throw new Error('База данных должна содержать JSON-объект');
+  }
+
+  const invalidResource = Object.entries(data).find(([key, value]) => !key.startsWith('$') && !Array.isArray(value));
+
+  if (invalidResource != null) {
+    throw new Error(`Ресурс «${invalidResource[0]}» должен содержать JSON-массив`);
+  }
+};
+
+const readDatabaseFile = async(databasePath) => {
+  let source;
+
+  try {
+    source = await readFile(databasePath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new Error(`Файл базы данных не найден: ${databasePath}`);
+    }
+
+    throw error;
+  }
+
+  const data = JSON.parse(source);
+
+  validateDatabase(data);
+
+  return data;
+};
+
 export async function createServer({ databasePath, logger = true } = {}) {
-  const database = await JSONFilePreset(resolveDatabasePath(databasePath), {});
+  const resolvedDatabasePath = resolveDatabasePath(databasePath);
+  const initialData = await readDatabaseFile(resolvedDatabasePath);
+  const database = await JSONFilePreset(resolvedDatabasePath, initialData);
   const server = Fastify({ logger });
+  let databaseWriteQueue = Promise.resolve();
+
+  const readDatabase = async() => {
+    database.data = await readDatabaseFile(resolvedDatabasePath);
+  };
+
+  const updateDatabase = (update) => {
+    const operation = databaseWriteQueue.then(async() => {
+      await readDatabase();
+
+      const result = update();
+
+      await database.write();
+
+      return result;
+    });
+
+    databaseWriteQueue = operation.catch(() => undefined);
+
+    return operation;
+  };
 
   server.addHook('onRequest', async(_request, reply) => {
     Object.entries(CORS_HEADERS).forEach(([header, value]) => reply.header(header, value));
   });
 
-  server.addHook('preHandler', async() => {
-    await database.read();
+  server.addHook('preHandler', async(request) => {
+    if (request.method === 'GET') {
+      await readDatabase();
+    }
   });
 
   server.options('/', async(_request, reply) => reply.code(204).send());
@@ -51,12 +109,16 @@ export async function createServer({ databasePath, logger = true } = {}) {
     const collection = getCollection(database, request.params.resource);
     const where = parseWhere(request.query);
     const embedPaths = parseEmbedPaths(request.query._embed);
-    const embeddedItems = collection.map((item) => embedItem(database, item, request.params.resource, embedPaths));
+    const relationIndexes = new Map();
+    const embeddedItems = collection.map((item) => embedItem(database, item, request.params.resource, embedPaths, relationIndexes));
+    const pagination = parsePagination(request.query);
+
+    validateWhere(where, embeddedItems);
+
     const filteredItems = embeddedItems.filter((item) => matchesWhere(item, where));
     const sortedItems = sortItems(filteredItems, request.query._sort);
-    const page = request.query._page == null ? undefined : Number(request.query._page);
 
-    return page == null ? sortedItems : paginateItems(sortedItems, page, Number(request.query._perPage));
+    return paginateItems(sortedItems, pagination.page, pagination.pageSize);
   });
 
   server.get('/:resource/:id', async(request) => {
@@ -70,59 +132,65 @@ export async function createServer({ databasePath, logger = true } = {}) {
   });
 
   server.post('/:resource', async(request, reply) => {
-    const collection = getCollection(database, request.params.resource);
-    const item = { ...getRequestBody(request.body), id: randomBytes(8).toString('base64url') };
+    const item = await updateDatabase(() => {
+      const collection = getCollection(database, request.params.resource);
+      const createdItem = { ...getRequestBody(request.body), id: randomBytes(8).toString('base64url') };
 
-    collection.push(item);
-    await database.write();
+      collection.push(createdItem);
+
+      return createdItem;
+    });
 
     return reply.code(201).send(item);
   });
 
   server.put('/:resource/:id', async(request) => {
-    const collection = getCollection(database, request.params.resource);
-    const currentItem = findItem(collection, request.params.id);
+    return updateDatabase(() => {
+      const collection = getCollection(database, request.params.resource);
+      const currentItem = findItem(collection, request.params.id);
 
-    if (currentItem == null) {
-      throw createHttpError(404, 'Запись не найдена');
-    }
+      if (currentItem == null) {
+        throw createHttpError(404, 'Запись не найдена');
+      }
 
-    const item = { ...getRequestBody(request.body), id: request.params.id };
+      const item = { ...getRequestBody(request.body), id: currentItem.id };
 
-    collection.splice(collection.indexOf(currentItem), 1, item);
-    await database.write();
+      collection.splice(collection.indexOf(currentItem), 1, item);
 
-    return item;
+      return item;
+    });
   });
 
   server.patch('/:resource/:id', async(request) => {
-    const collection = getCollection(database, request.params.resource);
-    const currentItem = findItem(collection, request.params.id);
+    return updateDatabase(() => {
+      const collection = getCollection(database, request.params.resource);
+      const currentItem = findItem(collection, request.params.id);
 
-    if (currentItem == null) {
-      throw createHttpError(404, 'Запись не найдена');
-    }
+      if (currentItem == null) {
+        throw createHttpError(404, 'Запись не найдена');
+      }
 
-    const item = { ...currentItem, ...getRequestBody(request.body), id: request.params.id };
+      const item = { ...currentItem, ...getRequestBody(request.body), id: currentItem.id };
 
-    collection.splice(collection.indexOf(currentItem), 1, item);
-    await database.write();
+      collection.splice(collection.indexOf(currentItem), 1, item);
 
-    return item;
+      return item;
+    });
   });
 
   server.delete('/:resource/:id', async(request) => {
-    const collection = getCollection(database, request.params.resource);
-    const currentItem = findItem(collection, request.params.id);
+    return updateDatabase(() => {
+      const collection = getCollection(database, request.params.resource);
+      const currentItem = findItem(collection, request.params.id);
 
-    if (currentItem == null) {
-      throw createHttpError(404, 'Запись не найдена');
-    }
+      if (currentItem == null) {
+        throw createHttpError(404, 'Запись не найдена');
+      }
 
-    collection.splice(collection.indexOf(currentItem), 1);
-    await database.write();
+      collection.splice(collection.indexOf(currentItem), 1);
 
-    return currentItem;
+      return currentItem;
+    });
   });
 
   server.setErrorHandler((error, request, reply) => {

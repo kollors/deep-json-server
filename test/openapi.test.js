@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { generateOpenApi } from '../index.js';
+import { createOpenApiDocument, generateOpenApi } from '../index.js';
 import { runCli } from '../src/cli.js';
 import { isMainModule } from '../src/utils.js';
 
@@ -69,7 +69,10 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(actor.properties.genres.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Asset.properties.name.type, 'string');
-    assert.equal(document.components.parameters.Page.required, true);
+    assert.equal(document.components.parameters.Page.required, false);
+    assert.equal(document.components.parameters.Page.schema.default, 1);
+    assert.equal(document.components.parameters.PerPage.required, false);
+    assert.equal(document.components.parameters.PerPage.schema.default, 10);
     assert.equal(document.components.parameters.PerPage.name, '_perPage');
     assert.equal(document.components.parameters.Embed.schema.type, 'array');
     assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
@@ -78,6 +81,45 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
     assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
   });
+});
+
+test('describes empty resources through explicit properties', () => {
+  const document = createOpenApiDocument(
+    { items: [] },
+    { $schema: { items: { formats: { createdAt: 'date-time' }, properties: { createdAt: { type: 'string' }, name: { type: 'string' } }, required: ['name'] } } },
+  );
+
+  assert.deepEqual(document.components.schemas.Item.required, ['id', 'name']);
+  assert.equal(document.components.schemas.Item.properties.id.type, 'string');
+  assert.equal(document.components.schemas.Item.properties.name.type, 'string');
+  assert.equal(document.components.schemas.Item.properties.createdAt.format, 'date-time');
+  assert.deepEqual(document.components.schemas.ItemCreate.required, ['name']);
+});
+
+test('infers arrays, objects and primitives independently for mixed fields', () => {
+  const document = createOpenApiDocument({ items: [{ id: '1', value: ['one'] }, { id: '2', value: 'two' }] });
+  const schemas = document.components.schemas.Item.properties.value.oneOf;
+
+  assert.equal(schemas.find(({ type }) => type === 'array').items.type, 'string');
+  assert.equal(schemas.some(({ type }) => type === 'string'), true);
+});
+
+test('validates OpenAPI configuration and configured paths', () => {
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $info: {} }), /title и version/);
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: [] }), /\$schema/);
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
+  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
+  assert.throws(() => createOpenApiDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
+});
+
+test('rejects colliding component names and operation IDs', () => {
+  assert.throws(() => createOpenApiDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
+  assert.throws(() => createOpenApiDocument(
+    { 'blog-posts': [], blog_posts: [] },
+    { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } },
+  ), /operationId/);
 });
 
 test('generates OpenAPI through CLI and exits without starting the server', async() => {
