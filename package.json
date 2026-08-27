@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "JSON mock server with deep filters and recursive relationship embedding",
   "type": "module",
   "bin": {
@@ -26,6 +26,7 @@
   "dependencies": {
     "fastify": "^5.12.1",
     "lowdb": "^7.0.1",
+    "pluralize": "^8.0.0",
     "yaml": "^2.8.1"
   },
   "repository": {

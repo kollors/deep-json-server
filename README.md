@@ -33,7 +33,7 @@ The default address is `http://127.0.0.1:4001`. You can also pass `--host` and `
 
 ## Example database
 
-This example is based on a movie catalog. It intentionally has no clothes resource. The genre names are real film genres, while `Gangster film` demonstrates a self-referencing subgenre.
+This example is based on a movie catalog. The genre names are real film genres, while `Gangster film` demonstrates a self-referencing subgenre.
 
 ```json
 {

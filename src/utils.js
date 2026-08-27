@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pluralize from 'pluralize';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -45,16 +46,6 @@ export const resolveDatabasePath = (databasePath) => {
   return resolve(databasePath);
 };
 
-export const singularize = (value) => {
-  if (value === 'clothes' || value === 'movies') {
-    return value === 'movies' ? 'movie' : value;
-  }
-
-  if (value.endsWith('ies')) {
-    return `${value.slice(0, -3)}y`;
-  }
-
-  return value.endsWith('s') ? value.slice(0, -1) : value;
-};
+export const singularize = (value) => pluralize.singular(value);
 
 export const toPascalCase = (value) => value.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join('');

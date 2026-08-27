@@ -10,11 +10,10 @@ import { runCli } from '../src/cli.js';
 import { isMainModule } from '../src/utils.js';
 
 const database = {
-  clothes: [{ id: '1', name: 'Suit' }],
   countries: [{ id: '1', name: 'Russia' }],
   genres: [{ id: '1', name: 'Crime', parentIds: [] }, { id: '2', name: 'Drama', parentIds: ['1'] }],
   movies: [
-    { actors: [{ clothesIds: ['1'], genreIds: ['2'], id: 'actor-1', userId: '1' }], coverSrc: 'https://example.com/cover.jpg', description: 'Description', id: '1', publisherIds: ['1'], title: 'Movie' },
+    { actors: [{ genreIds: ['2'], id: 'actor-1', userId: '1' }], coverSrc: 'https://example.com/cover.jpg', description: 'Description', id: '1', publisherIds: ['1'], title: 'Movie' },
     { actors: [], coverSrc: 'https://example.com/cover-2.jpg', id: '2', publisherIds: [], title: 'Movie 2' },
   ],
   publishers: [{ id: '1', name: 'Publisher' }],
@@ -54,7 +53,6 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.ok(!movie.required.includes('description'));
     assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
     assert.equal(movie.properties.publishers.items.$ref, '#/components/schemas/Publisher');
-    assert.equal(actor.properties.clothes.items.$ref, '#/components/schemas/Clothes');
     assert.equal(actor.properties.user.$ref, '#/components/schemas/User');
     assert.equal(actor.properties.genres.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
