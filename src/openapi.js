@@ -104,13 +104,13 @@ const addRelationSchemas = (schema, resources, componentNames, sourceResource) =
     }
 
     const [, relation, suffix] = match;
-    const targetResource = resolveRelationResource(resources, suffix === 'Ids' ? `${relation}s` : relation, sourceResource);
+    const relationName = suffix === 'Ids' ? resources.find((resource) => singularize(resource) === relation) ?? `${relation}s` : relation;
+    const targetResource = resolveRelationResource(resources, relationName, sourceResource);
 
     if (targetResource == null) {
       return;
     }
 
-    const relationName = suffix === 'Ids' ? `${relation}s` : relation;
     const reference = { $ref: `#/components/schemas/${componentNames[targetResource]}` };
 
     properties[relationName] = suffix === 'Ids' ? { items: reference, type: 'array' } : reference;
