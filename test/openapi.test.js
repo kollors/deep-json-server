@@ -22,7 +22,7 @@ const database = {
 };
 const schemaConfig = {
   movies: { formats: { coverSrc: 'uri' }, optional: ['description'] },
-  resources: { modelName: 'Asset' },
+  resources: { name: 'Asset' },
   users: { formats: { avatarSrc: 'uri', bornAt: 'date' } },
 };
 
@@ -62,6 +62,7 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Asset.properties.name.type, 'string');
     assert.equal(document.components.parameters.Page.required, true);
+    assert.equal(document.components.parameters.PerPage.name, '_perPage');
     assert.equal(document.components.parameters.Embed.schema.type, 'array');
     assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
     assert.equal(document.paths['/movies'].get.operationId, 'getMovies');

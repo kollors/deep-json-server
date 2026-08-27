@@ -109,7 +109,7 @@ DELETE /movies/:id
 ## Pagination and sorting
 
 ```http
-GET /movies?_page=1&_per_page=10&_sort=-id,title
+GET /movies?_page=1&_perPage=10&_sort=-id,title
 ```
 
 Without `_page`, a GET collection returns an array. With `_page`, it returns:
@@ -224,12 +224,12 @@ deep-json-server mock/database.json --generate mock/database-schema.json mock/op
 
 The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
 
-Use `modelName` when a resource needs an explicit schema name instead of the automatically singularized name:
+Use `name` when a resource needs an explicit schema name instead of the automatically singularized name:
 
 ```json
 {
   "equipment": {
-    "modelName": "Equipment"
+    "name": "Equipment"
   }
 }
 ```

@@ -1,7 +1,7 @@
 import { createHttpError, isEqual, isObject, isSafeKey, toArray } from './utils.js';
 
 const FIELD_OPERATORS = new Set(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
-const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_per_page', '_sort', '_where']);
+const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_perPage', '_sort', '_where']);
 
 const compareValues = (left, right) => {
   if (Object.is(left, right)) {

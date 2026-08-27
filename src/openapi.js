@@ -134,7 +134,7 @@ const createParameters = () => ({
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: true, schema: { minimum: 1, type: 'integer' } },
-  PerPage: { in: 'query', name: '_per_page', required: true, schema: { minimum: 1, type: 'integer' } },
+  PerPage: { in: 'query', name: '_perPage', required: true, schema: { minimum: 1, type: 'integer' } },
   Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
   Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
 });
@@ -202,7 +202,7 @@ export function createOpenApiDocument(database, schemaConfig = {}) {
   const resources = getResourceNames(database);
   const componentNames = Object.fromEntries(resources.map((resource) => {
     const resourceConfig = isObject(schemaConfig[resource]) ? schemaConfig[resource] : {};
-    const componentName = typeof resourceConfig.modelName === 'string' && resourceConfig.modelName !== '' ? resourceConfig.modelName : toPascalCase(singularize(resource));
+    const componentName = typeof resourceConfig.name === 'string' && resourceConfig.name !== '' ? resourceConfig.name : toPascalCase(singularize(resource));
 
     return [resource, componentName];
   }));

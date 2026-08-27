@@ -56,7 +56,7 @@ export async function createServer({ databasePath, logger = true } = {}) {
     const sortedItems = sortItems(filteredItems, request.query._sort);
     const page = request.query._page == null ? undefined : Number(request.query._page);
 
-    return page == null ? sortedItems : paginateItems(sortedItems, page, Number(request.query._per_page));
+    return page == null ? sortedItems : paginateItems(sortedItems, page, Number(request.query._perPage));
   });
 
   server.get('/:resource/:id', async(request) => {

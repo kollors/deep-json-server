@@ -77,7 +77,7 @@ test('embeds direct, nested, reverse and self relations', async() => {
 
 test('supports pagination, sorting and persistent CRUD', async() => {
   await withServer(async({ databasePath, server }) => {
-    const listResponse = await server.inject({ method: 'GET', query: { _page: 1, _per_page: 1, _sort: '-id' }, url: '/movies' });
+    const listResponse = await server.inject({ method: 'GET', query: { _page: 1, _perPage: 1, _sort: '-id' }, url: '/movies' });
 
     assert.equal(listResponse.json().items, 2);
     assert.equal(listResponse.json().data[0].id, '2');
