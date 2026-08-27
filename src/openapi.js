@@ -256,7 +256,7 @@ export async function generateOpenApi({ databasePath, outputPath, schemaPath }) 
   const resolvedOutputPath = resolve(outputPath);
 
   await mkdir(dirname(resolvedOutputPath), { recursive: true });
-  await writeFile(resolvedOutputPath, stringify(document, { lineWidth: 0 }), 'utf8');
+  await writeFile(resolvedOutputPath, stringify(document, { aliasDuplicateObjects: false, lineWidth: 0 }), 'utf8');
 
   return document;
 }

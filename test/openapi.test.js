@@ -46,11 +46,13 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
   await withFiles(async({ databasePath, outputPath, schemaPath }) => {
     await generateOpenApi({ databasePath, outputPath, schemaPath });
 
-    const document = parse(await readFile(outputPath, 'utf8'));
+    const yaml = await readFile(outputPath, 'utf8');
+    const document = parse(yaml);
     const movie = document.components.schemas.Movie;
     const actor = movie.properties.actors.items;
 
     assert.equal(document.openapi, '3.0.3');
+    assert.doesNotMatch(yaml, /[&*]a\d/);
     assert.equal(movie.properties.coverSrc.format, 'uri');
     assert.ok(!movie.required.includes('description'));
     assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
