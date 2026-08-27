@@ -201,16 +201,23 @@ Create a small configuration file next to the database, for example `mock/databa
 
 ```json
 {
-  "movies": {
-    "optional": ["description"],
-    "formats": {
-      "coverSrc": "uri"
-    }
+  "$info": {
+    "title": "Movie Catalog API",
+    "version": "1.0.0"
   },
-  "users": {
-    "formats": {
-      "avatarSrc": "uri",
-      "bornAt": "date"
+  "$schema": {
+    "movies": {
+      "required": ["actors", "actors.genreIds", "actors.userId", "publisherIds", "title"],
+      "formats": {
+        "coverSrc": "uri"
+      }
+    },
+    "users": {
+      "required": ["bornAt", "fullName"],
+      "formats": {
+        "avatarSrc": "uri",
+        "bornAt": "date"
+      }
     }
   }
 }
@@ -219,17 +226,21 @@ Create a small configuration file next to the database, for example `mock/databa
 Generate an OpenAPI 3.0.3 file and exit:
 
 ```bash
-deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml
+deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml --host 127.0.0.1 --port 4001
 ```
 
-The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
+The generator infers resources and field types from all database records. Every inferred field is optional by default, while the top-level resource record's primary key `id` is always required. Add other required fields to `required`; nested fields use dot paths such as `actors.userId`. The `formats` object adds OpenAPI formats such as `date` and `uri`.
+
+`$info` becomes the OpenAPI `info` object, while resource settings live under `$schema`. The OpenAPI `servers` entry is generated automatically from `--host` and `--port`, their `HOST` and `PORT` environment variable equivalents, or the default `http://127.0.0.1:4001`.
 
 Use `name` when a resource needs an explicit schema name instead of the automatically singularized name:
 
 ```json
 {
-  "equipment": {
-    "name": "Equipment"
+  "$schema": {
+    "equipment": {
+      "name": "Equipment"
+    }
   }
 }
 ```
@@ -249,7 +260,7 @@ await server.close();
 
 await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001 });
 
-await generateOpenApi({ databasePath: 'mock/database.json', schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
+await generateOpenApi({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
 ```
 
 `createServer()` is useful for tests because it returns a Fastify instance without opening a network port.

@@ -201,16 +201,23 @@ GET /countries/1?_embed=users
 
 ```json
 {
-  "movies": {
-    "optional": ["description"],
-    "formats": {
-      "coverSrc": "uri"
-    }
+  "$info": {
+    "title": "API каталога фильмов",
+    "version": "1.0.0"
   },
-  "users": {
-    "formats": {
-      "avatarSrc": "uri",
-      "bornAt": "date"
+  "$schema": {
+    "movies": {
+      "required": ["actors", "actors.genreIds", "actors.userId", "publisherIds", "title"],
+      "formats": {
+        "coverSrc": "uri"
+      }
+    },
+    "users": {
+      "required": ["bornAt", "fullName"],
+      "formats": {
+        "avatarSrc": "uri",
+        "bornAt": "date"
+      }
     }
   }
 }
@@ -219,17 +226,21 @@ GET /countries/1?_embed=users
 Сгенерируйте OpenAPI 3.0.3 и завершите работу:
 
 ```bash
-deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml
+deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml --host 127.0.0.1 --port 4001
 ```
 
-Генератор определяет ресурсы и типы полей по всем записям базы. Поля, присутствующие в каждой записи, считаются обязательными, если они не перечислены в `optional`; `formats` добавляет форматы OpenAPI, например `date` и `uri`. Для вложенных полей используются пути через точку, например `actors.id`.
+Генератор определяет ресурсы и типы полей по всем записям базы. По умолчанию все найденные поля необязательные, а первичный ключ `id` корневой записи ресурса всегда обязательный. Остальные обязательные поля перечисляются в `required`; для вложенных полей используются пути через точку, например `actors.userId`. Объект `formats` добавляет форматы OpenAPI, например `date` и `uri`.
+
+`$info` становится объектом `info` в OpenAPI, а настройки ресурсов находятся внутри `$schema`. Поле `servers` в OpenAPI формируется автоматически из параметров `--host` и `--port`, соответствующих переменных окружения `HOST` и `PORT` или адреса по умолчанию `http://127.0.0.1:4001`.
 
 Используйте `name`, если ресурсу нужно явно задать имя схемы вместо автоматически полученного имени в единственном числе:
 
 ```json
 {
-  "equipment": {
-    "name": "Equipment"
+  "$schema": {
+    "equipment": {
+      "name": "Equipment"
+    }
   }
 }
 ```
@@ -249,7 +260,7 @@ await server.close();
 
 await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001 });
 
-await generateOpenApi({ databasePath: 'mock/database.json', schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
+await generateOpenApi({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
 ```
 
 `createServer()` удобен для тестов: он возвращает экземпляр Fastify, не открывая сетевой порт.

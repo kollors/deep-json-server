@@ -21,9 +21,12 @@ const database = {
   users: [{ avatarSrc: 'https://example.com/avatar.jpg', bornAt: '1989-01-25', countryId: '1', fullName: 'Actor', id: '1' }],
 };
 const schemaConfig = {
-  movies: { formats: { coverSrc: 'uri' }, optional: ['description'] },
-  resources: { name: 'Asset' },
-  users: { formats: { avatarSrc: 'uri', bornAt: 'date' } },
+  $info: { title: 'Test API', version: '1.0.0' },
+  $schema: {
+    movies: { formats: { coverSrc: 'uri' }, required: ['actors', 'actors.genreIds', 'actors.userId', 'publisherIds', 'title'] },
+    resources: { name: 'Asset', required: ['name'] },
+    users: { formats: { avatarSrc: 'uri', bornAt: 'date' }, required: ['bornAt', 'fullName'] },
+  },
 };
 
 const withFiles = async(run) => {
@@ -54,7 +57,12 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(document.openapi, '3.0.3');
     assert.doesNotMatch(yaml, /[&*]a\d/);
     assert.equal(movie.properties.coverSrc.format, 'uri');
-    assert.ok(!movie.required.includes('description'));
+    assert.deepEqual(movie.required, ['id', 'actors', 'publisherIds', 'title']);
+    assert.deepEqual(actor.required, ['genreIds', 'userId']);
+    assert.deepEqual(document.components.schemas.Country.required, ['id']);
+    assert.deepEqual(document.components.schemas.MovieCreate.required, ['actors', 'publisherIds', 'title']);
+    assert.equal(document.info.title, 'Test API');
+    assert.equal(document.servers[0].url, 'http://127.0.0.1:4001');
     assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
     assert.equal(movie.properties.publishers.items.$ref, '#/components/schemas/Publisher');
     assert.equal(actor.properties.user.$ref, '#/components/schemas/User');
@@ -74,9 +82,12 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
 
 test('generates OpenAPI through CLI and exits without starting the server', async() => {
   await withFiles(async({ databasePath, outputPath, schemaPath }) => {
-    await runCli([databasePath, '--generate', schemaPath, outputPath]);
+    await runCli([databasePath, '--generate', schemaPath, outputPath, '--host', 'localhost', '--port', '5000']);
 
-    assert.equal(parse(await readFile(outputPath, 'utf8')).openapi, '3.0.3');
+    const document = parse(await readFile(outputPath, 'utf8'));
+
+    assert.equal(document.openapi, '3.0.3');
+    assert.equal(document.servers[0].url, 'http://localhost:5000');
   });
 });
 

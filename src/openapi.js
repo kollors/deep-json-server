@@ -13,6 +13,22 @@ const readJson = async(path, label) => {
   return value;
 };
 
+const getServerUrl = (host, port) => {
+  const serverPort = Number(port);
+
+  if (typeof host !== 'string' || host === '') {
+    throw new Error('Адрес сервера не должен быть пустым');
+  }
+
+  if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65_535) {
+    throw new Error('Порт должен быть целым числом от 1 до 65535');
+  }
+
+  const serverHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+
+  return `http://${serverHost}:${serverPort}`;
+};
+
 const mergeSchemas = (schemas) => {
   const uniqueSchemas = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
   const nullable = uniqueSchemas.some((schema) => schema.type === 'null');
@@ -69,7 +85,7 @@ function inferObjectSchema(values, path, options) {
   const required = keys.filter((key) => {
     const fieldPath = path === '' ? key : `${path}.${key}`;
 
-    return !options.optional.has(fieldPath) && values.every((value) => Object.hasOwn(value, key));
+    return path === '' && key === 'id' || options.required.has(fieldPath);
   });
 
   return { properties, type: 'object', ...(required.length > 0 && { required }) };
@@ -194,14 +210,15 @@ const createResourcePaths = (resource, componentName) => {
   };
 };
 
-export function createOpenApiDocument(database, schemaConfig = {}) {
+export function createOpenApiDocument(database, schemaConfig = {}, { host = '127.0.0.1', port = 4001 } = {}) {
   if (!isObject(database) || !isObject(schemaConfig)) {
     throw new Error('База данных и её схема должны содержать JSON-объекты');
   }
 
   const resources = getResourceNames(database);
+  const resourceConfigs = isObject(schemaConfig.$schema) ? schemaConfig.$schema : {};
   const componentNames = Object.fromEntries(resources.map((resource) => {
-    const resourceConfig = isObject(schemaConfig[resource]) ? schemaConfig[resource] : {};
+    const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
     const componentName = typeof resourceConfig.name === 'string' && resourceConfig.name !== '' ? resourceConfig.name : toPascalCase(singularize(resource));
 
     return [resource, componentName];
@@ -212,10 +229,10 @@ export function createOpenApiDocument(database, schemaConfig = {}) {
 
   resources.forEach((resource) => {
     const componentName = componentNames[resource];
-    const resourceConfig = isObject(schemaConfig[resource]) ? schemaConfig[resource] : {};
+    const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
     const options = {
       formats: isObject(resourceConfig.formats) ? resourceConfig.formats : {},
-      optional: new Set(Array.isArray(resourceConfig.optional) ? resourceConfig.optional : []),
+      required: new Set(Array.isArray(resourceConfig.required) ? resourceConfig.required : []),
     };
     const values = database[resource].filter(isObject);
     const rawSchema = values.length === 0 ? { additionalProperties: true, type: 'object' } : inferObjectSchema(values, '', options);
@@ -244,15 +261,15 @@ export function createOpenApiDocument(database, schemaConfig = {}) {
     info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
     paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource]))),
-    servers: Array.isArray(schemaConfig.$servers) ? schemaConfig.$servers : [{ url: 'http://127.0.0.1:4001' }],
+    servers: [{ url: getServerUrl(host, port) }],
     tags: resources.map((resource) => ({ name: resource })),
   };
 }
 
-export async function generateOpenApi({ databasePath, outputPath, schemaPath }) {
+export async function generateOpenApi({ databasePath, host, outputPath, port, schemaPath }) {
   const database = await readJson(databasePath, 'База данных');
   const schemaConfig = await readJson(schemaPath, 'Схема базы данных');
-  const document = createOpenApiDocument(database, schemaConfig);
+  const document = createOpenApiDocument(database, schemaConfig, { host, port });
   const resolvedOutputPath = resolve(outputPath);
 
   await mkdir(dirname(resolvedOutputPath), { recursive: true });

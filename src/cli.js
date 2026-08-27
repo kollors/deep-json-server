@@ -6,7 +6,7 @@ const HELP = `Deep JSON Server
 
 Использование:
   deep-json-server <database.json> [--host <host>] [--port <port>]
-  deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml>
+  deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]
 
 Параметры:
   --generate  Сгенерировать OpenAPI и завершить работу
@@ -53,11 +53,15 @@ export async function runCli(args = process.argv.slice(2)) {
     const schemaPath = args[generateIndex + 1];
     const outputPath = args[generateIndex + 2];
 
-    if (generateIndex !== 1 || schemaPath == null || outputPath == null || args.length !== 4) {
-      throw new Error('Используйте: deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml>');
+    if (generateIndex !== 1 || schemaPath == null || outputPath == null) {
+      throw new Error('Используйте: deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]');
     }
 
-    await generateOpenApi({ databasePath, outputPath, schemaPath });
+    const options = parseServerOptions([databasePath, ...args.slice(4)]);
+    const host = options.host ?? process.env.HOST ?? '127.0.0.1';
+    const port = Number(options.port ?? process.env.PORT ?? 4001);
+
+    await generateOpenApi({ databasePath, host, outputPath, port, schemaPath });
     process.stdout.write(`OpenAPI-схема сохранена в ${outputPath}\n`);
     return;
   }
