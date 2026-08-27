@@ -2,6 +2,8 @@
 
 [Русский](README.ru.md) | [English](README.md)
 
+[GitHub](https://github.com/kollors/deep-json-server) | [npm](https://www.npmjs.com/package/@kollors/deep-json-server)
+
 Небольшой JSON REST mock-сервер с CRUD, пагинацией, глубокой фильтрацией и рекурсивной загрузкой связей. База данных хранится в одном читаемом JSON-файле, а мягкие связи определяются по соглашениям о нейминге ключей: `countryId`, `genreIds`, `publisherIds` и так далее.
 
 ## Установка
