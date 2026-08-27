@@ -131,10 +131,10 @@ const omitId = (schema, keepRequired) => {
 };
 
 const createParameters = () => ({
-  Embed: { description: 'Comma-separated relationship paths to embed', in: 'query', name: '_embed', schema: { type: 'string' } },
+  Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
-  Page: { in: 'query', name: '_page', schema: { minimum: 1, type: 'integer' } },
-  PerPage: { in: 'query', name: '_per_page', schema: { minimum: 1, type: 'integer' } },
+  Page: { in: 'query', name: '_page', required: true, schema: { minimum: 1, type: 'integer' } },
+  PerPage: { in: 'query', name: '_per_page', required: true, schema: { minimum: 1, type: 'integer' } },
   Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
   Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
 });
@@ -145,51 +145,50 @@ const reference = (name) => ({ $ref: `#/components/schemas/${name}` });
 const parameter = (name) => ({ $ref: `#/components/parameters/${name}` });
 
 const createResourcePaths = (resource, componentName) => {
-  const tag = componentName;
-  const listSchema = { oneOf: [{ items: reference(componentName), type: 'array' }, reference(`${componentName}Page`)] };
+  const resourceName = toPascalCase(resource);
   const body = (name) => ({ required: true, ...jsonContent(reference(name)) });
 
   return {
     [`/${resource}`]: {
       get: {
-        operationId: `get${toPascalCase(resource)}`,
+        operationId: `get${resourceName}`,
         parameters: ['Page', 'PerPage', 'Sort', 'Where', 'Embed'].map(parameter),
-        responses: { 200: response('Successful response', listSchema), 400: response('Invalid query', reference('Error')) },
-        tags: [tag],
+        responses: { 200: response('Successful response', reference(`${componentName}Page`)), 400: response('Invalid query', reference('Error')) },
+        tags: [resource],
       },
       post: {
-        operationId: `create${componentName}`,
+        operationId: `post${resourceName}`,
         requestBody: body(`${componentName}Create`),
         responses: { 201: response('Created', reference(componentName)), 400: response('Invalid request', reference('Error')) },
-        tags: [tag],
+        tags: [resource],
       },
     },
     [`/${resource}/{id}`]: {
       delete: {
-        operationId: `delete${componentName}`,
+        operationId: `delete${resourceName}ById`,
         parameters: [parameter('Id')],
         responses: { 200: response('Deleted', reference(componentName)), 404: response('Not found', reference('Error')) },
-        tags: [tag],
+        tags: [resource],
       },
       get: {
-        operationId: `get${componentName}ById`,
+        operationId: `get${resourceName}ById`,
         parameters: [parameter('Id'), parameter('Embed')],
         responses: { 200: response('Successful response', reference(componentName)), 404: response('Not found', reference('Error')) },
-        tags: [tag],
+        tags: [resource],
       },
       patch: {
-        operationId: `update${componentName}`,
+        operationId: `patch${resourceName}ById`,
         parameters: [parameter('Id')],
         requestBody: body(`${componentName}Update`),
         responses: { 200: response('Updated', reference(componentName)), 404: response('Not found', reference('Error')) },
-        tags: [tag],
+        tags: [resource],
       },
       put: {
-        operationId: `replace${componentName}`,
+        operationId: `put${resourceName}ById`,
         parameters: [parameter('Id')],
         requestBody: body(`${componentName}Create`),
         responses: { 200: response('Replaced', reference(componentName)), 404: response('Not found', reference('Error')) },
-        tags: [tag],
+        tags: [resource],
       },
     },
   };
@@ -201,7 +200,12 @@ export function createOpenApiDocument(database, schemaConfig = {}) {
   }
 
   const resources = getResourceNames(database);
-  const componentNames = Object.fromEntries(resources.map((resource) => [resource, toPascalCase(singularize(resource))]));
+  const componentNames = Object.fromEntries(resources.map((resource) => {
+    const resourceConfig = isObject(schemaConfig[resource]) ? schemaConfig[resource] : {};
+    const componentName = typeof resourceConfig.modelName === 'string' && resourceConfig.modelName !== '' ? resourceConfig.modelName : toPascalCase(singularize(resource));
+
+    return [resource, componentName];
+  }));
   const schemas = {
     Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' },
   };
@@ -241,7 +245,7 @@ export function createOpenApiDocument(database, schemaConfig = {}) {
     openapi: '3.0.3',
     paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource]))),
     servers: Array.isArray(schemaConfig.$servers) ? schemaConfig.$servers : [{ url: 'http://127.0.0.1:4001' }],
-    tags: resources.map((resource) => ({ name: componentNames[resource] })),
+    tags: resources.map((resource) => ({ name: resource })),
   };
 }
 

@@ -17,10 +17,12 @@ const database = {
     { actors: [], coverSrc: 'https://example.com/cover-2.jpg', id: '2', publisherIds: [], title: 'Movie 2' },
   ],
   publishers: [{ id: '1', name: 'Publisher' }],
+  resources: [{ id: '1', name: 'Resource' }],
   users: [{ avatarSrc: 'https://example.com/avatar.jpg', bornAt: '1989-01-25', countryId: '1', fullName: 'Actor', id: '1' }],
 };
 const schemaConfig = {
   movies: { formats: { coverSrc: 'uri' }, optional: ['description'] },
+  resources: { modelName: 'Asset' },
   users: { formats: { avatarSrc: 'uri', bornAt: 'date' } },
 };
 
@@ -56,8 +58,14 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(actor.properties.user.$ref, '#/components/schemas/User');
     assert.equal(actor.properties.genres.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
+    assert.equal(document.components.schemas.Asset.properties.name.type, 'string');
+    assert.equal(document.components.parameters.Page.required, true);
+    assert.equal(document.components.parameters.Embed.schema.type, 'array');
+    assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
     assert.equal(document.paths['/movies'].get.operationId, 'getMovies');
-    assert.equal(document.paths['/movies/{id}'].patch.operationId, 'updateMovie');
+    assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
+    assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
+    assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
   });
 });
 

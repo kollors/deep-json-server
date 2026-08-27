@@ -224,6 +224,16 @@ deep-json-server mock/database.json --generate mock/database-schema.json mock/op
 
 The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
 
+Use `modelName` when a resource needs an explicit schema name instead of the automatically singularized name:
+
+```json
+{
+  "equipment": {
+    "modelName": "Equipment"
+  }
+}
+```
+
 The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and response relations inferred from `...Id` and `...Ids` fields. It can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
 
 ## Programmatic API
