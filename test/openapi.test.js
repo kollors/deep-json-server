@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { parse } from 'yaml';
 import { generateOpenApi } from '../index.js';
 import { runCli } from '../src/cli.js';
+import { isMainModule } from '../src/utils.js';
 
 const database = {
   countries: [{ id: '1', name: 'Russia' }],
@@ -65,4 +67,17 @@ test('generates OpenAPI through CLI and exits without starting the server', asyn
 
     assert.equal(parse(await readFile(outputPath, 'utf8')).openapi, '3.0.3');
   });
+});
+
+test('recognizes the CLI entry point invoked through a node_modules symlink', async() => {
+  const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-bin-'));
+  const indexPath = resolve('index.js');
+  const binaryPath = join(directory, 'deep-json-server');
+
+  try {
+    await symlink(indexPath, binaryPath);
+    assert.equal(isMainModule(binaryPath, pathToFileURL(indexPath).href), true);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });

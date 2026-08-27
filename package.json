@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "JSON mock server with deep filters and recursive relationship embedding",
   "type": "module",
   "bin": {

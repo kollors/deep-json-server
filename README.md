@@ -31,37 +31,6 @@ npm run mock
 
 The default address is `http://127.0.0.1:4001`. You can also pass `--host` and `--port`, or set the `HOST` and `PORT` environment variables.
 
-## OpenAPI generation
-
-Create a small configuration file next to the database, for example `mock/database-schema.json`:
-
-```json
-{
-  "movies": {
-    "optional": ["description"],
-    "formats": {
-      "coverSrc": "uri"
-    }
-  },
-  "users": {
-    "formats": {
-      "avatarSrc": "uri",
-      "bornAt": "date"
-    }
-  }
-}
-```
-
-Generate an OpenAPI 3.0.3 file and exit:
-
-```bash
-deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml
-```
-
-The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
-
-The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and response relations inferred from `...Id` and `...Ids` fields. It can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
-
 ## Example database
 
 This example is based on a movie catalog. It intentionally has no clothes resource. The genre names are real film genres, while `Gangster film` demonstrates a self-referencing subgenre.
@@ -225,6 +194,37 @@ Relations are inferred by convention:
 - `parentIds` points back to the current resource when `_embed=parents` is requested.
 
 They are soft references: the server resolves them when requested but does not enforce referential integrity when data is written.
+
+## OpenAPI generation
+
+Create a small configuration file next to the database, for example `mock/database-schema.json`:
+
+```json
+{
+  "movies": {
+    "optional": ["description"],
+    "formats": {
+      "coverSrc": "uri"
+    }
+  },
+  "users": {
+    "formats": {
+      "avatarSrc": "uri",
+      "bornAt": "date"
+    }
+  }
+}
+```
+
+Generate an OpenAPI 3.0.3 file and exit:
+
+```bash
+deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml
+```
+
+The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
+
+The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and response relations inferred from `...Id` and `...Ids` fields. It can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
 
 ## Programmatic API
 

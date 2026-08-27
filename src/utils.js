@@ -1,4 +1,6 @@
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -11,6 +13,7 @@ export const createHttpError = (statusCode, message) => {
 };
 
 export const getResourceNames = (data) => Object.entries(data).filter(([, value]) => Array.isArray(value)).map(([resource]) => resource);
+export const isMainModule = (filePath, moduleUrl) => filePath != null && realpathSync(resolve(filePath)) === fileURLToPath(moduleUrl);
 export const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isSafeKey = (key) => !UNSAFE_KEYS.has(key);
 export const toArray = (value) => (Array.isArray(value) ? value : [value]);
