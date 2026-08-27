@@ -17,7 +17,8 @@ Add a script to `package.json`:
 ```json
 {
   "scripts": {
-    "mock": "deep-json-server mock/database.json --port 4001"
+    "mock": "deep-json-server mock/database.json --port 4001",
+    "openapi": "deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml"
   }
 }
 ```
@@ -29,6 +30,37 @@ npm run mock
 ```
 
 The default address is `http://127.0.0.1:4001`. You can also pass `--host` and `--port`, or set the `HOST` and `PORT` environment variables.
+
+## OpenAPI generation
+
+Create a small configuration file next to the database, for example `mock/database-schema.json`:
+
+```json
+{
+  "movies": {
+    "optional": ["description"],
+    "formats": {
+      "coverSrc": "uri"
+    }
+  },
+  "users": {
+    "formats": {
+      "avatarSrc": "uri",
+      "bornAt": "date"
+    }
+  }
+}
+```
+
+Generate an OpenAPI 3.0.3 file and exit:
+
+```bash
+deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml
+```
+
+The generator infers resources and field types from all database records. Fields present in every record are required unless listed in `optional`; `formats` adds OpenAPI formats such as `date` and `uri`. Nested fields use dot paths, for example `actors.id`.
+
+The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and response relations inferred from `...Id` and `...Ids` fields. It can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
 
 ## Example database
 
@@ -197,7 +229,7 @@ They are soft references: the server resolves them when requested but does not e
 ## Programmatic API
 
 ```js
-import { createServer, startServer } from '@kollors/deep-json-server';
+import { createServer, generateOpenApi, startServer } from '@kollors/deep-json-server';
 
 const server = await createServer({ databasePath: 'mock/database.json', logger: false });
 
@@ -206,6 +238,8 @@ const response = await server.inject({ method: 'GET', url: '/movies' });
 await server.close();
 
 await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001 });
+
+await generateOpenApi({ databasePath: 'mock/database.json', schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
 ```
 
 `createServer()` is useful for tests because it returns a Fastify instance without opening a network port.

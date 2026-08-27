@@ -84,6 +84,7 @@ test('supports pagination, sorting and persistent CRUD', async() => {
 
     const createResponse = await server.inject({ method: 'POST', payload: { name: 'Universal Pictures' }, url: '/publishers' });
     const createdPublisher = createResponse.json();
+    const publisherCount = fixture.publishers.length + 1;
     const updateResponse = await server.inject({ method: 'PATCH', payload: { name: 'Universal' }, url: `/publishers/${createdPublisher.id}` });
 
     assert.equal(createResponse.statusCode, 201);
@@ -91,6 +92,7 @@ test('supports pagination, sorting and persistent CRUD', async() => {
 
     const database = JSON.parse(await readFile(databasePath, 'utf8'));
 
+    assert.equal(database.publishers.length, publisherCount);
     assert.equal(database.publishers.at(-1).name, 'Universal');
   });
 });

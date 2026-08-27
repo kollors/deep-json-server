@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "JSON mock server with deep filters and recursive relationship embedding",
   "type": "module",
   "bin": {
@@ -11,12 +11,13 @@
   },
   "files": [
     "index.js",
+    "src",
     "LICENSE",
     "README.md",
     "README.ru.md"
   ],
   "scripts": {
-    "check": "node --check index.js",
+    "check": "node --check index.js && node --check src/*.js",
     "test": "node --test"
   },
   "engines": {
@@ -24,13 +25,14 @@
   },
   "dependencies": {
     "fastify": "^5.12.1",
-    "lowdb": "^7.0.1"
+    "lowdb": "^7.0.1",
+    "yaml": "^2.8.1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kollors/deep-json-server.git"
   },
-  "homepage": "https://github.com/kollors/deep-json-server#readme",
+  "homepage": "https://github.com/kollors/deep-json-server",
   "bugs": {
     "url": "https://github.com/kollors/deep-json-server/issues"
   },
