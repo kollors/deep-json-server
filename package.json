@@ -12,7 +12,8 @@
   "files": [
     "index.js",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "README.ru.md"
   ],
   "scripts": {
     "check": "node --check index.js",

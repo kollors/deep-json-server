@@ -1,5 +1,7 @@
 # Deep JSON Server
 
+[English](README.md) | [Русский](README.ru.md)
+
 A small JSON REST mock server with CRUD, pagination, deep filters and recursive relationship embedding. It keeps the database in one readable JSON file and infers soft relations from conventional keys such as `countryId`, `genreIds` and `publisherIds`.
 
 ## Installation
@@ -28,19 +30,19 @@ The default address is `http://127.0.0.1:4001`. You can also pass `--host` and `
 
 ## Example database
 
-This example is based on a movie catalog. It intentionally has no clothes resource. The genre names are real film genres, while `Гангстерский фильм` demonstrates a self-referencing subgenre.
+This example is based on a movie catalog. It intentionally has no clothes resource. The genre names are real film genres, while `Gangster film` demonstrates a self-referencing subgenre.
 
 ```json
 {
   "countries": [
-    { "id": "1", "isArchived": false, "name": "Россия" },
-    { "id": "2", "isArchived": false, "name": "США" }
+    { "id": "1", "isArchived": false, "name": "Russia" },
+    { "id": "2", "isArchived": false, "name": "United States" }
   ],
   "genres": [
-    { "id": "1", "isArchived": false, "name": "Криминал", "parentIds": [] },
-    { "id": "2", "isArchived": false, "name": "Гангстерский фильм", "parentIds": ["1"] },
-    { "id": "3", "isArchived": false, "name": "Драма", "parentIds": [] },
-    { "id": "4", "isArchived": false, "name": "Комедия", "parentIds": [] }
+    { "id": "1", "isArchived": false, "name": "Crime", "parentIds": [] },
+    { "id": "2", "isArchived": false, "name": "Gangster film", "parentIds": ["1"] },
+    { "id": "3", "isArchived": false, "name": "Drama", "parentIds": [] },
+    { "id": "4", "isArchived": false, "name": "Comedy", "parentIds": [] }
   ],
   "movies": [
     {
@@ -49,20 +51,20 @@ This example is based on a movie catalog. It intentionally has no clothes resour
         { "genreIds": ["3"], "id": "movie-1-actor-2", "userId": "2" }
       ],
       "coverSrc": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg",
-      "description": "История семьи Корлеоне и передачи власти от одного поколения другому.",
+      "description": "The story of the Corleone family and the transfer of power from one generation to the next.",
       "id": "1",
       "isArchived": false,
       "publisherIds": ["2"],
-      "title": "Крёстный отец"
+      "title": "The Godfather"
     },
     {
       "actors": [],
       "coverSrc": "https://image.tmdb.org/t/p/w500/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg",
-      "description": "Приключения консьержа и его юного помощника в знаменитом европейском отеле.",
+      "description": "The adventures of a concierge and his young assistant in a famous European hotel.",
       "id": "2",
       "isArchived": false,
       "publisherIds": ["1"],
-      "title": "Отель «Гранд Будапешт»"
+      "title": "The Grand Budapest Hotel"
     }
   ],
   "publishers": [
@@ -73,14 +75,14 @@ This example is based on a movie catalog. It intentionally has no clothes resour
     {
       "bornAt": "1989-01-25",
       "countryId": "1",
-      "fullName": "Александр Петров",
+      "fullName": "Alexander Petrov",
       "id": "1",
       "isArchived": false
     },
     {
       "bornAt": "1984-09-05",
       "countryId": "1",
-      "fullName": "Юлия Пересильд",
+      "fullName": "Yulia Peresild",
       "id": "2",
       "isArchived": false
     }
@@ -128,7 +130,7 @@ Prefix a sort field with `-` for descending order.
 Pass a JSON object through `_where`:
 
 ```http
-GET /movies?_where={"title":{"contains":"отец"}}
+GET /movies?_where={"title":{"contains":"father"}}
 ```
 
 Nested objects and arrays can be filtered at any depth. Conditions in one object use `AND` by default:
@@ -136,7 +138,7 @@ Nested objects and arrays can be filtered at any depth. Conditions in one object
 ```json
 {
   "actors": { "some": { "userId": { "eq": "1" } } },
-  "title": { "contains": "отец" }
+  "title": { "contains": "father" }
 }
 ```
 
@@ -145,7 +147,7 @@ Logical operators are also available:
 ```json
 {
   "or": [
-    { "title": { "contains": "отец" } },
+    { "title": { "contains": "father" } },
     { "actors": { "some": { "userId": { "eq": "2" } } } }
   ]
 }
@@ -156,7 +158,7 @@ Supported field operators: `contains`, `endsWith`, `eq`, `every`, `gt`, `gte`, `
 Simple query parameters are supported too:
 
 ```http
-GET /movies?title:contains=отец
+GET /movies?title:contains=father
 ```
 
 ## Relationships
