@@ -174,10 +174,7 @@ test('rejects a missing file and invalid database structures', async() => {
     await assert.rejects(() => createServer({ databasePath, logger: false }), /JSON-массив/);
 
     await writeFile(databasePath, JSON.stringify({ $schema: './database-schema.json', items: [] }));
-
-    const server = await createServer({ databasePath, logger: false });
-
-    await server.close();
+    await assert.rejects(() => createServer({ databasePath, logger: false }), /Ресурс «\$schema» должен содержать JSON-массив/);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

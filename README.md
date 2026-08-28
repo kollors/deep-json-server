@@ -106,7 +106,7 @@ PATCH  /movies/:id
 DELETE /movies/:id
 ```
 
-`POST` generates a string ID, while `PUT` and `PATCH` preserve the stored ID type. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — persist their changes in the JSON file. The database file must exist before startup and contain a JSON object whose resources are arrays. Top-level metadata keys prefixed with `$`, such as `$schema`, may contain non-array values.
+`POST` generates a string ID, while `PUT` and `PATCH` preserve the stored ID type. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — persist their changes in the JSON file. The database file must exist before startup and contain a JSON object whose every top-level property is an array of resource records.
 
 ## Pagination and sorting
 

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query.js';
 import { embedItem, parseEmbedPaths } from './relations.js';
-import { createHttpError, getResourceNames, isObject, isSafeKey, resolveDatabasePath } from './utils.js';
+import { createHttpError, getResourceNames, isObject, isSafeKey, resolveDatabasePath, validateDatabase } from './utils.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -32,18 +32,6 @@ const getRequestBody = (body) => {
 
 const findItem = (collection, id) => collection.find((item) => isObject(item) && String(item.id) === id);
 
-const validateDatabase = (data) => {
-  if (!isObject(data)) {
-    throw new Error('База данных должна содержать JSON-объект');
-  }
-
-  const invalidResource = Object.entries(data).find(([key, value]) => !key.startsWith('$') && !Array.isArray(value));
-
-  if (invalidResource != null) {
-    throw new Error(`Ресурс «${invalidResource[0]}» должен содержать JSON-массив`);
-  }
-};
-
 const readDatabaseFile = async(databasePath) => {
   let source;
 
@@ -59,9 +47,7 @@ const readDatabaseFile = async(databasePath) => {
 
   const data = JSON.parse(source);
 
-  validateDatabase(data);
-
-  return data;
+  return validateDatabase(data);
 };
 
 export async function createServer({ databasePath, logger = true } = {}) {

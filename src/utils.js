@@ -13,11 +13,25 @@ export const createHttpError = (statusCode, message) => {
   return error;
 };
 
-export const getResourceNames = (data) => Object.entries(data).filter(([, value]) => Array.isArray(value)).map(([resource]) => resource);
+export const getResourceNames = (data) => Object.keys(data);
 export const isMainModule = (filePath, moduleUrl) => filePath != null && realpathSync(resolve(filePath)) === fileURLToPath(moduleUrl);
 export const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isSafeKey = (key) => !UNSAFE_KEYS.has(key);
 export const toArray = (value) => (Array.isArray(value) ? value : [value]);
+
+export const validateDatabase = (data) => {
+  if (!isObject(data)) {
+    throw new Error('База данных должна содержать JSON-объект');
+  }
+
+  const invalidResource = Object.entries(data).find(([, value]) => !Array.isArray(value));
+
+  if (invalidResource != null) {
+    throw new Error(`Ресурс «${invalidResource[0]}» должен содержать JSON-массив`);
+  }
+
+  return data;
+};
 
 export const isEqual = (left, right) => {
   if (Object.is(left, right)) {

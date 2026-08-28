@@ -105,6 +105,7 @@ test('infers arrays, objects and primitives independently for mixed fields', () 
 });
 
 test('validates OpenAPI configuration and configured paths', () => {
+  assert.throws(() => createOpenApiDocument({ $schema: './database-schema.json', items: [] }), /Ресурс «\$schema» должен содержать JSON-массив/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $info: {} }), /title и version/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: [] }), /\$schema/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { stringify } from 'yaml';
-import { getResourceNames, isObject, singularize, toPascalCase } from './utils.js';
+import { getResourceNames, isObject, singularize, toPascalCase, validateDatabase } from './utils.js';
 
 const readJson = async(path, label) => {
   const value = JSON.parse(await readFile(resolve(path), 'utf8'));
@@ -450,8 +450,10 @@ const validateGeneratedNames = (resources, componentNames) => {
 };
 
 export function createOpenApiDocument(database, schemaConfig = {}, { host = '127.0.0.1', port = 4001 } = {}) {
-  if (!isObject(database) || !isObject(schemaConfig)) {
-    throw new Error('База данных и её схема должны содержать JSON-объекты');
+  validateDatabase(database);
+
+  if (!isObject(schemaConfig)) {
+    throw new Error('Схема базы данных должна содержать JSON-объект');
   }
 
   const resources = getResourceNames(database);
