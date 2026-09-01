@@ -101,6 +101,7 @@ const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => 
 };
 
 const createParameters = () => ({
+  ContentName: { description: 'URI-encoded relative file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
@@ -113,6 +114,40 @@ const createJsonContent = (schema) => ({ content: { 'application/json': { schema
 const createResponse = (description, schema) => ({ description, ...(schema != null && createJsonContent(schema)) });
 const createParameterReference = (name) => ({ $ref: `#/components/parameters/${name}` });
 const createRequestBody = (name) => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
+
+const createFilePaths = () => ({
+  '/_files': {
+    post: {
+      operationId: 'uploadFile',
+      parameters: [createParameterReference('ContentName')],
+      requestBody: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, required: true },
+      responses: {
+        201: createResponse('Uploaded', createSchemaReference('UploadedFile')),
+        400: createResponse('Invalid request', createSchemaReference('Error')),
+        413: createResponse('File is too large', createSchemaReference('Error')),
+        415: createResponse('Unsupported media type', createSchemaReference('Error')),
+      },
+      tags: ['files'],
+    },
+  },
+  '/_files/{id}': {
+    delete: {
+      operationId: 'deleteFileById',
+      parameters: [createParameterReference('Id')],
+      responses: { 200: createResponse('Deleted', createSchemaReference('UploadedFile')), 404: createResponse('Not found', createSchemaReference('Error')) },
+      tags: ['files'],
+    },
+    get: {
+      operationId: 'getFileById',
+      parameters: [createParameterReference('Id')],
+      responses: {
+        200: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, description: 'File contents' },
+        404: createResponse('Not found', createSchemaReference('Error')),
+      },
+      tags: ['files'],
+    },
+  },
+});
 
 const createResourcePaths = (resource, componentName) => {
   const resourceName = toPascalCase(resource);
@@ -181,8 +216,8 @@ const getOperationIds = (resource) => {
   return [`get${resourceName}`, `post${resourceName}`, `delete${resourceName}ById`, `get${resourceName}ById`, `patch${resourceName}ById`, `put${resourceName}ById`];
 };
 
-const validateGeneratedNames = (resources, componentNames) => {
-  const schemaOwners = new Map([['Error', 'встроенная схема ошибки']]);
+const validateGeneratedNames = (resources, componentNames, files) => {
+  const schemaOwners = new Map([['Error', 'встроенная схема ошибки'], ...(files ? [['UploadedFile', 'встроенная схема файла']] : [])]);
   const operationOwners = new Map();
 
   resources.forEach((resource) => {
@@ -218,10 +253,10 @@ const validateGeneratedNames = (resources, componentNames) => {
  * Creates an OpenAPI 3.0 document from a database and optional schema configuration.
  * @param {Record<string, Array<Record<string, unknown>>>} database Database contents.
  * @param {Record<string, unknown>} [schemaConfig] Schema configuration.
- * @param {{ host?: string, port?: number }} [serverOptions] Server address used in the generated document.
+ * @param {{ files?: boolean, host?: string, port?: number }} [serverOptions] Server address and optional features used in the generated document.
  * @returns {Record<string, unknown>} OpenAPI document.
  */
-export function createOpenApiDocument(database, schemaConfig = {}, { host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+export function createOpenApiDocument(database, schemaConfig = {}, { files = false, host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
   validateDatabase(database);
 
   if (!isObject(schemaConfig)) {
@@ -239,7 +274,7 @@ export function createOpenApiDocument(database, schemaConfig = {}, { host = DEFA
     }),
   );
 
-  validateGeneratedNames(resources, componentNames);
+  validateGeneratedNames(resources, componentNames, files);
 
   const rawSchemas = Object.fromEntries(
     resources.map((resource) => {
@@ -250,7 +285,16 @@ export function createOpenApiDocument(database, schemaConfig = {}, { host = DEFA
       return [resource, applyConfiguredFields(ensureGeneratedIdSchema(configuredSchema), resource, resourceConfig)];
     }),
   );
-  const schemas = { Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' } };
+  const schemas = {
+    Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' },
+    ...(files && {
+      UploadedFile: {
+        properties: { id: { type: 'string' }, mimeType: { type: 'string' }, name: { type: 'string' }, size: { minimum: 0, type: 'integer' }, url: { type: 'string' } },
+        required: ['id', 'mimeType', 'name', 'size', 'url'],
+        type: 'object',
+      },
+    }),
+  };
 
   resources.forEach((resource) => {
     const componentName = componentNames[resource];
@@ -280,8 +324,8 @@ export function createOpenApiDocument(database, schemaConfig = {}, { host = DEFA
     components: { parameters: createParameters(), schemas },
     info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
-    paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource]))),
+    paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {}),
     servers: [{ url: getServerUrl(host, port) }],
-    tags: resources.map((resource) => ({ name: resource })),
+    tags: [...resources.map((resource) => ({ name: resource })), ...(files ? [{ name: 'files' }] : [])],
   };
 }

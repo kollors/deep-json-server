@@ -30,10 +30,13 @@ const fixture = {
   ],
 };
 
-const withServer = async (run, data = fixture, schemaConfig) => {
+const withServer = async (run, data = fixture, schemaConfig, serverOptions = {}) => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-'));
   const databasePath = join(directory, 'database.json');
+  const filesDirectoryPath = serverOptions.files === true ? join(directory, 'files') : undefined;
+  const filesMetadataPath = serverOptions.files === true ? join(directory, 'files', '_database.json') : undefined;
   const schemaPath = schemaConfig == null ? undefined : join(directory, 'database-schema.json');
+  const { files: _files, ...options } = serverOptions;
 
   await writeFile(databasePath, JSON.stringify(data));
 
@@ -41,15 +44,101 @@ const withServer = async (run, data = fixture, schemaConfig) => {
     await writeFile(schemaPath, JSON.stringify(schemaConfig));
   }
 
-  const server = await createServer({ databasePath, logger: false, schemaPath });
+  const server = await createServer({ ...options, databasePath, filesDirectoryPath, filesMetadataPath, logger: false, schemaPath });
 
   try {
-    await run({ databasePath, server });
+    await run({ databasePath, filesDirectoryPath, filesMetadataPath, server });
   } finally {
     await server.close();
     await rm(directory, { force: true, recursive: true });
   }
 };
+
+test('uploads, downloads and deletes binary files', async () => {
+  await withServer(
+    async ({ filesMetadataPath, server }) => {
+      const payload = Buffer.from([0, 1, 2, 3, 255]);
+      const uploadResponse = await server.inject({
+        headers: { 'content-name': encodeURIComponent('posters/Крёстный отец.jpg'), 'content-type': 'image/jpeg' },
+        method: 'POST',
+        payload,
+        url: '/_files',
+      });
+      const uploadedFile = uploadResponse.json();
+      const downloadResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
+      const storedMetadata = JSON.parse(await readFile(filesMetadataPath, 'utf8'));
+      const deleteResponse = await server.inject({ method: 'DELETE', url: uploadedFile.url });
+      const missingResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
+
+      assert.equal(uploadResponse.statusCode, 201);
+      assert.equal(uploadedFile.name, 'posters/Крёстный отец.jpg');
+      assert.equal(uploadedFile.mimeType, 'image/jpeg');
+      assert.equal(uploadedFile.size, payload.length);
+      assert.match(uploadedFile.url, /^\/_files\/[\w-]+$/);
+      assert.equal(downloadResponse.statusCode, 200);
+      assert.equal(downloadResponse.headers['content-type'], 'image/jpeg');
+      assert.match(downloadResponse.headers['content-disposition'], /^inline; filename\*=UTF-8''/);
+      assert.deepEqual(downloadResponse.rawPayload, payload);
+      assert.deepEqual(storedMetadata, [uploadedFile]);
+      assert.deepEqual(deleteResponse.json(), uploadedFile);
+      assert.equal(missingResponse.statusCode, 404);
+    },
+    { items: [{ id: '1', name: 'One' }] },
+    undefined,
+    { files: true },
+  );
+});
+
+test('accepts every file MIME type without changing JSON resource parsing', async () => {
+  await withServer(
+    async ({ server }) => {
+      const filePayload = Buffer.from('{"value":true}');
+      const uploadResponse = await server.inject({ headers: { 'content-name': 'data.json', 'content-type': 'application/json' }, method: 'POST', payload: filePayload, url: '/_files' });
+      const createResponse = await server.inject({ method: 'POST', payload: { name: 'Two' }, url: '/items' });
+
+      assert.equal(uploadResponse.statusCode, 201);
+      assert.equal((await server.inject({ method: 'GET', url: uploadResponse.json().url })).rawPayload.toString(), filePayload.toString());
+      assert.equal(createResponse.statusCode, 201);
+      assert.equal(createResponse.json().name, 'Two');
+    },
+    { items: [{ id: '1', name: 'One' }] },
+    undefined,
+    { files: true },
+  );
+});
+
+test('validates file headers, size and optional feature state', async () => {
+  await withServer(
+    async ({ server }) => {
+      assert.equal((await server.inject({ headers: { 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'file', url: '/_files' })).statusCode, 404);
+    },
+    { items: [] },
+  );
+
+  await withServer(
+    async ({ server }) => {
+      const requests = [
+        { expectedStatus: 400, headers: { 'content-type': 'application/octet-stream' }, payload: 'file' },
+        { expectedStatus: 400, headers: { 'content-name': '../file.txt', 'content-type': 'text/plain' }, payload: 'file' },
+        { expectedStatus: 400, headers: { 'content-name': '%E0%A4%A', 'content-type': 'text/plain' }, payload: 'file' },
+        { expectedStatus: 415, headers: { 'content-name': 'file.txt', 'content-type': 'invalid' }, payload: 'file' },
+      ];
+
+      for (const { expectedStatus, ...request } of requests) {
+        const response = await server.inject({ ...request, method: 'POST', url: '/_files' });
+
+        assert.equal(response.statusCode, expectedStatus);
+      }
+
+      const largeResponse = await server.inject({ headers: { 'content-name': 'large.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: '12345', url: '/_files' });
+
+      assert.equal(largeResponse.statusCode, 413);
+    },
+    { items: [] },
+    undefined,
+    { files: true, maxFileSize: 4 },
+  );
+});
 
 test('filters nested fields and combines conditions with AND, OR and NOT', async () => {
   await withServer(async ({ server }) => {
@@ -194,6 +283,7 @@ test('supports root discovery, CORS, sorting and persistent CRUD', async () => {
     assert.deepEqual(rootResponse.json().resources, Object.keys(fixture));
     assert.equal(optionsResponse.statusCode, 204);
     assert.equal(optionsResponse.headers['access-control-allow-origin'], '*');
+    assert.match(optionsResponse.headers['access-control-allow-headers'], /Content-Name/);
     assert.equal(listResponse.json().data[0].id, '2');
     assert.equal(createResponse.statusCode, 201);
     assert.equal(patchResponse.json().name, 'Universal');
@@ -291,16 +381,32 @@ test('rejects missing files, unsafe resources and malformed or ambiguous records
 test('starts on an ephemeral port and validates server options', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-listen-'));
   const databasePath = join(directory, 'database.json');
+  const filesDirectoryPath = join(directory, 'files');
+  const filesMetadataPath = join(directory, 'files', '_database.json');
 
   await writeFile(databasePath, JSON.stringify({ items: [{ id: '1', name: 'One' }] }));
 
   try {
-    const server = await startServer({ databasePath, logger: false, port: 0 });
+    const server = await startServer({ databasePath, filesDirectoryPath, filesMetadataPath, logger: false, port: 0 });
+    const address = server.server.address();
+    const filePayload = Buffer.from([0, 1, 2, 255]);
+    const uploadResponse = await fetch(`http://127.0.0.1:${address.port}/_files`, {
+      body: filePayload,
+      headers: { 'Content-Name': 'network.bin', 'Content-Type': 'application/octet-stream' },
+      method: 'POST',
+    });
+    const uploadedFile = await uploadResponse.json();
+    const downloadResponse = await fetch(`http://127.0.0.1:${address.port}${uploadedFile.url}`);
 
     assert.equal((await server.inject({ method: 'GET', url: '/items/1' })).statusCode, 200);
+    assert.equal(uploadResponse.status, 201);
+    assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), filePayload);
     await server.close();
     await assert.rejects(() => startServer({ databasePath, logger: false, port: -1 }), /Порт/);
     await assert.rejects(() => createServer({ databasePath, logger: false, maxPageSize: 0 }), /Максимальный/);
+    await assert.rejects(() => createServer({ databasePath, logger: false, maxFileSize: 0 }), /Максимальный размер файла/);
+    await assert.rejects(() => createServer({ databasePath, filesDirectoryPath: '', filesMetadataPath, logger: false }), /директории файлов/);
+    await assert.rejects(() => createServer({ databasePath, filesDirectoryPath, logger: false }), /filesDirectoryPath и filesMetadataPath/);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

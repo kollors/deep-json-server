@@ -9,13 +9,13 @@ export { createOpenApiDocument } from './document.js';
 
 /**
  * Generates an OpenAPI YAML file.
- * @param {{ databasePath: string, host?: string, outputPath: string, port?: number, schemaPath: string }} options Generation options.
+ * @param {{ databasePath: string, files?: boolean, host?: string, outputPath: string, port?: number, schemaPath?: string }} options Generation options.
  * @returns {Promise<Record<string, unknown>>} Generated OpenAPI document.
  */
-export async function generateOpenApi({ databasePath, host, outputPath, port, schemaPath }) {
+export async function generateOpenApi({ databasePath, files = false, host, outputPath, port, schemaPath }) {
   const database = await readDatabaseFile(databasePath);
   const schemaConfig = await readSchemaConfig(schemaPath);
-  const document = createOpenApiDocument(database, schemaConfig, { host, port });
+  const document = createOpenApiDocument(database, schemaConfig, { files, host, port });
   const resolvedOutputPath = resolve(outputPath);
 
   await mkdir(dirname(resolvedOutputPath), { recursive: true });

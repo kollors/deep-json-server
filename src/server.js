@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
-import { DEFAULT_HOST, DEFAULT_PORT, MAX_PAGE_SIZE } from './constants.js';
+import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT, MAX_PAGE_SIZE } from './constants.js';
 import { createDatabaseStore, createId, findItem, getCollection } from './database.js';
+import { registerFileRoutes } from './files.js';
 import { readSchemaConfig } from './openapi/config.js';
 import { createOpenApiDocument } from './openapi/index.js';
 import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query/index.js';
@@ -8,7 +9,7 @@ import { embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
 import { createHttpError, getResourceNames, isObject, resolveDatabasePath } from './utils.js';
 
 const CORS_HEADERS = {
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Name, Content-Type',
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
   'Access-Control-Allow-Origin': '*',
 };
@@ -142,14 +143,18 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
 
 /**
  * Creates a Fastify server without opening a network port.
- * @param {{ databasePath: string, logger?: boolean | Record<string, unknown>, maxPageSize?: number, schemaPath?: string }} options Server options.
+ * @param {{ databasePath: string, filesDirectoryPath?: string, filesMetadataPath?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, schemaPath?: string }} options Server options.
  * @returns {Promise<import('fastify').FastifyInstance>} Fastify server.
  */
 export async function createServer(options) {
-  const { databasePath, logger = true, maxPageSize = MAX_PAGE_SIZE, schemaPath } = options ?? {};
+  const { databasePath, filesDirectoryPath, filesMetadataPath, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = MAX_PAGE_SIZE, schemaPath } = options ?? {};
 
   if (!Number.isInteger(maxPageSize) || maxPageSize < 1) {
     throw new Error('Максимальный размер страницы должен быть положительным целым числом');
+  }
+
+  if (!Number.isInteger(maxFileSize) || maxFileSize < 1) {
+    throw new Error('Максимальный размер файла должен быть положительным целым числом');
   }
 
   const store = await createDatabaseStore(databasePath);
@@ -180,6 +185,14 @@ export async function createServer(options) {
     registerResourceRoutes(server, store, resource, document, maxPageSize);
   });
 
+  if ((filesDirectoryPath == null) !== (filesMetadataPath == null)) {
+    throw new Error('Для файловых маршрутов укажите filesDirectoryPath и filesMetadataPath');
+  }
+
+  if (filesDirectoryPath != null) {
+    await registerFileRoutes(server, { directoryPath: filesDirectoryPath, maxFileSize, metadataPath: filesMetadataPath });
+  }
+
   server.setErrorHandler((error, request, reply) => {
     const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
 
@@ -195,18 +208,28 @@ export async function createServer(options) {
 
 /**
  * Creates and starts a Fastify server.
- * @param {{ databasePath: string, host?: string, logger?: boolean | Record<string, unknown>, maxPageSize?: number, port?: number, schemaPath?: string }} options Server options.
+ * @param {{ databasePath: string, filesDirectoryPath?: string, filesMetadataPath?: string, host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number, schemaPath?: string }} options Server options.
  * @returns {Promise<import('fastify').FastifyInstance>} Listening Fastify server.
  */
 export async function startServer(options) {
-  const { databasePath, host = DEFAULT_HOST, logger = true, maxPageSize = MAX_PAGE_SIZE, port = DEFAULT_PORT, schemaPath } = options ?? {};
+  const {
+    databasePath,
+    filesDirectoryPath,
+    filesMetadataPath,
+    host = DEFAULT_HOST,
+    logger = true,
+    maxFileSize = DEFAULT_MAX_FILE_SIZE,
+    maxPageSize = MAX_PAGE_SIZE,
+    port = DEFAULT_PORT,
+    schemaPath,
+  } = options ?? {};
 
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error('Порт должен быть целым числом от 0 до 65535');
   }
 
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const server = await createServer({ databasePath: resolvedDatabasePath, logger, maxPageSize, schemaPath });
+  const server = await createServer({ databasePath: resolvedDatabasePath, filesDirectoryPath, filesMetadataPath, logger, maxFileSize, maxPageSize, schemaPath });
 
   await server.listen({ host, port });
   server.log.info({ database: resolvedDatabasePath }, 'Deep JSON Server запущен');

@@ -1,4 +1,5 @@
 import process from 'node:process';
+import { readServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_PORT } from './constants.js';
 import { generateOpenApi } from './openapi/index.js';
 import { startServer } from './server.js';
@@ -6,73 +7,84 @@ import { startServer } from './server.js';
 const HELP_TEXT = `Deep JSON Server
 
 Использование:
-  deep-json-server <database.json> [--schema <database-schema.json>] [--host <host>] [--port <port>]
-  deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]
+  deep-json-server [--openapi] [--files] <server.config.js>
 
 Параметры:
-  --generate  Сгенерировать OpenAPI и завершить работу
-  --host, -h  Адрес сервера (по умолчанию 127.0.0.1)
-  --port, -p  Порт сервера (по умолчанию 4001)
-  --schema    Проверять запросы записи по указанной схеме
-  --help      Показать справку`;
+  --openapi  Сгенерировать OpenAPI и завершить работу
+  --files    Добавить файловые маршруты в сервер или OpenAPI
+  --help     Показать справку`;
 
-const parseOptions = (args, allowedOptions) => {
-  const options = {};
+const parseArguments = (args) => {
+  const flags = { files: false, openapi: false };
+  let configPath;
 
-  for (let index = 0; index < args.length; index += 2) {
-    const option = args[index];
-    const value = args[index + 1];
-
-    if (!allowedOptions.includes(option)) {
-      throw new Error(`Неизвестный параметр: ${option}`);
+  args.forEach((argument) => {
+    if (argument === '--files') {
+      flags.files = true;
+    } else if (argument === '--openapi') {
+      flags.openapi = true;
+    } else if (argument.startsWith('-')) {
+      throw new Error(`Неизвестный параметр: ${argument}`);
+    } else if (configPath == null) {
+      configPath = argument;
+    } else {
+      throw new Error('Можно указать только один файл конфигурации');
     }
+  });
 
-    if (value == null || value.startsWith('-')) {
-      throw new Error(`Не указано значение параметра ${option}`);
-    }
-
-    const optionName = ['--host', '-h'].includes(option) ? 'host' : ['--port', '-p'].includes(option) ? 'port' : 'schemaPath';
-
-    options[optionName] = value;
+  if (configPath == null) {
+    throw new Error('Укажите путь к файлу конфигурации');
   }
 
-  return options;
+  return { configPath, ...flags };
 };
 
-export async function runCli(args = process.argv.slice(2)) {
+const validateModeConfig = (config, { files, openapi }) => {
+  if (openapi && config.openapiPath == null) {
+    throw new Error('Для --openapi укажите ключ config.openapi.path');
+  }
+
+  if (files && config.filesDirectoryPath == null) {
+    throw new Error('Для --files укажите ключ config.files.directory');
+  }
+
+  if (files && config.filesMetadataPath == null) {
+    throw new Error('Для --files укажите ключ config.files.metadata');
+  }
+};
+
+export async function runCli(args = process.argv.slice(2), services = { generateOpenApi, startServer }) {
   if (args.includes('--help')) {
     process.stdout.write(`${HELP_TEXT}\n`);
     return;
   }
 
-  const [databasePath] = args;
+  const { configPath, files, openapi } = parseArguments(args);
+  const config = await readServerConfig(configPath);
+  const host = config.host ?? process.env.HOST ?? DEFAULT_HOST;
+  const port = config.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
 
-  if (databasePath == null || databasePath.startsWith('-')) {
-    throw new Error('Укажите путь к JSON-базе данных');
-  }
+  validateModeConfig(config, { files, openapi });
 
-  const generateIndex = args.indexOf('--generate');
-
-  if (generateIndex !== -1) {
-    const schemaPath = args[generateIndex + 1];
-    const outputPath = args[generateIndex + 2];
-
-    if (generateIndex !== 1 || schemaPath == null || outputPath == null) {
-      throw new Error('Используйте: deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]');
-    }
-
-    const options = parseOptions(args.slice(4), ['--host', '-h', '--port', '-p']);
-    const host = options.host ?? process.env.HOST ?? DEFAULT_HOST;
-    const port = Number(options.port ?? process.env.PORT ?? DEFAULT_PORT);
-
-    await generateOpenApi({ databasePath, host, outputPath, port, schemaPath });
-    process.stdout.write(`OpenAPI-схема сохранена в ${outputPath}\n`);
+  if (openapi) {
+    await services.generateOpenApi({
+      databasePath: config.databasePath,
+      files,
+      host,
+      outputPath: config.openapiPath,
+      port,
+      schemaPath: config.schemaPath,
+    });
+    process.stdout.write(`OpenAPI-схема сохранена в ${config.openapiPath}\n`);
     return;
   }
 
-  const options = parseOptions(args.slice(1), ['--host', '-h', '--port', '-p', '--schema']);
-  const host = options.host ?? process.env.HOST ?? DEFAULT_HOST;
-  const port = Number(options.port ?? process.env.PORT ?? DEFAULT_PORT);
-
-  await startServer({ databasePath, host, port, schemaPath: options.schemaPath });
+  await services.startServer({
+    databasePath: config.databasePath,
+    filesDirectoryPath: files ? config.filesDirectoryPath : undefined,
+    filesMetadataPath: files ? config.filesMetadataPath : undefined,
+    host,
+    port,
+    schemaPath: config.schemaPath,
+  });
 }

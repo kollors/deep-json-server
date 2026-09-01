@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
 import { createOpenApiDocument, generateOpenApi } from '../index.js';
-import { runCli } from '../src/cli.js';
 
 const database = {
   countries: [{ id: '1', name: 'Russia' }],
@@ -48,7 +47,7 @@ const withFiles = async (run) => {
 
 test('generates CRUD schemas, formats and direct and reverse relations', async () => {
   await withFiles(async ({ databasePath, outputPath, schemaPath }) => {
-    await generateOpenApi({ databasePath, outputPath, schemaPath });
+    await generateOpenApi({ databasePath, files: true, outputPath, schemaPath });
 
     const yaml = await readFile(outputPath, 'utf8');
     const document = parse(yaml);
@@ -81,6 +80,11 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
     assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
     assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
+    assert.equal(document.paths['/_files'].post.operationId, 'uploadFile');
+    assert.equal(document.paths['/_files'].post.requestBody.content['application/octet-stream'].schema.format, 'binary');
+    assert.equal(document.paths['/_files/{id}'].get.responses[200].content['application/octet-stream'].schema.format, 'binary');
+    assert.deepEqual(document.components.schemas.UploadedFile.required, ['id', 'mimeType', 'name', 'size', 'url']);
+    assert.equal(document.components.parameters.ContentName.name, 'Content-Name');
   });
 });
 
@@ -143,20 +147,5 @@ test('validates database contents and schema configuration', () => {
 test('rejects colliding component names and operation IDs', () => {
   assert.throws(() => createOpenApiDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
   assert.throws(() => createOpenApiDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
-});
-
-test('generates OpenAPI through CLI and validates CLI arguments', async () => {
-  await withFiles(async ({ databasePath, outputPath, schemaPath }) => {
-    await runCli([databasePath, '--generate', schemaPath, outputPath, '--host', 'localhost', '--port', '5000']);
-
-    const document = parse(await readFile(outputPath, 'utf8'));
-
-    assert.equal(document.openapi, '3.0.3');
-    assert.equal(document.servers[0].url, 'http://localhost:5000');
-  });
-
-  await assert.rejects(() => runCli([]), /Укажите путь/);
-  await assert.rejects(() => runCli(['database.json', '--unknown', 'value']), /Неизвестный параметр/);
-  await assert.rejects(() => runCli(['database.json', '--port']), /Не указано значение/);
-  await assert.rejects(() => runCli(['database.json', '--generate']), /Используйте/);
+  assert.throws(() => createOpenApiDocument({ files: [] }, { $schema: { files: { name: 'UploadedFile' } } }, { files: true }), /имя OpenAPI-схемы/i);
 });
