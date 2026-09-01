@@ -19,7 +19,7 @@ npm install --save-dev @kollors/deep-json-server
 ```json
 {
   "scripts": {
-    "mock": "deep-json-server mock/database.json --port 4001",
+    "mock": "deep-json-server mock/database.json --schema mock/database-schema.json --port 4001",
     "openapi": "deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml"
   }
 }
@@ -106,7 +106,9 @@ PATCH  /movies/:id
 DELETE /movies/:id
 ```
 
-`POST` генерирует строковый ID, а `PUT` и `PATCH` сохраняют исходный тип ID. Все операции записи — `POST`, `PUT`, `PATCH` и `DELETE` — сохраняют изменения в JSON-файле. Файл базы должен существовать до запуска и содержать JSON-объект, каждое свойство верхнего уровня которого является массивом записей отдельного ресурса.
+`POST` генерирует строковый ID, а `PUT` и `PATCH` сохраняют исходный тип ID. Все операции записи — `POST`, `PUT`, `PATCH` и `DELETE` — сохраняют изменения в JSON-файле.
+
+Файл базы должен существовать до запуска. Имена ресурсов могут содержать латинские буквы, цифры, `_` и `-` и должны начинаться с буквы. Каждый ресурс является массивом JSON-объектов. У каждой записи должен быть непустой строковый или конечный числовой `id`; ID должны быть уникальны внутри ресурса при сравнении как строки, поэтому `1` и `"1"` не могут существовать одновременно.
 
 ## Пагинация и сортировка
 
@@ -128,9 +130,9 @@ GET-запрос к коллекции всегда возвращает объ�
 }
 ```
 
-Оба параметра пагинации должны быть положительными целыми числами. При некорректном значении сервер возвращает `400`, а не исправляет его автоматически.
+Оба параметра пагинации должны быть положительными целыми числами. По умолчанию `_perPage` не может превышать `1000`; лимит можно изменить программным параметром `maxPageSize`. При некорректном значении сервер возвращает `400`, а не исправляет его автоматически. Страница после последней возвращает пустой массив `data`, а `prev` указывает на последнюю доступную страницу.
 
-Префикс `-` перед полем включает сортировку по убыванию.
+Префикс `-` перед полем включает сортировку по убыванию. Неизвестные и небезопасные поля сортировки возвращают `400`.
 
 ## Фильтры
 
@@ -184,6 +186,8 @@ GET /movies/1?_embed=actors.user.country&_embed=actors.genres&_embed=publishers
 GET /movies/1?_embed=actors.user.country
 GET /genres/2?_embed=parents.parents
 ```
+
+Неизвестные и некорректные пути `_embed` возвращают `400`.
 
 Поддерживаются и обратные связи:
 
@@ -273,22 +277,24 @@ deep-json-server mock/database.json --generate mock/database-schema.json mock/op
 }
 ```
 
-В сгенерированном документе описаны CRUD, пагинация, сортировка, глубокие фильтры, `_embed` и связи в ответах, определённые по полям `...Id` и `...Ids`. Файл можно передать, например, в RTK Query OpenAPI Codegen. OpenAPI создаётся только с параметром `--generate`; обычный запуск сервера файл не перезаписывает.
+В сгенерированном документе описаны CRUD, пагинация, сортировка, глубокие фильтры, `_embed`, а также прямые и обратные связи в ответах, определённые по полям `...Id` и `...Ids`. Числовой ID базы описывается как `integer | string`, поскольку последующий `POST` создаст строковый ID в том же ресурсе. Файл можно передать, например, в RTK Query OpenAPI Codegen. OpenAPI создаётся только с параметром `--generate`; обычный запуск сервера файл не перезаписывает.
+
+При обычном запуске тела запросов проверяются по автоматически выведенным схемам ресурсов. Передайте `--schema mock/database-schema.json`, чтобы в runtime применялись те же явные ограничения `required`, `formats` и `properties`. Некорректные тела `POST`, `PUT` и `PATCH` возвращают `400`.
 
 ## Программный API
 
 ```js
 import { createServer, generateOpenApi, startServer } from '@kollors/deep-json-server';
 
-const server = await createServer({ databasePath: 'mock/database.json', logger: false });
+const server = await createServer({ databasePath: 'mock/database.json', logger: false, maxPageSize: 1000, schemaPath: 'mock/database-schema.json' });
 
 const response = await server.inject({ method: 'GET', url: '/movies' });
 
 await server.close();
 
-await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001 });
+await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json' });
 
 await generateOpenApi({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
 ```
 
-`createServer()` удобен для тестов: он возвращает экземпляр Fastify, не открывая сетевой порт.
+`createServer()` удобен для тестов: он возвращает экземпляр Fastify, не открывая сетевой порт. Пакет содержит сгенерированные TypeScript-декларации для всех экспортируемых функций.

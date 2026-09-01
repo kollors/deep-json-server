@@ -1,6 +1,4 @@
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import pluralize from 'pluralize';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -14,24 +12,9 @@ export const createHttpError = (statusCode, message) => {
 };
 
 export const getResourceNames = (data) => Object.keys(data);
-export const isMainModule = (filePath, moduleUrl) => filePath != null && realpathSync(resolve(filePath)) === fileURLToPath(moduleUrl);
 export const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isSafeKey = (key) => !UNSAFE_KEYS.has(key);
 export const toArray = (value) => (Array.isArray(value) ? value : [value]);
-
-export const validateDatabase = (data) => {
-  if (!isObject(data)) {
-    throw new Error('База данных должна содержать JSON-объект');
-  }
-
-  const invalidResource = Object.entries(data).find(([, value]) => !Array.isArray(value));
-
-  if (invalidResource != null) {
-    throw new Error(`Ресурс «${invalidResource[0]}» должен содержать JSON-массив`);
-  }
-
-  return data;
-};
 
 export const isEqual = (left, right) => {
   if (Object.is(left, right)) {
@@ -60,6 +43,12 @@ export const resolveDatabasePath = (databasePath) => {
   return resolve(databasePath);
 };
 
+export const isIdEqual = (left, right) => left != null && right != null && String(left) === String(right);
 export const singularize = (value) => pluralize.singular(value);
 
-export const toPascalCase = (value) => value.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join('');
+export const toPascalCase = (value) =>
+  value
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join('');

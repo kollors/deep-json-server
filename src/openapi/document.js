@@ -1,0 +1,287 @@
+import { DEFAULT_HOST, DEFAULT_PAGE_SIZE, DEFAULT_PORT, MAX_PAGE_SIZE } from '../constants.js';
+import { validateDatabase } from '../database.js';
+import { getRelationMetadata } from '../relation-metadata.js';
+import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
+import { applyConfiguredFields, validateSchemaConfig } from './config.js';
+import { ensureGeneratedIdSchema, inferObjectSchema, mergeSchemaOverrides, omitId } from './inference.js';
+
+const getServerUrl = (host, port) => {
+  const serverPort = Number(port);
+
+  if (typeof host !== 'string' || host === '') {
+    throw new Error('Адрес сервера не должен быть пустым');
+  }
+
+  if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65_535) {
+    throw new Error('Порт должен быть целым числом от 1 до 65535');
+  }
+
+  const serverHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+
+  return `http://${serverHost}:${serverPort}`;
+};
+
+const createSchemaReference = (name) => ({ $ref: `#/components/schemas/${name}` });
+
+const addForwardRelations = (schema, resources, componentNames, sourceResource) => {
+  if (Array.isArray(schema.oneOf)) {
+    return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => addForwardRelations(nestedSchema, resources, componentNames, sourceResource)) };
+  }
+
+  if (schema.type === 'array') {
+    return { ...schema, items: addForwardRelations(schema.items ?? {}, resources, componentNames, sourceResource) };
+  }
+
+  if (schema.type !== 'object' || !isObject(schema.properties)) {
+    return schema;
+  }
+
+  const properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, addForwardRelations(value, resources, componentNames, sourceResource)]));
+
+  Object.keys(schema.properties).forEach((key) => {
+    const relation = getRelationMetadata(key, resources, sourceResource);
+
+    if (relation != null) {
+      const relationSchema = createSchemaReference(componentNames[relation.targetResource]);
+
+      properties[relation.relationName] = relation.isMany ? { items: relationSchema, type: 'array' } : relationSchema;
+    }
+  });
+
+  return { ...schema, properties };
+};
+
+const collectRelations = (schema, resources, sourceResource, relations = []) => {
+  if (Array.isArray(schema.oneOf)) {
+    schema.oneOf.forEach((nestedSchema) => {
+      collectRelations(nestedSchema, resources, sourceResource, relations);
+    });
+    return relations;
+  }
+
+  if (schema.type === 'array') {
+    collectRelations(schema.items ?? {}, resources, sourceResource, relations);
+    return relations;
+  }
+
+  if (schema.type !== 'object' || !isObject(schema.properties)) {
+    return relations;
+  }
+
+  Object.entries(schema.properties).forEach(([key, value]) => {
+    const relation = getRelationMetadata(key, resources, sourceResource);
+
+    if (relation != null) {
+      relations.push(relation);
+    }
+
+    collectRelations(value, resources, sourceResource, relations);
+  });
+
+  return relations;
+};
+
+const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => {
+  resources.forEach((sourceResource) => {
+    collectRelations(rawSchemas[sourceResource], resources, sourceResource).forEach(({ reverseRelationName, targetResource }) => {
+      const targetComponentName = componentNames[targetResource];
+      const targetSchema = schemas[targetComponentName];
+
+      if (targetSchema.type === 'object' && isObject(targetSchema.properties) && !Object.hasOwn(targetSchema.properties, reverseRelationName)) {
+        schemas[targetComponentName] = {
+          ...targetSchema,
+          properties: {
+            ...targetSchema.properties,
+            [reverseRelationName]: { items: createSchemaReference(componentNames[sourceResource]), type: 'array' },
+          },
+        };
+      }
+    });
+  });
+};
+
+const createParameters = () => ({
+  Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
+  Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
+  Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
+  PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: MAX_PAGE_SIZE, minimum: 1, type: 'integer' } },
+  Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
+  Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
+});
+
+const createJsonContent = (schema) => ({ content: { 'application/json': { schema } } });
+const createResponse = (description, schema) => ({ description, ...(schema != null && createJsonContent(schema)) });
+const createParameterReference = (name) => ({ $ref: `#/components/parameters/${name}` });
+const createRequestBody = (name) => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
+
+const createResourcePaths = (resource, componentName) => {
+  const resourceName = toPascalCase(resource);
+
+  return {
+    [`/${resource}`]: {
+      get: {
+        operationId: `get${resourceName}`,
+        parameters: ['Page', 'PerPage', 'Sort', 'Where', 'Embed'].map(createParameterReference),
+        responses: { 200: createResponse('Successful response', createSchemaReference(`${componentName}Page`)), 400: createResponse('Invalid query', createSchemaReference('Error')) },
+        tags: [resource],
+      },
+      post: {
+        operationId: `post${resourceName}`,
+        requestBody: createRequestBody(`${componentName}Create`),
+        responses: { 201: createResponse('Created', createSchemaReference(componentName)), 400: createResponse('Invalid request', createSchemaReference('Error')) },
+        tags: [resource],
+      },
+    },
+    [`/${resource}/{id}`]: {
+      delete: {
+        operationId: `delete${resourceName}ById`,
+        parameters: [createParameterReference('Id')],
+        responses: { 200: createResponse('Deleted', createSchemaReference(componentName)), 404: createResponse('Not found', createSchemaReference('Error')) },
+        tags: [resource],
+      },
+      get: {
+        operationId: `get${resourceName}ById`,
+        parameters: [createParameterReference('Id'), createParameterReference('Embed')],
+        responses: {
+          200: createResponse('Successful response', createSchemaReference(componentName)),
+          400: createResponse('Invalid query', createSchemaReference('Error')),
+          404: createResponse('Not found', createSchemaReference('Error')),
+        },
+        tags: [resource],
+      },
+      patch: {
+        operationId: `patch${resourceName}ById`,
+        parameters: [createParameterReference('Id')],
+        requestBody: createRequestBody(`${componentName}Update`),
+        responses: {
+          200: createResponse('Updated', createSchemaReference(componentName)),
+          400: createResponse('Invalid request', createSchemaReference('Error')),
+          404: createResponse('Not found', createSchemaReference('Error')),
+        },
+        tags: [resource],
+      },
+      put: {
+        operationId: `put${resourceName}ById`,
+        parameters: [createParameterReference('Id')],
+        requestBody: createRequestBody(`${componentName}Create`),
+        responses: {
+          200: createResponse('Replaced', createSchemaReference(componentName)),
+          400: createResponse('Invalid request', createSchemaReference('Error')),
+          404: createResponse('Not found', createSchemaReference('Error')),
+        },
+        tags: [resource],
+      },
+    },
+  };
+};
+
+const getOperationIds = (resource) => {
+  const resourceName = toPascalCase(resource);
+
+  return [`get${resourceName}`, `post${resourceName}`, `delete${resourceName}ById`, `get${resourceName}ById`, `patch${resourceName}ById`, `put${resourceName}ById`];
+};
+
+const validateGeneratedNames = (resources, componentNames) => {
+  const schemaOwners = new Map([['Error', 'встроенная схема ошибки']]);
+  const operationOwners = new Map();
+
+  resources.forEach((resource) => {
+    const componentName = componentNames[resource];
+
+    if (componentName === '') {
+      throw new Error(`Не удалось сформировать имя OpenAPI-схемы для ресурса «${resource}». Укажите $schema.${resource}.name`);
+    }
+
+    [componentName, `${componentName}Create`, `${componentName}Update`, `${componentName}Page`].forEach((schemaName) => {
+      const owner = schemaOwners.get(schemaName);
+
+      if (owner != null) {
+        throw new Error(`Имя OpenAPI-схемы «${schemaName}» используется ресурсами «${owner}» и «${resource}». Укажите уникальный $schema.${resource}.name`);
+      }
+
+      schemaOwners.set(schemaName, resource);
+    });
+
+    getOperationIds(resource).forEach((operationId) => {
+      const owner = operationOwners.get(operationId);
+
+      if (owner != null) {
+        throw new Error(`operationId «${operationId}» используется ресурсами «${owner}» и «${resource}». Переименуйте один из ресурсов`);
+      }
+
+      operationOwners.set(operationId, resource);
+    });
+  });
+};
+
+/**
+ * Creates an OpenAPI 3.0 document from a database and optional schema configuration.
+ * @param {Record<string, Array<Record<string, unknown>>>} database Database contents.
+ * @param {Record<string, unknown>} [schemaConfig] Schema configuration.
+ * @param {{ host?: string, port?: number }} [serverOptions] Server address used in the generated document.
+ * @returns {Record<string, unknown>} OpenAPI document.
+ */
+export function createOpenApiDocument(database, schemaConfig = {}, { host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+  validateDatabase(database);
+
+  if (!isObject(schemaConfig)) {
+    throw new Error('Схема базы данных должна содержать JSON-объект');
+  }
+
+  const resources = getResourceNames(database);
+  const resourceConfigs = validateSchemaConfig(schemaConfig, resources);
+  const componentNames = Object.fromEntries(
+    resources.map((resource) => {
+      const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
+      const componentName = typeof resourceConfig.name === 'string' && resourceConfig.name !== '' ? resourceConfig.name : toPascalCase(singularize(resource));
+
+      return [resource, componentName];
+    }),
+  );
+
+  validateGeneratedNames(resources, componentNames);
+
+  const rawSchemas = Object.fromEntries(
+    resources.map((resource) => {
+      const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
+      const inferredSchema = database[resource].length === 0 ? { properties: { id: { type: 'string' } }, type: 'object' } : inferObjectSchema(database[resource]);
+      const configuredSchema = mergeSchemaOverrides(inferredSchema, { properties: isObject(resourceConfig.properties) ? resourceConfig.properties : {} });
+
+      return [resource, applyConfiguredFields(ensureGeneratedIdSchema(configuredSchema), resource, resourceConfig)];
+    }),
+  );
+  const schemas = { Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' } };
+
+  resources.forEach((resource) => {
+    const componentName = componentNames[resource];
+    const rawSchema = rawSchemas[resource];
+
+    schemas[componentName] = addForwardRelations(rawSchema, resources, componentNames, resource);
+    schemas[`${componentName}Create`] = omitId(rawSchema, true);
+    schemas[`${componentName}Update`] = omitId(rawSchema, false);
+    schemas[`${componentName}Page`] = {
+      properties: {
+        data: { items: createSchemaReference(componentName), type: 'array' },
+        first: { type: 'integer' },
+        items: { type: 'integer' },
+        last: { type: 'integer' },
+        next: { nullable: true, type: 'integer' },
+        pages: { type: 'integer' },
+        prev: { nullable: true, type: 'integer' },
+      },
+      required: ['data', 'first', 'items', 'last', 'next', 'pages', 'prev'],
+      type: 'object',
+    };
+  });
+
+  addReverseRelations(schemas, rawSchemas, resources, componentNames);
+
+  return {
+    components: { parameters: createParameters(), schemas },
+    info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
+    openapi: '3.0.3',
+    paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource]))),
+    servers: [{ url: getServerUrl(host, port) }],
+    tags: resources.map((resource) => ({ name: resource })),
+  };
+}

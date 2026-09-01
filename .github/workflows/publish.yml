@@ -20,5 +20,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: npm ci
-      - run: npm test
+      - name: Verify tag matches package version
+        run: node --input-type=module --eval "import packageJson from './package.json' with { type: 'json' }; if (process.env.GITHUB_REF_NAME !== 'v' + packageJson.version) throw new Error('Tag ' + process.env.GITHUB_REF_NAME + ' does not match package version ' + packageJson.version)"
+      - run: npm run verify
       - run: npm publish

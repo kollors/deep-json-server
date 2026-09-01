@@ -1,25 +1,16 @@
 import Fastify from 'fastify';
-import { JSONFilePreset } from 'lowdb/node';
-import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query.js';
-import { embedItem, parseEmbedPaths } from './relations.js';
-import { createHttpError, getResourceNames, isObject, isSafeKey, resolveDatabasePath, validateDatabase } from './utils.js';
+import { DEFAULT_HOST, DEFAULT_PORT, MAX_PAGE_SIZE } from './constants.js';
+import { createDatabaseStore, createId, findItem, getCollection } from './database.js';
+import { readSchemaConfig } from './openapi/config.js';
+import { createOpenApiDocument } from './openapi/index.js';
+import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query/index.js';
+import { embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
+import { createHttpError, getResourceNames, isObject, resolveDatabasePath } from './utils.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
   'Access-Control-Allow-Origin': '*',
-};
-
-const getCollection = (database, resource) => {
-  const collection = isSafeKey(resource) ? database.data[resource] : undefined;
-
-  if (!Array.isArray(collection)) {
-    throw createHttpError(404, 'Ресурс не найден');
-  }
-
-  return collection;
 };
 
 const getRequestBody = (body) => {
@@ -30,97 +21,66 @@ const getRequestBody = (body) => {
   return body;
 };
 
-const findItem = (collection, id) => collection.find((item) => isObject(item) && String(item.id) === id);
+const getSchemaName = (reference) => reference.split('/').at(-1);
 
-const readDatabaseFile = async(databasePath) => {
-  let source;
+const addRequestSchemas = (server, document, resources) => {
+  const requestSchemaNames = new Set(
+    resources.flatMap((resource) => {
+      const resourcePath = document.paths[`/${resource}`];
+      const itemPath = document.paths[`/${resource}/{id}`];
 
-  try {
-    source = await readFile(databasePath, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      throw new Error(`Файл базы данных не найден: ${databasePath}`);
-    }
+      return [getSchemaName(resourcePath.post.requestBody.content['application/json'].schema.$ref), getSchemaName(itemPath.patch.requestBody.content['application/json'].schema.$ref)];
+    }),
+  );
 
-    throw error;
-  }
-
-  const data = JSON.parse(source);
-
-  return validateDatabase(data);
+  requestSchemaNames.forEach((schemaName) => {
+    server.addSchema({ $id: schemaName, ...document.components.schemas[schemaName] });
+  });
 };
 
-export async function createServer({ databasePath, logger = true } = {}) {
-  const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const initialData = await readDatabaseFile(resolvedDatabasePath);
-  const database = await JSONFilePreset(resolvedDatabasePath, initialData);
-  const server = Fastify({ logger });
-  let databaseWriteQueue = Promise.resolve();
+const registerResourceRoutes = (server, store, resource, document, maxPageSize) => {
+  const resourcePath = `/${resource}`;
+  const itemPath = `/${resource}/:id`;
+  const createSchemaName = getSchemaName(document.paths[resourcePath].post.requestBody.content['application/json'].schema.$ref);
+  const updateSchemaName = getSchemaName(document.paths[`/${resource}/{id}`].patch.requestBody.content['application/json'].schema.$ref);
 
-  const readDatabase = async() => {
-    database.data = await readDatabaseFile(resolvedDatabasePath);
-  };
-
-  const updateDatabase = (update) => {
-    const operation = databaseWriteQueue.then(async() => {
-      await readDatabase();
-
-      const result = update();
-
-      await database.write();
-
-      return result;
-    });
-
-    databaseWriteQueue = operation.catch(() => undefined);
-
-    return operation;
-  };
-
-  server.addHook('onRequest', async(_request, reply) => {
-    Object.entries(CORS_HEADERS).forEach(([header, value]) => reply.header(header, value));
-  });
-
-  server.addHook('preHandler', async(request) => {
-    if (request.method === 'GET') {
-      await readDatabase();
-    }
-  });
-
-  server.options('/', async(_request, reply) => reply.code(204).send());
-  server.options('/*', async(_request, reply) => reply.code(204).send());
-  server.get('/', async() => ({ resources: getResourceNames(database.data) }));
-
-  server.get('/:resource', async(request) => {
-    const collection = getCollection(database, request.params.resource);
+  server.get(resourcePath, async (request) => {
+    const collection = getCollection(store.database, resource);
     const where = parseWhere(request.query);
     const embedPaths = parseEmbedPaths(request.query._embed);
+    const pagination = parsePagination(request.query, maxPageSize);
+
+    validateEmbedPaths(store.database, resource, collection, embedPaths);
+
     const relationIndexes = new Map();
-    const embeddedItems = collection.map((item) => embedItem(database, item, request.params.resource, embedPaths, relationIndexes));
-    const pagination = parsePagination(request.query);
+    const embeddedItems = collection.map((item) => embedItem(store.database, item, resource, embedPaths, relationIndexes));
 
     validateWhere(where, embeddedItems);
 
     const filteredItems = embeddedItems.filter((item) => matchesWhere(item, where));
-    const sortedItems = sortItems(filteredItems, request.query._sort);
+    const sortedItems = sortItems(filteredItems, request.query._sort, embeddedItems);
 
     return paginateItems(sortedItems, pagination.page, pagination.pageSize);
   });
 
-  server.get('/:resource/:id', async(request) => {
-    const item = findItem(getCollection(database, request.params.resource), request.params.id);
+  server.get(itemPath, async (request) => {
+    const collection = getCollection(store.database, resource);
+    const item = findItem(collection, request.params.id);
+    const embedPaths = parseEmbedPaths(request.query._embed);
 
     if (item == null) {
       throw createHttpError(404, 'Запись не найдена');
     }
 
-    return embedItem(database, item, request.params.resource, parseEmbedPaths(request.query._embed));
+    validateEmbedPaths(store.database, resource, collection, embedPaths);
+
+    return embedItem(store.database, item, resource, embedPaths);
   });
 
-  server.post('/:resource', async(request, reply) => {
-    const item = await updateDatabase(() => {
-      const collection = getCollection(database, request.params.resource);
-      const createdItem = { ...getRequestBody(request.body), id: randomBytes(8).toString('base64url') };
+  server.post(resourcePath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request, reply) => {
+    const item = await store.update((database) => {
+      const collection = getCollection(database, resource);
+      const createdItem = { ...getRequestBody(request.body), id: createId(collection) };
 
       collection.push(createdItem);
 
@@ -130,9 +90,9 @@ export async function createServer({ databasePath, logger = true } = {}) {
     return reply.code(201).send(item);
   });
 
-  server.put('/:resource/:id', async(request) => {
-    return updateDatabase(() => {
-      const collection = getCollection(database, request.params.resource);
+  server.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) =>
+    store.update((database) => {
+      const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
 
       if (currentItem == null) {
@@ -144,12 +104,12 @@ export async function createServer({ databasePath, logger = true } = {}) {
       collection.splice(collection.indexOf(currentItem), 1, item);
 
       return item;
-    });
-  });
+    }),
+  );
 
-  server.patch('/:resource/:id', async(request) => {
-    return updateDatabase(() => {
-      const collection = getCollection(database, request.params.resource);
+  server.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
+    store.update((database) => {
+      const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
 
       if (currentItem == null) {
@@ -161,12 +121,12 @@ export async function createServer({ databasePath, logger = true } = {}) {
       collection.splice(collection.indexOf(currentItem), 1, item);
 
       return item;
-    });
-  });
+    }),
+  );
 
-  server.delete('/:resource/:id', async(request) => {
-    return updateDatabase(() => {
-      const collection = getCollection(database, request.params.resource);
+  server.delete(itemPath, async (request) =>
+    store.update((database) => {
+      const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
 
       if (currentItem == null) {
@@ -176,7 +136,48 @@ export async function createServer({ databasePath, logger = true } = {}) {
       collection.splice(collection.indexOf(currentItem), 1);
 
       return currentItem;
+    }),
+  );
+};
+
+/**
+ * Creates a Fastify server without opening a network port.
+ * @param {{ databasePath: string, logger?: boolean | Record<string, unknown>, maxPageSize?: number, schemaPath?: string }} options Server options.
+ * @returns {Promise<import('fastify').FastifyInstance>} Fastify server.
+ */
+export async function createServer(options) {
+  const { databasePath, logger = true, maxPageSize = MAX_PAGE_SIZE, schemaPath } = options ?? {};
+
+  if (!Number.isInteger(maxPageSize) || maxPageSize < 1) {
+    throw new Error('Максимальный размер страницы должен быть положительным целым числом');
+  }
+
+  const store = await createDatabaseStore(databasePath);
+  const schemaConfig = await readSchemaConfig(schemaPath);
+  const document = createOpenApiDocument(store.database.data, schemaConfig);
+  const resources = getResourceNames(store.database.data);
+  const server = Fastify({ logger });
+
+  addRequestSchemas(server, document, resources);
+
+  server.addHook('onRequest', async (_request, reply) => {
+    Object.entries(CORS_HEADERS).forEach(([header, value]) => {
+      reply.header(header, value);
     });
+  });
+
+  server.addHook('preHandler', async (request) => {
+    if (request.method === 'GET') {
+      await store.read();
+    }
+  });
+
+  server.options('/', async (_request, reply) => reply.code(204).send());
+  server.options('/*', async (_request, reply) => reply.code(204).send());
+  server.get('/', async () => ({ resources }));
+
+  resources.forEach((resource) => {
+    registerResourceRoutes(server, store, resource, document, maxPageSize);
   });
 
   server.setErrorHandler((error, request, reply) => {
@@ -192,13 +193,20 @@ export async function createServer({ databasePath, logger = true } = {}) {
   return server;
 }
 
-export async function startServer({ databasePath, host = '127.0.0.1', logger = true, port = 4001 } = {}) {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error('Порт должен быть целым числом от 1 до 65535');
+/**
+ * Creates and starts a Fastify server.
+ * @param {{ databasePath: string, host?: string, logger?: boolean | Record<string, unknown>, maxPageSize?: number, port?: number, schemaPath?: string }} options Server options.
+ * @returns {Promise<import('fastify').FastifyInstance>} Listening Fastify server.
+ */
+export async function startServer(options) {
+  const { databasePath, host = DEFAULT_HOST, logger = true, maxPageSize = MAX_PAGE_SIZE, port = DEFAULT_PORT, schemaPath } = options ?? {};
+
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error('Порт должен быть целым числом от 0 до 65535');
   }
 
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const server = await createServer({ databasePath: resolvedDatabasePath, logger });
+  const server = await createServer({ databasePath: resolvedDatabasePath, logger, maxPageSize, schemaPath });
 
   await server.listen({ host, port });
   server.log.info({ database: resolvedDatabasePath }, 'Deep JSON Server запущен');

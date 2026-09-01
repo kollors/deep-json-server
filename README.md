@@ -19,7 +19,7 @@ Add a script to `package.json`:
 ```json
 {
   "scripts": {
-    "mock": "deep-json-server mock/database.json --port 4001",
+    "mock": "deep-json-server mock/database.json --schema mock/database-schema.json --port 4001",
     "openapi": "deep-json-server mock/database.json --generate mock/database-schema.json mock/openapi-schema.yaml"
   }
 }
@@ -106,7 +106,9 @@ PATCH  /movies/:id
 DELETE /movies/:id
 ```
 
-`POST` generates a string ID, while `PUT` and `PATCH` preserve the stored ID type. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — persist their changes in the JSON file. The database file must exist before startup and contain a JSON object whose every top-level property is an array of resource records.
+`POST` generates a string ID, while `PUT` and `PATCH` preserve the stored ID type. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — persist their changes in the JSON file.
+
+The database file must exist before startup. Resource names may contain Latin letters, numbers, `_` and `-`, and must start with a letter. Every resource is an array of JSON objects. Every record must have a non-empty string or finite numeric `id`; IDs must be unique within a resource when compared as strings, so `1` and `"1"` cannot coexist.
 
 ## Pagination and sorting
 
@@ -128,9 +130,9 @@ A GET collection always returns a page object. `_page` defaults to `1`, and `_pe
 }
 ```
 
-Both pagination parameters must be positive integers. Invalid values return `400` instead of being silently corrected.
+Both pagination parameters must be positive integers. `_perPage` cannot exceed `1000` by default; use the programmatic `maxPageSize` option to change that limit. Invalid values return `400` instead of being silently corrected. A page beyond the last page returns an empty `data` array and points `prev` to the last available page instead of silently clamping the request.
 
-Prefix a sort field with `-` for descending order.
+Prefix a sort field with `-` for descending order. Unknown or unsafe sort fields return `400`.
 
 ## Filters
 
@@ -184,6 +186,8 @@ The response contains actors, each actor's user and genres, the user's country, 
 GET /movies/1?_embed=actors.user.country
 GET /genres/2?_embed=parents.parents
 ```
+
+Unknown or malformed `_embed` paths return `400`.
 
 Reverse relationships work as well:
 
@@ -273,22 +277,24 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 }
 ```
 
-The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and response relations inferred from `...Id` and `...Ids` fields. It can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
+The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--generate` is passed; normal server startup does not rewrite the file.
+
+During normal startup, request bodies are validated against the inferred resource schemas. Pass `--schema mock/database-schema.json` to apply the same explicit `required`, `formats` and `properties` constraints at runtime. Invalid `POST`, `PUT` and `PATCH` bodies return `400`.
 
 ## Programmatic API
 
 ```js
 import { createServer, generateOpenApi, startServer } from '@kollors/deep-json-server';
 
-const server = await createServer({ databasePath: 'mock/database.json', logger: false });
+const server = await createServer({ databasePath: 'mock/database.json', logger: false, maxPageSize: 1000, schemaPath: 'mock/database-schema.json' });
 
 const response = await server.inject({ method: 'GET', url: '/movies' });
 
 await server.close();
 
-await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001 });
+await startServer({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json' });
 
 await generateOpenApi({ databasePath: 'mock/database.json', host: '127.0.0.1', port: 4001, schemaPath: 'mock/database-schema.json', outputPath: 'mock/openapi-schema.yaml' });
 ```
 
-`createServer()` is useful for tests because it returns a Fastify instance without opening a network port.
+`createServer()` is useful for tests because it returns a Fastify instance without opening a network port. The package includes generated TypeScript declarations for all exported functions.

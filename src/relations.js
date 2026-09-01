@@ -1,17 +1,5 @@
-import { getResourceNames, isEqual, isObject, isSafeKey, singularize, toArray } from './utils.js';
-
-const resolveResource = (database, relation, sourceResource) => {
-  const resourceNames = getResourceNames(database.data);
-  const resource = resourceNames.find((resourceName) => resourceName === relation) ?? resourceNames.find((resourceName) => singularize(resourceName) === relation);
-
-  if (resource != null) {
-    return resource;
-  }
-
-  return ['child', 'children', 'parent', 'parents'].includes(relation) && resourceNames.includes(sourceResource) ? sourceResource : undefined;
-};
-
-const getRelationKeys = (...names) => [...new Set(names.flatMap((name) => [`${name}Id`, `${name}Ids`]))];
+import { getRelationKeys, resolveRelationResource } from './relation-metadata.js';
+import { createHttpError, getResourceNames, isIdEqual, isObject, isSafeKey, singularize, toArray } from './utils.js';
 
 const findLocalRelation = (item, relation, targetResource) => {
   const relationKey = getRelationKeys(relation, singularize(relation), targetResource, singularize(targetResource)).find((key) => Object.hasOwn(item, key));
@@ -38,7 +26,7 @@ const hasReference = (value, relationKeys, id) => {
     }
 
     if (relationKeys.includes(key)) {
-      return toArray(nestedValue).some((nestedId) => isEqual(nestedId, id));
+      return toArray(nestedValue).some((nestedId) => isIdEqual(nestedId, id));
     }
 
     return hasReference(nestedValue, relationKeys, id);
@@ -51,7 +39,7 @@ const getResourceIndex = (database, resource, indexes) => {
 
     database.data[resource].forEach((item) => {
       if (isObject(item) && item.id != null && !index.has(item.id)) {
-        index.set(item.id, item);
+        index.set(String(item.id), item);
       }
     });
 
@@ -71,9 +59,9 @@ const findRelatedValue = (database, item, sourceResource, relation, targetResour
 
   if (localRelation != null) {
     const targetIndex = getResourceIndex(database, targetResource, indexes);
-    const relatedItems = localRelation.ids.map((id) => targetIndex.get(id)).filter((targetItem) => targetItem != null);
+    const relatedItems = localRelation.ids.map((id) => targetIndex.get(String(id))).filter((targetItem) => targetItem != null);
 
-    return localRelation.isMany ? relatedItems : relatedItems[0] ?? null;
+    return localRelation.isMany ? relatedItems : (relatedItems[0] ?? null);
   }
 
   if (item.id == null) {
@@ -95,13 +83,15 @@ const embedPath = (database, item, sourceResource, [relation, ...nestedRelations
   }
 
   const currentValue = item[relation];
-  const targetResource = resolveResource(database, relation, sourceResource);
+  const targetResource = resolveRelationResource(getResourceNames(database.data), relation, sourceResource);
   const nestedSourceResource = targetResource ?? relation;
   const localRelation = targetResource == null ? undefined : findLocalRelation(item, relation, targetResource);
 
   if (localRelation == null) {
     if (Array.isArray(currentValue)) {
-      return nestedRelations.length === 0 ? item : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedPath(database, value, nestedSourceResource, nestedRelations, indexes) : value)) };
+      return nestedRelations.length === 0
+        ? item
+        : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedPath(database, value, nestedSourceResource, nestedRelations, indexes) : value)) };
     }
 
     if (isObject(currentValue)) {
@@ -127,9 +117,57 @@ const embedPath = (database, item, sourceResource, [relation, ...nestedRelations
   };
 };
 
-export const parseEmbedPaths = (embed) => toArray(embed)
-  .flatMap((value) => (typeof value === 'string' ? value.split(',') : []))
-  .map((path) => path.split('.').filter(Boolean))
-  .filter((path) => path.length > 0 && path.every(isSafeKey));
+export const parseEmbedPaths = (embed) => {
+  if (embed == null) {
+    return [];
+  }
+
+  const values = toArray(embed);
+
+  if (values.some((value) => typeof value !== 'string')) {
+    throw createHttpError(400, 'Параметр _embed должен содержать строковые пути связей');
+  }
+
+  return values
+    .flatMap((value) => value.split(','))
+    .map((path) => {
+      const keys = path.split('.');
+
+      if (keys.some((key) => key === '' || !isSafeKey(key))) {
+        throw createHttpError(400, `Недопустимый путь связи «${path}»`);
+      }
+
+      return keys;
+    });
+};
+
+const getNestedSamples = (samples, relation) =>
+  samples.flatMap((sample) => {
+    if (!isObject(sample) || !Object.hasOwn(sample, relation)) {
+      return [];
+    }
+
+    return toArray(sample[relation]).filter(isObject);
+  });
+
+const validateEmbedPath = (database, sourceResource, samples, [relation, ...nestedRelations], path = '') => {
+  const relationPath = path === '' ? relation : `${path}.${relation}`;
+  const targetResource = resolveRelationResource(getResourceNames(database.data), relation, sourceResource);
+  const nestedSamples = targetResource == null ? getNestedSamples(samples, relation) : database.data[targetResource];
+
+  if (targetResource == null && nestedSamples.length === 0) {
+    throw createHttpError(400, `Неизвестный путь связи «${relationPath}»`);
+  }
+
+  if (nestedRelations.length > 0) {
+    validateEmbedPath(database, targetResource ?? relation, nestedSamples, nestedRelations, relationPath);
+  }
+};
+
+export const validateEmbedPaths = (database, resource, items, embedPaths) => {
+  embedPaths.forEach((path) => {
+    validateEmbedPath(database, resource, items, path);
+  });
+};
 
 export const embedItem = (database, item, resource, embedPaths, indexes = new Map()) => embedPaths.reduce((embeddedItem, path) => embedPath(database, embeddedItem, resource, path, indexes), item);

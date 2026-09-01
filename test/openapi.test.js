@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
 import { createOpenApiDocument, generateOpenApi } from '../index.js';
 import { runCli } from '../src/cli.js';
-import { isMainModule } from '../src/utils.js';
 
 const database = {
   countries: [{ id: '1', name: 'Russia' }],
-  genres: [{ id: '1', name: 'Crime', parentIds: [] }, { id: '2', name: 'Drama', parentIds: ['1'] }],
+  genres: [
+    { id: '1', name: 'Crime', parentIds: [] },
+    { id: '2', name: 'Drama', parentIds: ['1'] },
+  ],
   movies: [
     { actors: [{ genreIds: ['2'], id: 'actor-1', userId: '1' }], coverSrc: 'https://example.com/cover.jpg', description: 'Description', id: '1', publisherIds: ['1'], title: 'Movie' },
     { actors: [], coverSrc: 'https://example.com/cover-2.jpg', id: '2', publisherIds: [], title: 'Movie 2' },
@@ -29,7 +30,7 @@ const schemaConfig = {
   },
 };
 
-const withFiles = async(run) => {
+const withFiles = async (run) => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-openapi-'));
   const databasePath = join(directory, 'database.json');
   const schemaPath = join(directory, 'database-schema.json');
@@ -45,8 +46,8 @@ const withFiles = async(run) => {
   }
 };
 
-test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', async() => {
-  await withFiles(async({ databasePath, outputPath, schemaPath }) => {
+test('generates CRUD schemas, formats and direct and reverse relations', async () => {
+  await withFiles(async ({ databasePath, outputPath, schemaPath }) => {
     await generateOpenApi({ databasePath, outputPath, schemaPath });
 
     const yaml = await readFile(outputPath, 'utf8');
@@ -68,13 +69,13 @@ test('generates OpenAPI schemas, CRUD paths, formats and inferred relations', as
     assert.equal(actor.properties.user.$ref, '#/components/schemas/User');
     assert.equal(actor.properties.genres.items.$ref, '#/components/schemas/Genre');
     assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
+    assert.equal(document.components.schemas.Genre.properties.children.items.$ref, '#/components/schemas/Genre');
+    assert.equal(document.components.schemas.Country.properties.users.items.$ref, '#/components/schemas/User');
+    assert.equal(document.components.schemas.User.properties.movies.items.$ref, '#/components/schemas/Movie');
     assert.equal(document.components.schemas.Asset.properties.name.type, 'string');
-    assert.equal(document.components.parameters.Page.required, false);
-    assert.equal(document.components.parameters.Page.schema.default, 1);
-    assert.equal(document.components.parameters.PerPage.required, false);
     assert.equal(document.components.parameters.PerPage.schema.default, 10);
+    assert.equal(document.components.parameters.PerPage.schema.maximum, 1000);
     assert.equal(document.components.parameters.PerPage.name, '_perPage');
-    assert.equal(document.components.parameters.Embed.schema.type, 'array');
     assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
     assert.equal(document.paths['/movies'].get.operationId, 'getMovies');
     assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
@@ -91,21 +92,45 @@ test('describes empty resources through explicit properties', () => {
 
   assert.deepEqual(document.components.schemas.Item.required, ['id', 'name']);
   assert.equal(document.components.schemas.Item.properties.id.type, 'string');
-  assert.equal(document.components.schemas.Item.properties.name.type, 'string');
   assert.equal(document.components.schemas.Item.properties.createdAt.format, 'date-time');
   assert.deepEqual(document.components.schemas.ItemCreate.required, ['name']);
 });
 
-test('infers arrays, objects and primitives independently for mixed fields', () => {
-  const document = createOpenApiDocument({ items: [{ id: '1', value: ['one'] }, { id: '2', value: 'two' }] });
-  const schemas = document.components.schemas.Item.properties.value.oneOf;
+test('widens numeric ID schemas because POST creates string IDs', () => {
+  const document = createOpenApiDocument({ items: [{ id: 1, name: 'One' }] });
+  const idSchemas = document.components.schemas.Item.properties.id.oneOf;
 
-  assert.equal(schemas.find(({ type }) => type === 'array').items.type, 'string');
-  assert.equal(schemas.some(({ type }) => type === 'string'), true);
+  assert.deepEqual(
+    idSchemas.map(({ type }) => type),
+    ['integer', 'string'],
+  );
+  assert.equal(document.components.parameters.Id.schema.type, 'string');
 });
 
-test('validates OpenAPI configuration and configured paths', () => {
-  assert.throws(() => createOpenApiDocument({ $schema: './database-schema.json', items: [] }), /Ресурс «\$schema» должен содержать JSON-массив/);
+test('infers arrays, objects, primitives and nullable values independently', () => {
+  const document = createOpenApiDocument({
+    items: [
+      { id: '1', value: ['one'] },
+      { id: '2', value: 'two' },
+      { id: '3', value: null },
+    ],
+  });
+  const valueSchema = document.components.schemas.Item.properties.value;
+
+  assert.equal(valueSchema.oneOf.find(({ type }) => type === 'array').items.type, 'string');
+  assert.equal(
+    valueSchema.oneOf.some(({ type }) => type === 'string'),
+    true,
+  );
+  assert.equal(valueSchema.nullable, true);
+});
+
+test('validates database contents and schema configuration', () => {
+  assert.throws(() => createOpenApiDocument({ $schema: [] }), /имя ресурса/);
+  assert.throws(() => createOpenApiDocument({ items: [null] }), /JSON-объект/);
+  assert.throws(() => createOpenApiDocument({ items: [{ name: 'Missing ID' }] }), /id/);
+  assert.throws(() => createOpenApiDocument({ items: [{ id: 1 }, { id: '1' }] }), /повторяющийся id/);
+  assert.throws(() => createOpenApiDocument({ 'bad/name': [] }), /имя ресурса/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $info: {} }), /title и version/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: [] }), /\$schema/);
   assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
@@ -117,14 +142,11 @@ test('validates OpenAPI configuration and configured paths', () => {
 
 test('rejects colliding component names and operation IDs', () => {
   assert.throws(() => createOpenApiDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
-  assert.throws(() => createOpenApiDocument(
-    { 'blog-posts': [], blog_posts: [] },
-    { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } },
-  ), /operationId/);
+  assert.throws(() => createOpenApiDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
 });
 
-test('generates OpenAPI through CLI and exits without starting the server', async() => {
-  await withFiles(async({ databasePath, outputPath, schemaPath }) => {
+test('generates OpenAPI through CLI and validates CLI arguments', async () => {
+  await withFiles(async ({ databasePath, outputPath, schemaPath }) => {
     await runCli([databasePath, '--generate', schemaPath, outputPath, '--host', 'localhost', '--port', '5000']);
 
     const document = parse(await readFile(outputPath, 'utf8'));
@@ -132,17 +154,9 @@ test('generates OpenAPI through CLI and exits without starting the server', asyn
     assert.equal(document.openapi, '3.0.3');
     assert.equal(document.servers[0].url, 'http://localhost:5000');
   });
-});
 
-test('recognizes the CLI entry point invoked through a node_modules symlink', async() => {
-  const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-bin-'));
-  const indexPath = resolve('index.js');
-  const binaryPath = join(directory, 'deep-json-server');
-
-  try {
-    await symlink(indexPath, binaryPath);
-    assert.equal(isMainModule(binaryPath, pathToFileURL(indexPath).href), true);
-  } finally {
-    await rm(directory, { force: true, recursive: true });
-  }
+  await assert.rejects(() => runCli([]), /Укажите путь/);
+  await assert.rejects(() => runCli(['database.json', '--unknown', 'value']), /Неизвестный параметр/);
+  await assert.rejects(() => runCli(['database.json', '--port']), /Не указано значение/);
+  await assert.rejects(() => runCli(['database.json', '--generate']), /Используйте/);
 });

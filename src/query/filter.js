@@ -1,4 +1,4 @@
-import { createHttpError, isEqual, isObject, isSafeKey, toArray } from './utils.js';
+import { createHttpError, isEqual, isObject, isSafeKey, toArray } from '../utils.js';
 
 const FIELD_OPERATORS = new Set(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
 const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_perPage', '_sort', '_where']);
@@ -16,36 +16,10 @@ const isFilterEqual = (left, right) => {
   return typeof right === 'number' && typeof left === 'string' && NUMBER_PATTERN.test(left) && right === Number(left);
 };
 
-const compareValues = (left, right) => {
-  if (Object.is(left, right)) {
-    return 0;
-  }
-
-  if (left == null) {
-    return 1;
-  }
-
-  if (right == null) {
-    return -1;
-  }
-
-  if (typeof left === 'number' && typeof right === 'number') {
-    return left - right;
-  }
-
-  return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
-};
-
-const getValueByPath = (value, path) => path.split('.').reduce((currentValue, key) => {
-  return isSafeKey(key) && currentValue != null ? currentValue[key] : undefined;
-}, value);
-
 const matchesOperator = (field, operator, expectedValue) => {
   switch (operator) {
     case 'contains':
-      return typeof field === 'string'
-        ? field.toLowerCase().includes(String(expectedValue).toLowerCase())
-        : Array.isArray(field) && field.some((value) => isFilterEqual(value, expectedValue));
+      return typeof field === 'string' ? field.toLowerCase().includes(String(expectedValue).toLowerCase()) : Array.isArray(field) && field.some((value) => isFilterEqual(value, expectedValue));
     case 'endsWith':
       return typeof field === 'string' && field.toLowerCase().endsWith(String(expectedValue).toLowerCase());
     case 'eq':
@@ -95,10 +69,10 @@ function matchesValue(field, condition) {
     return false;
   }
 
-  return nestedEntries.length === 0 || isObject(field) && matchesWhere(field, Object.fromEntries(nestedEntries));
+  return nestedEntries.length === 0 || (isObject(field) && matchesWhere(field, Object.fromEntries(nestedEntries)));
 }
 
-function matchesWhere(value, where) {
+export function matchesWhere(value, where) {
   if (!isObject(value) || !isObject(where)) {
     return false;
   }
@@ -156,11 +130,7 @@ const parseFilterKey = (key) => {
 
   const legacyOperator = key.match(/^(.*)_([a-zA-Z]+)$/);
 
-  if (legacyOperator?.[1] != null && legacyOperator[2] != null && FIELD_OPERATORS.has(legacyOperator[2])) {
-    return { operator: legacyOperator[2], path: legacyOperator[1] };
-  }
-
-  return { operator: 'eq', path: key };
+  return legacyOperator?.[1] != null && legacyOperator[2] != null && FIELD_OPERATORS.has(legacyOperator[2]) ? { operator: legacyOperator[2], path: legacyOperator[1] } : { operator: 'eq', path: key };
 };
 
 const setWhereOperator = (where, path, operator, value) => {
@@ -202,14 +172,12 @@ export const parseWhere = (query) => {
   const where = {};
 
   Object.entries(query).forEach(([key, rawValue]) => {
-    if (RESERVED_QUERY_KEYS.has(key)) {
-      return;
-    }
+    if (!RESERVED_QUERY_KEYS.has(key)) {
+      const filterKey = parseFilterKey(key);
 
-    const filterKey = parseFilterKey(key);
-
-    if (filterKey != null) {
-      toArray(rawValue).forEach((value) => setWhereOperator(where, filterKey.path, filterKey.operator, value));
+      toArray(rawValue).forEach((value) => {
+        setWhereOperator(where, filterKey.path, filterKey.operator, value);
+      });
     }
   });
 
@@ -223,11 +191,13 @@ const validateCondition = (condition, samples, path) => {
 
   Object.entries(condition).forEach(([key, value]) => {
     if (key === 'and' || key === 'or') {
-      if (!Array.isArray(value) || key === 'or' && value.length === 0 || value.some((nestedWhere) => !isObject(nestedWhere))) {
+      if (!Array.isArray(value) || (key === 'or' && value.length === 0) || value.some((nestedWhere) => !isObject(nestedWhere))) {
         throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
       }
 
-      value.forEach((nestedWhere) => validateWhere(nestedWhere, samples, path));
+      value.forEach((nestedWhere) => {
+        validateWhere(nestedWhere, samples, path);
+      });
       return;
     }
 
@@ -237,9 +207,11 @@ const validateCondition = (condition, samples, path) => {
           throw createHttpError(400, `Оператор «${key}» в фильтре «${path}» можно применить только к массиву`);
         }
 
-        const nestedSamples = samples.flatMap((sample) => Array.isArray(sample) ? sample : []);
-
-        validateCondition(value, nestedSamples, `${path}.${key}`);
+        validateCondition(
+          value,
+          samples.flatMap((sample) => (Array.isArray(sample) ? sample : [])),
+          `${path}.${key}`,
+        );
       } else if (key === 'not') {
         validateCondition(value, samples, `${path}.not`);
       } else if (['endsWith', 'startsWith'].includes(key) && samples.length > 0 && !samples.some((sample) => typeof sample === 'string')) {
@@ -274,11 +246,13 @@ const validateCondition = (condition, samples, path) => {
 export const validateWhere = (where, items, path = '') => {
   Object.entries(where).forEach(([key, condition]) => {
     if (key === 'and' || key === 'or') {
-      if (!Array.isArray(condition) || key === 'or' && condition.length === 0 || condition.some((nestedWhere) => !isObject(nestedWhere))) {
+      if (!Array.isArray(condition) || (key === 'or' && condition.length === 0) || condition.some((nestedWhere) => !isObject(nestedWhere))) {
         throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
       }
 
-      condition.forEach((nestedWhere) => validateWhere(nestedWhere, items, path));
+      condition.forEach((nestedWhere) => {
+        validateWhere(nestedWhere, items, path);
+      });
       return;
     }
 
@@ -306,67 +280,3 @@ export const validateWhere = (where, items, path = '') => {
     validateCondition(condition, samples, fieldPath);
   });
 };
-
-const parsePositiveInteger = (value, name, defaultValue) => {
-  if (value == null) {
-    return defaultValue;
-  }
-
-  if (Array.isArray(value) || !/^[1-9]\d*$/.test(String(value))) {
-    throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
-  }
-
-  const number = Number(value);
-
-  if (!Number.isSafeInteger(number)) {
-    throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
-  }
-
-  return number;
-};
-
-export const parsePagination = (query) => ({
-  page: parsePositiveInteger(query._page, '_page', 1),
-  pageSize: parsePositiveInteger(query._perPage, '_perPage', 10),
-});
-
-export const paginateItems = (items, page, pageSize) => {
-  const safePageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 10;
-  const pages = Math.max(1, Math.ceil(items.length / safePageSize));
-  const safePage = Math.max(1, Math.min(Number.isFinite(page) ? Math.floor(page) : 1, pages));
-  const offset = (safePage - 1) * safePageSize;
-
-  return {
-    data: items.slice(offset, offset + safePageSize),
-    first: 1,
-    items: items.length,
-    last: pages,
-    next: safePage < pages ? safePage + 1 : null,
-    pages,
-    prev: safePage > 1 ? safePage - 1 : null,
-  };
-};
-
-export const sortItems = (items, sort) => {
-  const sortRules = typeof sort === 'string' ? sort.split(',').filter(Boolean) : [];
-
-  if (sortRules.length === 0) {
-    return [...items];
-  }
-
-  return [...items].sort((left, right) => {
-    for (const sortRule of sortRules) {
-      const isDescending = sortRule.startsWith('-');
-      const path = isDescending ? sortRule.slice(1) : sortRule;
-      const comparison = compareValues(getValueByPath(left, path), getValueByPath(right, path));
-
-      if (comparison !== 0) {
-        return isDescending ? -comparison : comparison;
-      }
-    }
-
-    return 0;
-  });
-};
-
-export { matchesWhere };

@@ -1,27 +1,29 @@
 import process from 'node:process';
-import { generateOpenApi } from './openapi.js';
+import { DEFAULT_HOST, DEFAULT_PORT } from './constants.js';
+import { generateOpenApi } from './openapi/index.js';
 import { startServer } from './server.js';
 
-const HELP = `Deep JSON Server
+const HELP_TEXT = `Deep JSON Server
 
 Использование:
-  deep-json-server <database.json> [--host <host>] [--port <port>]
+  deep-json-server <database.json> [--schema <database-schema.json>] [--host <host>] [--port <port>]
   deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]
 
 Параметры:
   --generate  Сгенерировать OpenAPI и завершить работу
   --host, -h  Адрес сервера (по умолчанию 127.0.0.1)
   --port, -p  Порт сервера (по умолчанию 4001)
+  --schema    Проверять запросы записи по указанной схеме
   --help      Показать справку`;
 
-const parseServerOptions = (args) => {
+const parseOptions = (args, allowedOptions) => {
   const options = {};
 
-  for (let index = 1; index < args.length; index += 2) {
+  for (let index = 0; index < args.length; index += 2) {
     const option = args[index];
     const value = args[index + 1];
 
-    if (!['--host', '-h', '--port', '-p'].includes(option)) {
+    if (!allowedOptions.includes(option)) {
       throw new Error(`Неизвестный параметр: ${option}`);
     }
 
@@ -29,7 +31,9 @@ const parseServerOptions = (args) => {
       throw new Error(`Не указано значение параметра ${option}`);
     }
 
-    options[['--host', '-h'].includes(option) ? 'host' : 'port'] = value;
+    const optionName = ['--host', '-h'].includes(option) ? 'host' : ['--port', '-p'].includes(option) ? 'port' : 'schemaPath';
+
+    options[optionName] = value;
   }
 
   return options;
@@ -37,7 +41,7 @@ const parseServerOptions = (args) => {
 
 export async function runCli(args = process.argv.slice(2)) {
   if (args.includes('--help')) {
-    process.stdout.write(`${HELP}\n`);
+    process.stdout.write(`${HELP_TEXT}\n`);
     return;
   }
 
@@ -57,18 +61,18 @@ export async function runCli(args = process.argv.slice(2)) {
       throw new Error('Используйте: deep-json-server <database.json> --generate <database-schema.json> <openapi-schema.yaml> [--host <host>] [--port <port>]');
     }
 
-    const options = parseServerOptions([databasePath, ...args.slice(4)]);
-    const host = options.host ?? process.env.HOST ?? '127.0.0.1';
-    const port = Number(options.port ?? process.env.PORT ?? 4001);
+    const options = parseOptions(args.slice(4), ['--host', '-h', '--port', '-p']);
+    const host = options.host ?? process.env.HOST ?? DEFAULT_HOST;
+    const port = Number(options.port ?? process.env.PORT ?? DEFAULT_PORT);
 
     await generateOpenApi({ databasePath, host, outputPath, port, schemaPath });
     process.stdout.write(`OpenAPI-схема сохранена в ${outputPath}\n`);
     return;
   }
 
-  const options = parseServerOptions(args);
-  const host = options.host ?? process.env.HOST ?? '127.0.0.1';
-  const port = Number(options.port ?? process.env.PORT ?? 4001);
+  const options = parseOptions(args.slice(1), ['--host', '-h', '--port', '-p', '--schema']);
+  const host = options.host ?? process.env.HOST ?? DEFAULT_HOST;
+  const port = Number(options.port ?? process.env.PORT ?? DEFAULT_PORT);
 
-  await startServer({ databasePath, host, port });
+  await startServer({ databasePath, host, port, schemaPath: options.schemaPath });
 }
