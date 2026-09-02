@@ -146,7 +146,7 @@ export default {
 
 ## Пример базы данных
 
-Пример использует полностью вымышленный каталог. `Гангстер` имеет связь с родительским жанром `Криминальная драма`.
+Ниже приведён пример каталога фильмов с тестовыми данными. `Гангстер` связан с родительским жанром `Криминал`.
 
 ```json
 {
@@ -155,7 +155,7 @@ export default {
     { "id": "2", "isArchived": false, "name": "Велория" }
   ],
   "genres": [
-    { "id": "1", "isArchived": false, "name": "Криминальная драма", "parentIds": [] },
+    { "id": "1", "isArchived": false, "name": "Криминал", "parentIds": [] },
     { "id": "2", "isArchived": false, "name": "Гангстер", "parentIds": ["1"] },
     { "id": "3", "isArchived": false, "name": "Драма", "parentIds": [] },
     { "id": "4", "isArchived": false, "name": "Комедия", "parentIds": [] }

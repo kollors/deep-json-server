@@ -146,7 +146,7 @@ CLI modes:
 
 ## Example database
 
-This example uses an entirely fictional catalog. `Gangster` has a relationship with its parent genre, `Crime drama`.
+Below is an example movie catalog with sample data. `Gangster` is linked to its parent genre, `Crime`.
 
 ```json
 {
@@ -155,7 +155,7 @@ This example uses an entirely fictional catalog. `Gangster` has a relationship w
     { "id": "2", "isArchived": false, "name": "Veloria" }
   ],
   "genres": [
-    { "id": "1", "isArchived": false, "name": "Crime drama", "parentIds": [] },
+    { "id": "1", "isArchived": false, "name": "Crime", "parentIds": [] },
     { "id": "2", "isArchived": false, "name": "Gangster", "parentIds": ["1"] },
     { "id": "3", "isArchived": false, "name": "Drama", "parentIds": [] },
     { "id": "4", "isArchived": false, "name": "Comedy", "parentIds": [] }
