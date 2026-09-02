@@ -110,7 +110,7 @@ export default {
     schema: { $info: { title: 'API фильмов', version: '1.0.0' } },
   },
   files: {
-    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+    data: [{ content: new Uint8Array([1, 2, 3]), directory: 'examples', mimeType: 'application/octet-stream', name: 'example.bin' }],
   },
 };
 ```
@@ -352,33 +352,62 @@ GET /countries/1?_embed=users
 deep-json-server --files server.config.js
 ```
 
-Для временных тестов вместо этого используйте `files.data`. Каждая начальная запись содержит `id`, `name`, `mimeType` и бинарное `content` в виде `Uint8Array`; `size` и `url` вычисляются автоматически. Загруженные файлы в таком режиме остаются в памяти до завершения процесса.
+Для временных тестов вместо этого используйте `files.data`. Каждая начальная запись содержит `name`, `mimeType`, бинарное `content` в виде `Uint8Array` и необязательный `directory`. Загруженные файлы в таком режиме остаются в памяти до завершения процесса.
 
-Один файл отправляется непосредственно в теле запроса. Оба заголовка обязательны: `Content-Name` содержит относительное логическое имя, закодированное через `encodeURIComponent`, а `Content-Type` — MIME-тип файла:
+Один файл отправляется непосредственно в теле запроса. `Content-Name` содержит URI-кодированное имя файла, `Content-Type` — его MIME-тип, а необязательный `Content-Directory` — URI-кодированный относительный путь к директории:
 
 ```http
-POST /_files
-Content-Name: posters%2Fshadows-of-ardenia.jpg
+POST /_files/storage
+Content-Name: shadows-of-ardenia.jpg
+Content-Directory: posters
 Content-Type: image/jpeg
 
 <binary body>
 ```
 
-Успешная загрузка возвращает статус `201`, метаданные и постоянный URL:
+Новый файл возвращает статус `201` и вычисленные метаданные:
 
 ```json
 {
-  "id": "generated-id",
+  "directory": "posters",
+  "downloadUrl": "/_files/download/posters/shadows-of-ardenia.jpg",
+  "metadataUrl": "/_files/metadata/posters/shadows-of-ardenia.jpg",
   "mimeType": "image/jpeg",
-  "name": "posters/shadows-of-ardenia.jpg",
+  "name": "shadows-of-ardenia.jpg",
   "size": 182340,
-  "url": "/_files/generated-id"
+  "url": "/_files/storage/posters/shadows-of-ardenia.jpg"
 }
 ```
 
-`GET /_files/:id` возвращает исходные байты со статусом `200`, а `DELETE /_files/:id` удаляет бинарное содержимое вместе с метаданными и возвращает удалённые метаданные со статусом `200`. Возвращаемый `url` задаётся относительно адреса mock-сервера. Сервер автоматически создаёт настроенные директории, хранит бинарное содержимое под сгенерированными ID без привязки к исходному имени и записывает логические имена и остальные метаданные в `files.metadata`. Изначально файл метаданных может отсутствовать: он создаётся при первой загрузке. Не редактируйте его во время работы сервера.
+Сочетание `directory` и `name` идентифицирует файл. Повторная загрузка по существующему пути возвращает `409`. Чтобы заменить файл, передайте `Content-Override: true`; успешная перезапись возвращает `200`. Сервер поддерживает следующие файловые маршруты:
 
-Используется бинарное тело запроса, а не `multipart/form-data`, поэтому `XMLHttpRequest.upload.onprogress` может показывать прогресс при непосредственной отправке `File` через `xhr.send(file)`. Максимальный размер по умолчанию равен 100 МиБ и настраивается через `server.maxFileSize`. Отсутствующий или небезопасный `Content-Name` возвращает `400`, превышение лимита — `413`, а отсутствующий, некорректный или не поддерживаемый Fastify `Content-Type` — `400` либо `415` в зависимости от этапа проверки.
+```text
+POST   /_files/storage      Загрузка или перезапись файла
+GET    /_files/storage/*    Просмотр содержимого файла
+PATCH  /_files/storage/*    Переименование или перемещение файла
+DELETE /_files/storage/*    Удаление файла
+
+GET    /_files/metadata/*   Получение метаданных в JSON
+GET    /_files/download/*   Скачивание файла
+```
+
+Для переименования, перемещения либо обеих операций отправьте JSON-объект. Нужно указать хотя бы одно поле:
+
+```http
+PATCH /_files/storage/posters/shadows-of-ardenia.jpg
+Content-Type: application/json
+
+{
+  "directory": "archive/posters",
+  "name": "ardenia-shadows.jpg"
+}
+```
+
+`PATCH` возвращает обновлённые метаданные со статусом `200`; занятый конечный путь возвращает `409`. `DELETE` отвечает статусом `204` без тела. Если файл не найден, любая операция по пути возвращает `404`. Пути в URL задаются относительно `files.directory`, а все возвращаемые URL — относительно адреса mock-сервера.
+
+При хранении на диске бинарный файл находится по пути `<files.directory>/<directory>/<name>`. Файл метаданных содержит только `directory`, `mimeType` и `name`; `size` считывается у фактического файла, а URL вычисляются. Сервер автоматически создаёт директории. Изначально файл метаданных может отсутствовать: он создаётся при первой загрузке. Не редактируйте сохранённые файлы или метаданные во время работы сервера. Метаданные, созданные версиями до перехода на адресацию по пути, несовместимы с новым форматом.
+
+Используется бинарное тело запроса, а не `multipart/form-data`, поэтому `XMLHttpRequest.upload.onprogress` может показывать прогресс при непосредственной отправке `File` через `xhr.send(file)`. Максимальный размер по умолчанию равен 100 МиБ и настраивается через `server.maxFileSize`. Отсутствующие или небезопасные заголовки и пути возвращают `400`, превышение лимита — `413`, а отсутствующий, некорректный или не поддерживаемый Fastify `Content-Type` — `400` либо `415` в зависимости от этапа проверки.
 
 ## Схема базы данных и генерация OpenAPI
 
@@ -522,7 +551,7 @@ const memoryServer = await createServer({
     schema: { $info: { title: 'API фильмов', version: '1.0.0' } },
   },
   files: {
-    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+    data: [{ content: new Uint8Array([1, 2, 3]), directory: 'examples', mimeType: 'application/octet-stream', name: 'example.bin' }],
   },
 });
 

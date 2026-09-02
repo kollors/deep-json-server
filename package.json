@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "JSON mock server with deep filters and recursive relationship embedding",
   "type": "module",
   "types": "./types/index.d.ts",
@@ -52,11 +52,18 @@
   },
   "keywords": [
     "api",
+    "crud",
     "deep-filter",
+    "file-upload",
     "json",
+    "json-server",
     "mock",
+    "mock-api",
+    "mock-server",
+    "openapi",
     "relations",
-    "rest"
+    "rest",
+    "rest-api"
   ],
   "author": "kollors",
   "license": "MIT",

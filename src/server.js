@@ -14,7 +14,7 @@ import { createHttpError, getResourceNames, isObject } from './utils.js';
 /** @typedef {{ fastify: () => import('fastify').FastifyInstance, openapi: () => Promise<OpenapiDocument> }} ServerFacade */
 
 const CORS_HEADERS = {
-  'Access-Control-Allow-Headers': 'Content-Name, Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Directory, Content-Name, Content-Override, Content-Type',
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
   'Access-Control-Allow-Origin': '*',
 };

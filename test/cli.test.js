@@ -106,13 +106,13 @@ test('generates OpenAPI from config and includes files only with --files', async
     assert.equal(document.openapi, '3.0.3');
     assert.equal(document.components.parameters.PerPage.schema.maximum, 250);
     assert.equal(document.servers[0].url, 'http://localhost:5000');
-    assert.equal(document.paths['/_files'].post.operationId, 'uploadFile');
+    assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
 
     await runCli(['--openapi-only', fixture.configPath]);
 
     const documentWithoutFiles = parse(await readFile(fixture.openapiPath, 'utf8'));
 
-    assert.equal(documentWithoutFiles.paths['/_files'], undefined);
+    assert.equal(documentWithoutFiles.paths['/_files/storage'], undefined);
   } finally {
     await rm(fixture.directoryPath, { force: true, recursive: true });
   }

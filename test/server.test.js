@@ -59,33 +59,65 @@ const withServer = async (run, data = fixture, schemaConfig, serverOptions = {})
   }
 };
 
-test('uploads, downloads and deletes binary files', async () => {
+test('uploads, reads, moves, downloads and deletes binary files', async () => {
   await withServer(
-    async ({ filesMetadataPath, server }) => {
+    async ({ filesDirectoryPath, filesMetadataPath, server }) => {
       const payload = Buffer.from([0, 1, 2, 3, 255]);
       const uploadResponse = await server.inject({
-        headers: { 'content-name': encodeURIComponent('posters/Крёстный отец.jpg'), 'content-type': 'image/jpeg' },
+        headers: { 'content-directory': 'posters', 'content-name': encodeURIComponent('Крёстный отец.jpg'), 'content-type': 'image/jpeg' },
         method: 'POST',
         payload,
-        url: '/_files',
+        url: '/_files/storage',
       });
       const uploadedFile = uploadResponse.json();
+      const contentResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
+      const metadataResponse = await server.inject({ method: 'GET', url: uploadedFile.metadataUrl });
+      const encodedPathMetadataResponse = await server.inject({ method: 'GET', url: `/_files/metadata/${encodeURIComponent('posters/Крёстный отец.jpg')}` });
       const downloadResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
       const storedMetadata = JSON.parse(await readFile(filesMetadataPath, 'utf8'));
-      const deleteResponse = await server.inject({ method: 'DELETE', url: uploadedFile.url });
-      const missingResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
+      const storedContent = await readFile(join(filesDirectoryPath, 'posters', 'Крёстный отец.jpg'));
+      const attachmentResponse = await server.inject({ method: 'GET', url: uploadedFile.downloadUrl });
+      const updateResponse = await server.inject({
+        headers: { 'content-type': 'application/json' },
+        method: 'PATCH',
+        payload: { directory: 'archive', name: 'godfather.jpg' },
+        url: uploadedFile.url,
+      });
+      const updatedFile = updateResponse.json();
+      const oldLocationResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
+      const updatedContentResponse = await server.inject({ method: 'GET', url: updatedFile.url });
+      const deleteResponse = await server.inject({ method: 'DELETE', url: updatedFile.url });
+      const missingResponse = await server.inject({ method: 'GET', url: updatedFile.url });
 
       assert.equal(uploadResponse.statusCode, 201);
-      assert.equal(uploadedFile.name, 'posters/Крёстный отец.jpg');
-      assert.equal(uploadedFile.mimeType, 'image/jpeg');
-      assert.equal(uploadedFile.size, payload.length);
-      assert.match(uploadedFile.url, /^\/_files\/[\w-]+$/);
+      assert.deepEqual(uploadedFile, {
+        directory: 'posters',
+        downloadUrl: `/_files/download/posters/${encodeURIComponent('Крёстный отец.jpg')}`,
+        metadataUrl: `/_files/metadata/posters/${encodeURIComponent('Крёстный отец.jpg')}`,
+        mimeType: 'image/jpeg',
+        name: 'Крёстный отец.jpg',
+        size: payload.length,
+        url: `/_files/storage/posters/${encodeURIComponent('Крёстный отец.jpg')}`,
+      });
+      assert.equal(contentResponse.statusCode, 200);
+      assert.equal(contentResponse.headers['content-type'], 'image/jpeg');
+      assert.match(contentResponse.headers['content-disposition'], /^inline; filename\*=UTF-8''/);
+      assert.deepEqual(contentResponse.rawPayload, payload);
+      assert.deepEqual(metadataResponse.json(), uploadedFile);
+      assert.deepEqual(encodedPathMetadataResponse.json(), uploadedFile);
       assert.equal(downloadResponse.statusCode, 200);
-      assert.equal(downloadResponse.headers['content-type'], 'image/jpeg');
-      assert.match(downloadResponse.headers['content-disposition'], /^inline; filename\*=UTF-8''/);
       assert.deepEqual(downloadResponse.rawPayload, payload);
-      assert.deepEqual(storedMetadata, [uploadedFile]);
-      assert.deepEqual(deleteResponse.json(), uploadedFile);
+      assert.match(attachmentResponse.headers['content-disposition'], /^attachment; filename\*=UTF-8''/);
+      assert.deepEqual(attachmentResponse.rawPayload, payload);
+      assert.deepEqual(storedMetadata, [{ directory: 'posters', mimeType: 'image/jpeg', name: 'Крёстный отец.jpg' }]);
+      assert.deepEqual(storedContent, payload);
+      assert.equal(updateResponse.statusCode, 200);
+      assert.equal(updatedFile.directory, 'archive');
+      assert.equal(updatedFile.name, 'godfather.jpg');
+      assert.equal(oldLocationResponse.statusCode, 404);
+      assert.deepEqual(updatedContentResponse.rawPayload, payload);
+      assert.equal(deleteResponse.statusCode, 204);
+      assert.equal(deleteResponse.body, '');
       assert.equal(missingResponse.statusCode, 404);
     },
     { items: [{ id: '1', name: 'One' }] },
@@ -94,15 +126,20 @@ test('uploads, downloads and deletes binary files', async () => {
   );
 });
 
-test('accepts every file MIME type without changing JSON resource parsing', async () => {
+test('rejects duplicate file paths and overwrites them only when requested', async () => {
   await withServer(
     async ({ server }) => {
       const filePayload = Buffer.from('{"value":true}');
-      const uploadResponse = await server.inject({ headers: { 'content-name': 'data.json', 'content-type': 'application/json' }, method: 'POST', payload: filePayload, url: '/_files' });
+      const headers = { 'content-name': 'data.json', 'content-type': 'application/json' };
+      const uploadResponse = await server.inject({ headers, method: 'POST', payload: filePayload, url: '/_files/storage' });
+      const duplicateResponse = await server.inject({ headers, method: 'POST', payload: 'duplicate', url: '/_files/storage' });
+      const overwriteResponse = await server.inject({ headers: { ...headers, 'content-override': 'true' }, method: 'POST', payload: 'updated', url: '/_files/storage' });
       const createResponse = await server.inject({ method: 'POST', payload: { name: 'Two' }, url: '/items' });
 
       assert.equal(uploadResponse.statusCode, 201);
-      assert.equal((await server.inject({ method: 'GET', url: uploadResponse.json().url })).rawPayload.toString(), filePayload.toString());
+      assert.equal(duplicateResponse.statusCode, 409);
+      assert.equal(overwriteResponse.statusCode, 200);
+      assert.equal((await server.inject({ method: 'GET', url: overwriteResponse.json().url })).rawPayload.toString(), 'updated');
       assert.equal(createResponse.statusCode, 201);
       assert.equal(createResponse.json().name, 'Two');
     },
@@ -112,10 +149,51 @@ test('accepts every file MIME type without changing JSON resource parsing', asyn
   );
 });
 
+test('reads file size from disk and validates move destinations', async () => {
+  await withServer(
+    async ({ filesDirectoryPath, filesMetadataPath, server }) => {
+      const upload = (name, payload) =>
+        server.inject({ headers: { 'content-directory': 'files', 'content-name': name, 'content-type': 'text/plain' }, method: 'POST', payload, url: '/_files/storage' });
+      const firstFile = (await upload('first.txt', 'first')).json();
+
+      await upload('second.txt', 'second');
+      await writeFile(join(filesDirectoryPath, 'files', 'first.txt'), 'externally changed');
+
+      const metadataResponse = await server.inject({ method: 'GET', url: firstFile.metadataUrl });
+      const conflictResponse = await server.inject({
+        headers: { 'content-type': 'application/json' },
+        method: 'PATCH',
+        payload: { name: 'second.txt' },
+        url: firstFile.url,
+      });
+      const invalidResponses = await Promise.all([
+        server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: {}, url: firstFile.url }),
+        server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: { unknown: true }, url: firstFile.url }),
+        server.inject({ headers: { 'content-type': 'text/plain' }, method: 'PATCH', payload: '{}', url: firstFile.url }),
+      ]);
+      const storedMetadata = JSON.parse(await readFile(filesMetadataPath, 'utf8'));
+
+      assert.equal(metadataResponse.json().size, Buffer.byteLength('externally changed'));
+      assert.equal(conflictResponse.statusCode, 409);
+      assert.deepEqual(
+        invalidResponses.map(({ statusCode }) => statusCode),
+        [400, 400, 415],
+      );
+      assert.equal(
+        storedMetadata.every((file) => !Object.hasOwn(file, 'size')),
+        true,
+      );
+    },
+    { items: [] },
+    undefined,
+    { files: true },
+  );
+});
+
 test('validates file headers, size and optional feature state', async () => {
   await withServer(
     async ({ server }) => {
-      assert.equal((await server.inject({ headers: { 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'file', url: '/_files' })).statusCode, 404);
+      assert.equal((await server.inject({ headers: { 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'file', url: '/_files/storage' })).statusCode, 404);
     },
     { items: [] },
   );
@@ -125,19 +203,31 @@ test('validates file headers, size and optional feature state', async () => {
       const requests = [
         { expectedStatus: 400, headers: { 'content-type': 'application/octet-stream' }, payload: 'file' },
         { expectedStatus: 400, headers: { 'content-name': '../file.txt', 'content-type': 'text/plain' }, payload: 'file' },
+        { expectedStatus: 400, headers: { 'content-directory': '../files', 'content-name': 'file.txt', 'content-type': 'text/plain' }, payload: 'file' },
+        { expectedStatus: 400, headers: { 'content-name': 'file.txt', 'content-override': 'yes', 'content-type': 'text/plain' }, payload: 'file' },
         { expectedStatus: 400, headers: { 'content-name': '%E0%A4%A', 'content-type': 'text/plain' }, payload: 'file' },
         { expectedStatus: 415, headers: { 'content-name': 'file.txt', 'content-type': 'invalid' }, payload: 'file' },
       ];
 
       for (const { expectedStatus, ...request } of requests) {
-        const response = await server.inject({ ...request, method: 'POST', url: '/_files' });
+        const response = await server.inject({ ...request, method: 'POST', url: '/_files/storage' });
 
         assert.equal(response.statusCode, expectedStatus);
       }
 
-      const largeResponse = await server.inject({ headers: { 'content-name': 'large.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: '12345', url: '/_files' });
+      const largeResponse = await server.inject({ headers: { 'content-name': 'large.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: '12345', url: '/_files/storage' });
+      const originalResponse = await server.inject({ headers: { 'content-name': 'safe.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: '1234', url: '/_files/storage' });
+      const failedOverrideResponse = await server.inject({
+        headers: { 'content-name': 'safe.bin', 'content-override': 'true', 'content-type': 'application/octet-stream' },
+        method: 'POST',
+        payload: '12345',
+        url: '/_files/storage',
+      });
 
       assert.equal(largeResponse.statusCode, 413);
+      assert.equal(originalResponse.statusCode, 201);
+      assert.equal(failedOverrideResponse.statusCode, 413);
+      assert.equal((await server.inject({ method: 'GET', url: originalResponse.json().url })).rawPayload.toString(), '1234');
     },
     { items: [] },
     undefined,
@@ -293,6 +383,8 @@ test('supports root discovery, CORS, sorting and persistent CRUD', async () => {
     assert.equal(optionsResponse.statusCode, 204);
     assert.equal(optionsResponse.headers['access-control-allow-origin'], '*');
     assert.match(optionsResponse.headers['access-control-allow-headers'], /Content-Name/);
+    assert.match(optionsResponse.headers['access-control-allow-headers'], /Content-Directory/);
+    assert.match(optionsResponse.headers['access-control-allow-headers'], /Content-Override/);
     assert.equal(listResponse.json().data[0].id, '2');
     assert.equal(createResponse.statusCode, 201);
     assert.equal(patchResponse.json().name, 'Universal');
@@ -379,7 +471,7 @@ test('supports in-memory database, schema and files without mutating config', as
       data: database,
       schema: { $info: { title: 'Memory API', version: '1.0.0' }, $schema: { items: { required: ['name'] } } },
     },
-    files: { data: [{ content, id: 'file-1', mimeType: 'application/octet-stream', name: 'initial.bin' }] },
+    files: { data: [{ content, directory: 'initial', mimeType: 'application/octet-stream', name: 'file.bin' }] },
     server: { logger: false },
   };
   const serverFacade = await createServer(config);
@@ -388,10 +480,10 @@ test('supports in-memory database, schema and files without mutating config', as
   try {
     assert.equal(serverFacade.fastify(), server);
     assert.deepEqual((await server.inject({ method: 'GET', url: '/items/1' })).json(), database.items[0]);
-    assert.deepEqual((await server.inject({ method: 'GET', url: '/_files/file-1' })).rawPayload, Buffer.from(content));
+    assert.deepEqual((await server.inject({ method: 'GET', url: '/_files/storage/initial/file.bin' })).rawPayload, Buffer.from(content));
 
     const patchResponse = await server.inject({ method: 'PATCH', payload: { name: 'Changed' }, url: '/items/1' });
-    const uploadResponse = await server.inject({ headers: { 'content-name': 'new.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'new', url: '/_files' });
+    const uploadResponse = await server.inject({ headers: { 'content-name': 'new.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'new', url: '/_files/storage' });
 
     assert.equal(patchResponse.json().name, 'Changed');
     assert.equal(uploadResponse.statusCode, 201);
@@ -416,10 +508,7 @@ test('rejects missing files, unsafe resources and malformed or ambiguous records
 
     await assert.rejects(() => createServer({ database: { data: { items: [] }, path: databasePath } }), /ровно один/);
     await assert.rejects(() => createServer({ database: { data: { items: [] } }, files: { data: [], directory: 'files', metadata: 'files.json' } }), /либо config\.files\.data/);
-    await assert.rejects(
-      () => createServer({ database: { data: { items: [] } }, files: { data: [{ content: 'invalid', id: '1', mimeType: 'text/plain', name: 'file.txt' }] } }),
-      /config\.files\.data/,
-    );
+    await assert.rejects(() => createServer({ database: { data: { items: [] } }, files: { data: [{ content: 'invalid', mimeType: 'text/plain', name: 'file.txt' }] } }), /config\.files\.data/);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
@@ -444,7 +533,7 @@ test('starts on an ephemeral port and validates server options', async () => {
     await server.listen();
     const address = server.server.address();
     const filePayload = Buffer.from([0, 1, 2, 255]);
-    const uploadResponse = await fetch(`http://127.0.0.1:${address.port}/_files`, {
+    const uploadResponse = await fetch(`http://127.0.0.1:${address.port}/_files/storage`, {
       body: filePayload,
       headers: { 'Content-Name': 'network.bin', 'Content-Type': 'application/octet-stream' },
       method: 'POST',

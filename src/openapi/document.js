@@ -85,8 +85,11 @@ const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => 
 };
 
 const createParameters = (maxPageSize) => ({
-  ContentName: { description: 'URI-encoded relative file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
+  ContentDirectory: { description: 'URI-encoded relative storage directory', in: 'header', name: 'Content-Directory', schema: { type: 'string' } },
+  ContentName: { description: 'URI-encoded file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
+  ContentOverride: { description: 'Overwrite an existing file at the same path', in: 'header', name: 'Content-Override', schema: { default: false, type: 'boolean' } },
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
+  FilePath: { allowReserved: true, description: 'URI-encoded file path relative to the storage directory', in: 'path', name: 'path', required: true, schema: { type: 'string' } },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
   PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: maxPageSize, minimum: 1, type: 'integer' } },
@@ -100,33 +103,78 @@ const createParameterReference = (name) => ({ $ref: `#/components/parameters/${n
 const createRequestBody = (name) => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
 
 const createFilePaths = () => ({
-  '/_files': {
+  '/_files/download/{path}': {
+    get: {
+      operationId: 'downloadFile',
+      parameters: [createParameterReference('FilePath')],
+      responses: {
+        200: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, description: 'File download' },
+        400: createResponse('Invalid path', createSchemaReference('Error')),
+        404: createResponse('Not found', createSchemaReference('Error')),
+      },
+      tags: ['files'],
+    },
+  },
+  '/_files/metadata/{path}': {
+    get: {
+      operationId: 'getFileMetadata',
+      parameters: [createParameterReference('FilePath')],
+      responses: {
+        200: createResponse('File metadata', createSchemaReference('FileMetadata')),
+        400: createResponse('Invalid path', createSchemaReference('Error')),
+        404: createResponse('Not found', createSchemaReference('Error')),
+      },
+      tags: ['files'],
+    },
+  },
+  '/_files/storage': {
     post: {
       operationId: 'uploadFile',
-      parameters: [createParameterReference('ContentName')],
+      parameters: ['ContentName', 'ContentDirectory', 'ContentOverride'].map(createParameterReference),
       requestBody: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, required: true },
       responses: {
-        201: createResponse('Uploaded', createSchemaReference('UploadedFile')),
+        200: createResponse('Overwritten', createSchemaReference('FileMetadata')),
+        201: createResponse('Created', createSchemaReference('FileMetadata')),
         400: createResponse('Invalid request', createSchemaReference('Error')),
+        409: createResponse('Already exists', createSchemaReference('Error')),
         413: createResponse('File is too large', createSchemaReference('Error')),
         415: createResponse('Unsupported media type', createSchemaReference('Error')),
       },
       tags: ['files'],
     },
   },
-  '/_files/{id}': {
+  '/_files/storage/{path}': {
     delete: {
-      operationId: 'deleteFileById',
-      parameters: [createParameterReference('Id')],
-      responses: { 200: createResponse('Deleted', createSchemaReference('UploadedFile')), 404: createResponse('Not found', createSchemaReference('Error')) },
+      operationId: 'deleteFile',
+      parameters: [createParameterReference('FilePath')],
+      responses: {
+        204: { description: 'Deleted' },
+        400: createResponse('Invalid path', createSchemaReference('Error')),
+        404: createResponse('Not found', createSchemaReference('Error')),
+      },
       tags: ['files'],
     },
     get: {
-      operationId: 'getFileById',
-      parameters: [createParameterReference('Id')],
+      operationId: 'getFileContent',
+      parameters: [createParameterReference('FilePath')],
       responses: {
         200: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, description: 'File contents' },
+        400: createResponse('Invalid path', createSchemaReference('Error')),
         404: createResponse('Not found', createSchemaReference('Error')),
+      },
+      tags: ['files'],
+    },
+    patch: {
+      operationId: 'updateFile',
+      parameters: [createParameterReference('FilePath')],
+      requestBody: createRequestBody('FileUpdate'),
+      responses: {
+        200: createResponse('Updated', createSchemaReference('FileMetadata')),
+        400: createResponse('Invalid request', createSchemaReference('Error')),
+        404: createResponse('Not found', createSchemaReference('Error')),
+        409: createResponse('Already exists', createSchemaReference('Error')),
+        413: createResponse('Request is too large', createSchemaReference('Error')),
+        415: createResponse('Unsupported media type', createSchemaReference('Error')),
       },
       tags: ['files'],
     },
@@ -208,7 +256,15 @@ const createResourcePaths = (resource, componentName) => {
 };
 
 const validateGeneratedNames = (resources, componentNames, files) => {
-  const schemaOwners = new Map([['Error', 'встроенная схема ошибки'], ...(files ? [['UploadedFile', 'встроенная схема файла']] : [])]);
+  const schemaOwners = new Map([
+    ['Error', 'встроенная схема ошибки'],
+    ...(files
+      ? [
+          ['FileMetadata', 'встроенная схема метаданных файла'],
+          ['FileUpdate', 'встроенная схема изменения файла'],
+        ]
+      : []),
+  ]);
   const operationOwners = new Map();
 
   resources.forEach((resource) => {
@@ -287,9 +343,23 @@ export function buildOpenapiDocument(options) {
   const schemas = {
     Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' },
     ...(files && {
-      UploadedFile: {
-        properties: { id: { type: 'string' }, mimeType: { type: 'string' }, name: { type: 'string' }, size: { minimum: 0, type: 'integer' }, url: { type: 'string' } },
-        required: ['id', 'mimeType', 'name', 'size', 'url'],
+      FileMetadata: {
+        properties: {
+          directory: { type: 'string' },
+          downloadUrl: { type: 'string' },
+          metadataUrl: { type: 'string' },
+          mimeType: { type: 'string' },
+          name: { type: 'string' },
+          size: { minimum: 0, type: 'integer' },
+          url: { type: 'string' },
+        },
+        required: ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url'],
+        type: 'object',
+      },
+      FileUpdate: {
+        additionalProperties: false,
+        anyOf: [{ required: ['directory'] }, { required: ['name'] }],
+        properties: { directory: { type: 'string' }, name: { type: 'string' } },
         type: 'object',
       },
     }),

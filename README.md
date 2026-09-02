@@ -110,7 +110,7 @@ export default {
     schema: { $info: { title: 'Movie API', version: '1.0.0' } },
   },
   files: {
-    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+    data: [{ content: new Uint8Array([1, 2, 3]), directory: 'examples', mimeType: 'application/octet-stream', name: 'example.bin' }],
   },
 };
 ```
@@ -352,33 +352,62 @@ Add `files.directory` and `files.metadata` to the server config, then pass `--fi
 deep-json-server --files server.config.js
 ```
 
-For temporary tests, use `files.data` instead. Each initial record contains `id`, `name`, `mimeType`, and binary `content` as a `Uint8Array`; `size` and `url` are derived automatically. Uploaded files then remain in memory until the process exits.
+For temporary tests, use `files.data` instead. Each initial record contains `name`, `mimeType`, binary `content` as a `Uint8Array`, and an optional `directory`. Uploaded files then remain in memory until the process exits.
 
-Upload one file as the request body. Both headers are required: `Content-Name` contains the relative logical name encoded with `encodeURIComponent`, and `Content-Type` contains the file MIME type:
+Upload one file directly as the request body. `Content-Name` contains the URI-encoded file name, `Content-Type` contains its MIME type, and the optional `Content-Directory` contains the URI-encoded relative directory:
 
 ```http
-POST /_files
-Content-Name: posters%2Fshadows-of-ardenia.jpg
+POST /_files/storage
+Content-Name: shadows-of-ardenia.jpg
+Content-Directory: posters
 Content-Type: image/jpeg
 
 <binary body>
 ```
 
-A successful upload returns status `201`, metadata, and a stable URL:
+A new file returns status `201` and its computed metadata:
 
 ```json
 {
-  "id": "generated-id",
+  "directory": "posters",
+  "downloadUrl": "/_files/download/posters/shadows-of-ardenia.jpg",
+  "metadataUrl": "/_files/metadata/posters/shadows-of-ardenia.jpg",
   "mimeType": "image/jpeg",
-  "name": "posters/shadows-of-ardenia.jpg",
+  "name": "shadows-of-ardenia.jpg",
   "size": 182340,
-  "url": "/_files/generated-id"
+  "url": "/_files/storage/posters/shadows-of-ardenia.jpg"
 }
 ```
 
-`GET /_files/:id` returns the original bytes with status `200`. `DELETE /_files/:id` removes both the binary contents and metadata, and returns the deleted metadata with status `200`. The returned `url` is relative to the mock-server origin. The server creates the configured directories automatically, stores binary contents under generated IDs without relying on the original file name, and keeps the logical names and other metadata in `files.metadata`. The metadata file may be absent initially and is created on the first upload. Do not edit it while the server is running.
+The combination of `directory` and `name` identifies a file. Uploading to an existing path returns `409`. Pass `Content-Override: true` to replace it; a successful replacement returns `200`. The server supports these file routes:
 
-The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. A missing or unsafe `Content-Name` returns `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
+```text
+POST   /_files/storage      Upload or replace a file
+GET    /_files/storage/*    Return file contents inline
+PATCH  /_files/storage/*    Rename or move a file
+DELETE /_files/storage/*    Delete a file
+
+GET    /_files/metadata/*   Return file metadata as JSON
+GET    /_files/download/*   Download a file as an attachment
+```
+
+Rename, move, or perform both operations with a JSON body. At least one field is required:
+
+```http
+PATCH /_files/storage/posters/shadows-of-ardenia.jpg
+Content-Type: application/json
+
+{
+  "directory": "archive/posters",
+  "name": "ardenia-shadows.jpg"
+}
+```
+
+`PATCH` returns the updated metadata with status `200`; a conflicting destination returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the mock-server origin.
+
+In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically. The metadata file may be absent initially and is created on the first upload. Do not edit stored files or metadata while the server is running. Metadata created by versions before this path-based API is not compatible with the new format.
+
+The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
 ## Database schema and OpenAPI generation
 
@@ -522,7 +551,7 @@ const memoryServer = await createServer({
     schema: { $info: { title: 'Movie API', version: '1.0.0' } },
   },
   files: {
-    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+    data: [{ content: new Uint8Array([1, 2, 3]), directory: 'examples', mimeType: 'application/octet-stream', name: 'example.bin' }],
   },
 });
 

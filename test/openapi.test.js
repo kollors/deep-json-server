@@ -95,11 +95,19 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
     assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
     assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
-    assert.equal(document.paths['/_files'].post.operationId, 'uploadFile');
-    assert.equal(document.paths['/_files'].post.requestBody.content['application/octet-stream'].schema.format, 'binary');
-    assert.equal(document.paths['/_files/{id}'].get.responses[200].content['application/octet-stream'].schema.format, 'binary');
-    assert.deepEqual(document.components.schemas.UploadedFile.required, ['id', 'mimeType', 'name', 'size', 'url']);
+    assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
+    assert.equal(document.paths['/_files/storage'].post.requestBody.content['application/octet-stream'].schema.format, 'binary');
+    assert.equal(document.paths['/_files/storage/{path}'].get.operationId, 'getFileContent');
+    assert.equal(document.paths['/_files/storage/{path}'].get.responses[200].content['application/octet-stream'].schema.format, 'binary');
+    assert.equal(document.paths['/_files/storage/{path}'].patch.operationId, 'updateFile');
+    assert.equal(document.paths['/_files/storage/{path}'].delete.responses[204].description, 'Deleted');
+    assert.equal(document.paths['/_files/metadata/{path}'].get.operationId, 'getFileMetadata');
+    assert.equal(document.paths['/_files/download/{path}'].get.operationId, 'downloadFile');
+    assert.deepEqual(document.components.schemas.FileMetadata.required, ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url']);
+    assert.deepEqual(document.components.schemas.FileUpdate.anyOf, [{ required: ['directory'] }, { required: ['name'] }]);
+    assert.equal(document.components.parameters.ContentDirectory.name, 'Content-Directory');
     assert.equal(document.components.parameters.ContentName.name, 'Content-Name');
+    assert.equal(document.components.parameters.ContentOverride.name, 'Content-Override');
   });
 });
 
@@ -173,7 +181,7 @@ test('validates database contents and schema configuration', () => {
 test('rejects colliding component names and operation IDs', () => {
   assert.throws(() => createDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
   assert.throws(() => createDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
-  assert.throws(() => createDocument({ files: [] }, { $schema: { files: { name: 'UploadedFile' } } }, { files: true }), /имя OpenAPI-схемы/i);
+  assert.throws(() => createDocument({ files: [] }, { $schema: { files: { name: 'FileMetadata' } } }, { files: true }), /имя OpenAPI-схемы/i);
 });
 
 test('keeps runtime server address outside an in-memory document', () => {

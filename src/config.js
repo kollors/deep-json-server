@@ -12,7 +12,7 @@ let configImportIndex = 0;
 /** @typedef {Record<string, Array<Record<string, unknown>>>} DatabaseData */
 /** @typedef {Record<string, unknown>} DatabaseSchema */
 /** @typedef {{ data: DatabaseData, path?: never, schema?: DatabaseSchema | string } | { data?: never, path: string, schema?: DatabaseSchema | string }} DatabaseConfig */
-/** @typedef {{ content: Uint8Array, id: string, mimeType: string, name: string }} MemoryFile */
+/** @typedef {{ content: Uint8Array, directory?: string, mimeType: string, name: string }} MemoryFile */
 /** @typedef {{ data: MemoryFile[], directory?: never, metadata?: never } | { data?: never, directory: string, metadata: string }} FilesConfig */
 /** @typedef {{ path?: string }} OpenapiConfig */
 /** @typedef {{ host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number }} ServerConfig */
