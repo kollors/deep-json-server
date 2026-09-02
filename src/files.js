@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Transform } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createHttpError, isObject } from './utils.js';
 
@@ -123,7 +123,7 @@ const createSizeLimiter = (maxFileSize, onSize) => {
   });
 };
 
-const createFileStore = async ({ directoryPath: sourceDirectoryPath, metadataPath: sourceMetadataPath }) => {
+const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: sourceMetadataPath }) => {
   if (typeof sourceDirectoryPath !== 'string' || sourceDirectoryPath.trim() === '') {
     throw new Error('Путь к директории файлов не должен быть пустым');
   }
@@ -168,7 +168,7 @@ const createFileStore = async ({ directoryPath: sourceDirectoryPath, metadataPat
         throw error;
       }
 
-      return { file, path };
+      return { file, stream: createReadStream(path) };
     });
 
   const upload = ({ maxFileSize, mimeType, name, stream }) =>
@@ -237,11 +237,101 @@ const createFileStore = async ({ directoryPath: sourceDirectoryPath, metadataPat
   return { get, remove, upload };
 };
 
+const createMemoryFileStore = (sourceFiles) => {
+  const ids = new Set();
+  const storedFiles = sourceFiles.map((sourceFile, index) => {
+    if (
+      !isObject(sourceFile) ||
+      typeof sourceFile.id !== 'string' ||
+      sourceFile.id === '' ||
+      typeof sourceFile.mimeType !== 'string' ||
+      sourceFile.mimeType === '' ||
+      typeof sourceFile.name !== 'string' ||
+      sourceFile.name === '' ||
+      !(sourceFile.content instanceof Uint8Array)
+    ) {
+      throw new Error(`Некорректная запись ${index} в config.files.data`);
+    }
+
+    if (ids.has(sourceFile.id)) {
+      throw new Error(`config.files.data содержит повторяющийся id «${sourceFile.id}»`);
+    }
+
+    ids.add(sourceFile.id);
+
+    const content = Buffer.from(sourceFile.content);
+
+    return {
+      content,
+      file: { id: sourceFile.id, mimeType: sourceFile.mimeType, name: sourceFile.name, size: content.length, url: `/_files/${sourceFile.id}` },
+    };
+  });
+  let operationQueue = Promise.resolve();
+
+  const schedule = (operation) => {
+    const pendingOperation = operationQueue.then(operation);
+
+    operationQueue = pendingOperation.catch(() => undefined);
+
+    return pendingOperation;
+  };
+
+  const get = (id) =>
+    schedule(async () => {
+      const storedFile = storedFiles.find(({ file }) => file.id === id);
+
+      if (storedFile == null) {
+        throw createHttpError(404, 'Файл не найден');
+      }
+
+      return { file: storedFile.file, stream: Readable.from([storedFile.content]) };
+    });
+
+  const upload = ({ maxFileSize, mimeType, name, stream }) =>
+    schedule(async () => {
+      const chunks = [];
+      let size = 0;
+
+      for await (const chunk of stream) {
+        const buffer = Buffer.from(chunk);
+
+        size += buffer.length;
+
+        if (size > maxFileSize) {
+          throw createHttpError(413, `Размер файла не должен превышать ${maxFileSize} байт`);
+        }
+
+        chunks.push(buffer);
+      }
+
+      const id = createFileId(storedFiles.map(({ file }) => file));
+      const file = { id, mimeType, name, size, url: `/_files/${id}` };
+
+      storedFiles.push({ content: Buffer.concat(chunks), file });
+
+      return file;
+    });
+
+  const remove = (id) =>
+    schedule(async () => {
+      const index = storedFiles.findIndex(({ file }) => file.id === id);
+
+      if (index === -1) {
+        throw createHttpError(404, 'Файл не найден');
+      }
+
+      return storedFiles.splice(index, 1)[0].file;
+    });
+
+  return { get, remove, upload };
+};
+
+/** @param {import('./config.js').FilesConfig} config File storage configuration. */
+export const createFileStore = async (config) => ('data' in config ? createMemoryFileStore(config.data) : createDiskFileStore(config));
+
 const getDownloadName = (name) => encodeURIComponent(basename(name)).replaceAll("'", '%27');
 
-export const registerFileRoutes = async (server, { directoryPath, maxFileSize, metadataPath }) => {
-  const store = await createFileStore({ directoryPath, metadataPath });
-
+export const registerFileRoutes = (server, { maxFileSize, store }) => {
   server.register((fileServer, _options, done) => {
     fileServer.removeAllContentTypeParsers();
     fileServer.addContentTypeParser('*', (_request, payload, parserDone) => parserDone(null, payload));
@@ -264,12 +354,12 @@ export const registerFileRoutes = async (server, { directoryPath, maxFileSize, m
     });
 
     fileServer.get('/_files/:id', async (request, reply) => {
-      const { file, path } = await store.get(request.params.id);
+      const { file, stream } = await store.get(request.params.id);
 
       reply.header('Content-Disposition', `inline; filename*=UTF-8''${getDownloadName(file.name)}`);
       reply.type(file.mimeType);
 
-      return reply.send(createReadStream(path));
+      return reply.send(stream);
     });
 
     fileServer.delete('/_files/:id', async (request) => store.remove(request.params.id));

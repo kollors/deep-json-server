@@ -1,25 +1,9 @@
-import { DEFAULT_HOST, DEFAULT_PAGE_SIZE, DEFAULT_PORT, MAX_PAGE_SIZE } from '../constants.js';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
 import { validateDatabase } from '../database.js';
 import { getRelationMetadata } from '../relation-metadata.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
 import { applyConfiguredFields, validateSchemaConfig } from './config.js';
 import { ensureGeneratedIdSchema, inferObjectSchema, mergeSchemaOverrides, omitId } from './inference.js';
-
-const getServerUrl = (host, port) => {
-  const serverPort = Number(port);
-
-  if (typeof host !== 'string' || host === '') {
-    throw new Error('Адрес сервера не должен быть пустым');
-  }
-
-  if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65_535) {
-    throw new Error('Порт должен быть целым числом от 1 до 65535');
-  }
-
-  const serverHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-
-  return `http://${serverHost}:${serverPort}`;
-};
 
 const createSchemaReference = (name) => ({ $ref: `#/components/schemas/${name}` });
 
@@ -100,12 +84,12 @@ const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => 
   });
 };
 
-const createParameters = () => ({
+const createParameters = (maxPageSize) => ({
   ContentName: { description: 'URI-encoded relative file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
-  PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: MAX_PAGE_SIZE, minimum: 1, type: 'integer' } },
+  PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: maxPageSize, minimum: 1, type: 'integer' } },
   Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
   Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
 });
@@ -250,14 +234,22 @@ const validateGeneratedNames = (resources, componentNames, files) => {
 };
 
 /**
- * Creates an OpenAPI 3.0 document from a database and optional schema configuration.
- * @param {Record<string, Array<Record<string, unknown>>>} database Database contents.
- * @param {Record<string, unknown>} [schemaConfig] Schema configuration.
- * @param {{ files?: boolean, host?: string, port?: number }} [serverOptions] Server address and optional features used in the generated document.
+ * Builds an OpenAPI 3.0 document from resolved server data.
+ * @param {{ database: Record<string, Array<Record<string, unknown>>>, files?: boolean, maxPageSize?: number, schema?: Record<string, unknown> }} options Document options.
  * @returns {Record<string, unknown>} OpenAPI document.
  */
-export function createOpenApiDocument(database, schemaConfig = {}, { files = false, host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
+export function buildOpenapiDocument(options) {
+  const { database, files = false, maxPageSize = MAX_PAGE_SIZE, schema: schemaConfig = {} } = options ?? {};
+
+  if (typeof files !== 'boolean') {
+    throw new Error('Ключ files должен содержать boolean');
+  }
+
   validateDatabase(database);
+
+  if (!Number.isInteger(maxPageSize) || maxPageSize < 1) {
+    throw new Error('Максимальный размер страницы должен быть положительным целым числом');
+  }
 
   if (!isObject(schemaConfig)) {
     throw new Error('Схема базы данных должна содержать JSON-объект');
@@ -306,14 +298,9 @@ export function createOpenApiDocument(database, schemaConfig = {}, { files = fal
     schemas[`${componentName}Page`] = {
       properties: {
         data: { items: createSchemaReference(componentName), type: 'array' },
-        first: { type: 'integer' },
-        items: { type: 'integer' },
-        last: { type: 'integer' },
-        next: { nullable: true, type: 'integer' },
-        pages: { type: 'integer' },
-        prev: { nullable: true, type: 'integer' },
+        total: { minimum: 0, type: 'integer' },
       },
-      required: ['data', 'first', 'items', 'last', 'next', 'pages', 'prev'],
+      required: ['data', 'total'],
       type: 'object',
     };
   });
@@ -321,11 +308,10 @@ export function createOpenApiDocument(database, schemaConfig = {}, { files = fal
   addReverseRelations(schemas, rawSchemas, resources, componentNames);
 
   return {
-    components: { parameters: createParameters(), schemas },
+    components: { parameters: createParameters(maxPageSize), schemas },
     info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
     paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {}),
-    servers: [{ url: getServerUrl(host, port) }],
     tags: [...resources.map((resource) => ({ name: resource })), ...(files ? [{ name: 'files' }] : [])],
   };
 }

@@ -1,12 +1,16 @@
 import Fastify from 'fastify';
+import { normalizeServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT, MAX_PAGE_SIZE } from './constants.js';
 import { createDatabaseStore, createId, findItem, getCollection } from './database.js';
-import { registerFileRoutes } from './files.js';
-import { readSchemaConfig } from './openapi/config.js';
-import { createOpenApiDocument } from './openapi/index.js';
+import { createFileStore, registerFileRoutes } from './files.js';
+import { resolveSchemaConfig } from './openapi/config.js';
+import { buildOpenapiDocument } from './openapi/document.js';
+import { createOpenapi, writeOpenapi } from './openapi/index.js';
 import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query/index.js';
 import { embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
-import { createHttpError, getResourceNames, isObject, resolveDatabasePath } from './utils.js';
+import { createHttpError, getResourceNames, isObject } from './utils.js';
+
+/** @typedef {Record<string, unknown>} OpenapiDocument */
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Name, Content-Type',
@@ -142,97 +146,103 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
 };
 
 /**
- * Creates a Fastify server without opening a network port.
- * @param {{ databasePath: string, filesDirectoryPath?: string, filesMetadataPath?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, schemaPath?: string }} options Server options.
- * @returns {Promise<import('fastify').FastifyInstance>} Fastify server.
+ * Creates a Deep JSON Server facade.
+ * @param {import('./config.js').DeepJsonServerConfig} options Server options.
+ * @param {{ files?: boolean }} [features] Optional feature switches.
+ * @returns {Promise<{ fastify: () => import('fastify').FastifyInstance, openapi: () => Promise<OpenapiDocument> }>} Server facade.
  */
-export async function createServer(options) {
-  const { databasePath, filesDirectoryPath, filesMetadataPath, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = MAX_PAGE_SIZE, schemaPath } = options ?? {};
+export async function createServer(options, features = {}) {
+  const config = normalizeServerConfig(options);
+  const filesEnabled = features.files ?? config.files != null;
+  const { logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = MAX_PAGE_SIZE } = config.server;
+  const store = await createDatabaseStore(config.database);
+  const schema = await resolveSchemaConfig(config.database.schema);
+  const fileStore = filesEnabled && config.files != null ? await createFileStore(config.files) : undefined;
+  let fastifyInstance;
 
-  if (!Number.isInteger(maxPageSize) || maxPageSize < 1) {
-    throw new Error('Максимальный размер страницы должен быть положительным целым числом');
+  if (filesEnabled && config.files == null) {
+    throw new Error('Для файловых маршрутов укажите секцию config.files');
   }
 
-  if (!Number.isInteger(maxFileSize) || maxFileSize < 1) {
-    throw new Error('Максимальный размер файла должен быть положительным целым числом');
-  }
-
-  const store = await createDatabaseStore(databasePath);
-  const schemaConfig = await readSchemaConfig(schemaPath);
-  const document = createOpenApiDocument(store.database.data, schemaConfig);
-  const resources = getResourceNames(store.database.data);
-  const server = Fastify({ logger });
-
-  addRequestSchemas(server, document, resources);
-
-  server.addHook('onRequest', async (_request, reply) => {
-    Object.entries(CORS_HEADERS).forEach(([header, value]) => {
-      reply.header(header, value);
+  const buildDocument = () =>
+    buildOpenapiDocument({
+      database: store.database.data,
+      files: filesEnabled,
+      maxPageSize,
+      schema,
     });
-  });
 
-  server.addHook('preHandler', async (request) => {
-    if (request.method === 'GET') {
-      await store.read();
-    }
-  });
-
-  server.options('/', async (_request, reply) => reply.code(204).send());
-  server.options('/*', async (_request, reply) => reply.code(204).send());
-  server.get('/', async () => ({ resources }));
-
-  resources.forEach((resource) => {
-    registerResourceRoutes(server, store, resource, document, maxPageSize);
-  });
-
-  if ((filesDirectoryPath == null) !== (filesMetadataPath == null)) {
-    throw new Error('Для файловых маршрутов укажите filesDirectoryPath и filesMetadataPath');
-  }
-
-  if (filesDirectoryPath != null) {
-    await registerFileRoutes(server, { directoryPath: filesDirectoryPath, maxFileSize, metadataPath: filesMetadataPath });
-  }
-
-  server.setErrorHandler((error, request, reply) => {
-    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
-
-    if (statusCode === 500) {
-      request.log.error(error);
+  const fastify = () => {
+    if (fastifyInstance != null) {
+      return fastifyInstance;
     }
 
-    return reply.code(statusCode).send({ error: error.message });
-  });
+    const document = buildDocument();
+    const resources = getResourceNames(store.database.data);
+    const server = Fastify({ logger });
+    const listen = server.listen.bind(server);
 
-  return server;
-}
+    server.listen = (...args) => listen(...(args.length === 0 ? [{ host: config.server.host ?? DEFAULT_HOST, port: config.server.port ?? DEFAULT_PORT }] : args));
 
-/**
- * Creates and starts a Fastify server.
- * @param {{ databasePath: string, filesDirectoryPath?: string, filesMetadataPath?: string, host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number, schemaPath?: string }} options Server options.
- * @returns {Promise<import('fastify').FastifyInstance>} Listening Fastify server.
- */
-export async function startServer(options) {
-  const {
-    databasePath,
-    filesDirectoryPath,
-    filesMetadataPath,
-    host = DEFAULT_HOST,
-    logger = true,
-    maxFileSize = DEFAULT_MAX_FILE_SIZE,
-    maxPageSize = MAX_PAGE_SIZE,
-    port = DEFAULT_PORT,
-    schemaPath,
-  } = options ?? {};
+    addRequestSchemas(server, document, resources);
 
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error('Порт должен быть целым числом от 0 до 65535');
-  }
+    server.addHook('onRequest', async (_request, reply) => {
+      Object.entries(CORS_HEADERS).forEach(([header, value]) => {
+        reply.header(header, value);
+      });
+    });
 
-  const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const server = await createServer({ databasePath: resolvedDatabasePath, filesDirectoryPath, filesMetadataPath, logger, maxFileSize, maxPageSize, schemaPath });
+    server.addHook('preHandler', async (request) => {
+      if (request.method === 'GET') {
+        await store.read();
+      }
+    });
 
-  await server.listen({ host, port });
-  server.log.info({ database: resolvedDatabasePath }, 'Deep JSON Server запущен');
+    server.options('/', async (_request, reply) => reply.code(204).send());
+    server.options('/*', async (_request, reply) => reply.code(204).send());
+    server.get('/', async () => ({ resources }));
 
-  return server;
+    resources.forEach((resource) => {
+      registerResourceRoutes(server, store, resource, document, maxPageSize);
+    });
+
+    if (fileStore != null) {
+      registerFileRoutes(server, { maxFileSize, store: fileStore });
+    }
+
+    server.setErrorHandler((error, request, reply) => {
+      const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+
+      if (statusCode === 500) {
+        request.log.error(error);
+      }
+
+      return reply.code(statusCode).send({ error: error.message });
+    });
+
+    fastifyInstance = server;
+
+    return fastifyInstance;
+  };
+
+  const openapi = async () => {
+    await store.read();
+
+    const document = createOpenapi({
+      database: store.database.data,
+      files: filesEnabled,
+      host: config.server.host,
+      maxPageSize,
+      port: config.server.port,
+      schema,
+    });
+
+    if (config.openapi.path != null) {
+      await writeOpenapi(document, config.openapi.path);
+    }
+
+    return document;
+  };
+
+  return { fastify, openapi };
 }

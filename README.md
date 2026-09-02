@@ -4,7 +4,7 @@
 
 [GitHub](https://github.com/kollors/deep-json-server) | [npm](https://www.npmjs.com/package/@kollors/deep-json-server)
 
-A small JSON REST mock server with CRUD, pagination, deep filters and recursive relationship embedding. It keeps the database in one readable JSON file and infers soft relations from conventional keys such as `countryId`, `genreIds` and `publisherIds`.
+A small REST mock server with CRUD, pagination, deep filtering, recursive relationship embedding, binary files, and OpenAPI generation. Data can be stored in JSON files or memory, and relations are inferred from conventional keys such as `countryId`, `genreIds`, and `publisherIds`.
 
 ## Installation
 
@@ -12,6 +12,43 @@ Node.js 20 or newer is required.
 
 ```bash
 npm install --save-dev @kollors/deep-json-server
+```
+
+## Quick start
+
+Create the database file `mock/database.json` before startup:
+
+```json
+{
+  "movies": [
+    { "id": "1", "title": "Shadows of Ardenia" }
+  ]
+}
+```
+
+Create the ESM module `server.config.js` next to `package.json`:
+
+```js
+export default {
+  database: {
+    path: 'mock/database.json',
+  },
+};
+```
+
+Start the server:
+
+```bash
+npx deep-json-server server.config.js
+```
+
+The API is available at `http://127.0.0.1:4001` by default. For example, `GET http://127.0.0.1:4001/movies` returns this page:
+
+```json
+{
+  "data": [{ "id": "1", "title": "Shadows of Ardenia" }],
+  "total": 1
+}
 ```
 
 ## Configuration and startup
@@ -35,6 +72,9 @@ export default {
   },
   server: {
     host: '127.0.0.1',
+    logger: true,
+    maxFileSize: 100 * 1024 * 1024,
+    maxPageSize: 1000,
     port: 4001,
   },
 };
@@ -42,25 +82,51 @@ export default {
 
 Configuration keys:
 
-| Key | Required | Purpose |
+| Key | Condition | Purpose |
 | --- | --- | --- |
-| `database.path` | Always | Existing JSON database file |
-| `database.schema` | No | JSON overrides for request validation and OpenAPI schemas |
-| `files.directory` | With `--files` | Directory for binary contents |
-| `files.metadata` | With `--files` | JSON file containing uploaded-file metadata |
-| `openapi.path` | With `--openapi` | Generated OpenAPI YAML file |
-| `server.host` | No | Listening host; falls back to `HOST`, then `127.0.0.1` |
-| `server.port` | No | Listening port; falls back to `PORT`, then `4001` |
+| `database.path` | Exactly one of `path` or `data` is required | Existing JSON database file |
+| `database.data` | Exactly one of `path` or `data` is required | Database object stored in memory |
+| `database.schema` | No | Path to JSON overrides or an object with request-validation and OpenAPI settings |
+| `files.directory` | Together with `files.metadata` | Directory for binary contents on disk |
+| `files.metadata` | Together with `files.directory` | JSON file containing file metadata on disk |
+| `files.data` | Instead of the `directory` and `metadata` pair | In-memory files with `Uint8Array` contents |
+| `openapi.path` | Required by the `--openapi` and `--openapi-only` CLI flags | Generated OpenAPI YAML file; the programmatic API can return a document without this path |
+| `server.host` | No | Host used by the CLI, `server.openapi()`, and argument-less `server.fastify().listen()`; defaults to `127.0.0.1` |
+| `server.logger` | No | Fastify logger settings; defaults to `true` |
+| `server.maxFileSize` | No | Maximum uploaded-file size in bytes when file routes are enabled; defaults to 100 MiB |
+| `server.maxPageSize` | No | Maximum allowed `_perPage` in the API and OpenAPI; defaults to `1000` |
+| `server.port` | No | Port used by the CLI, `server.openapi()`, and argument-less `server.fastify().listen()`; defaults to `4001` |
+
+`server.port` must be an integer from `0` to `65535`. The value `0` lets Fastify select an available port at runtime, but cannot be used to generate an OpenAPI server URL, which requires a port from `1` to `65535`. Both `server.maxFileSize` and `server.maxPageSize` must be positive integers.
 
 All relative paths are resolved from the directory containing `server.config.js`, not from the current working directory. Unknown keys, empty paths and invalid value types are rejected before startup. The config is executable JavaScript, so it can read environment variables, import other modules and calculate values before exporting the object. A `.js` config with `export default` requires an ESM project (`"type": "module"`); in a CommonJS project, use the same contents in `server.config.mjs`.
 
-Add the commands you need to `package.json`:
+The same config may keep everything in memory. `database.path` and `database.data` are mutually exclusive; `database.schema` accepts either a path or an object. Likewise, `files.data` cannot be combined with `files.directory` or `files.metadata`:
+
+```js
+export default {
+  database: {
+    data: { movies: [{ id: '1', title: 'Shadows of Ardenia' }] },
+    schema: { $info: { title: 'Movie API', version: '1.0.0' } },
+  },
+  files: {
+    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+  },
+};
+```
+
+In-memory values are cloned during initialization. CRUD and file operations therefore do not mutate the exported config object, and their results disappear when the process exits.
+
+Add the commands you need to `package.json`. Here, `mock:openapi:files` updates OpenAPI first and then keeps the server running with file routes:
 
 ```json
 {
   "scripts": {
-    "mock": "deep-json-server --files server.config.js",
-    "openapi": "deep-json-server --openapi --files server.config.js"
+    "mock": "deep-json-server server.config.js",
+    "mock:files": "deep-json-server --files server.config.js",
+    "mock:openapi:files": "deep-json-server --files --openapi server.config.js",
+    "openapi": "deep-json-server --openapi-only server.config.js",
+    "openapi:files": "deep-json-server --files --openapi-only server.config.js"
   }
 }
 ```
@@ -71,24 +137,26 @@ CLI modes:
 | --- | --- |
 | `deep-json-server server.config.js` | Starts the CRUD server without file routes |
 | `deep-json-server --files server.config.js` | Starts the CRUD server with file routes |
-| `deep-json-server --openapi server.config.js` | Generates OpenAPI and exits |
-| `deep-json-server --openapi --files server.config.js` | Generates OpenAPI with file routes and exits |
+| `deep-json-server --openapi server.config.js` | Generates OpenAPI and starts the CRUD server |
+| `deep-json-server --files --openapi server.config.js` | Generates OpenAPI with file routes and starts the server with them |
+| `deep-json-server --openapi-only server.config.js` | Generates OpenAPI and exits |
+| `deep-json-server --files --openapi-only server.config.js` | Generates OpenAPI with file routes and exits |
 
-`--openapi` never starts the HTTP server. `--files` is independent: without it, file routes are neither registered nor added to OpenAPI. Run `deep-json-server --help` to print the CLI summary.
+`--files` is independent: without it, file routes are neither registered nor added to OpenAPI, even when the config contains a `files` section. The `--openapi` and `--openapi-only` flags are mutually exclusive. Run `deep-json-server --help` to print the CLI summary.
 
 ## Example database
 
-This example is based on a movie catalog. `Gangster film` demonstrates a relationship with a parent genre.
+This example uses an entirely fictional catalog. `Gangster` has a relationship with its parent genre, `Crime drama`.
 
 ```json
 {
   "countries": [
-    { "id": "1", "isArchived": false, "name": "Russia" },
-    { "id": "2", "isArchived": false, "name": "United States" }
+    { "id": "1", "isArchived": false, "name": "Ardenia" },
+    { "id": "2", "isArchived": false, "name": "Veloria" }
   ],
   "genres": [
-    { "id": "1", "isArchived": false, "name": "Crime", "parentIds": [] },
-    { "id": "2", "isArchived": false, "name": "Gangster film", "parentIds": ["1"] },
+    { "id": "1", "isArchived": false, "name": "Crime drama", "parentIds": [] },
+    { "id": "2", "isArchived": false, "name": "Gangster", "parentIds": ["1"] },
     { "id": "3", "isArchived": false, "name": "Drama", "parentIds": [] },
     { "id": "4", "isArchived": false, "name": "Comedy", "parentIds": [] }
   ],
@@ -98,39 +166,39 @@ This example is based on a movie catalog. `Gangster film` demonstrates a relatio
         { "genreIds": ["2", "3"], "id": "movie-1-actor-1", "userId": "1" },
         { "genreIds": ["3"], "id": "movie-1-actor-2", "userId": "2" }
       ],
-      "coverSrc": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg",
-      "description": "The story of the Corleone family and the transfer of power from one generation to the next.",
+      "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
+      "description": "The heir to a port city uncovers a conspiracy between two rival families.",
       "id": "1",
       "isArchived": false,
       "publisherIds": ["2"],
-      "title": "The Godfather"
+      "title": "Shadows of Ardenia"
     },
     {
       "actors": [],
-      "coverSrc": "https://image.tmdb.org/t/p/w500/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg",
-      "description": "The adventures of a concierge and his young assistant in a famous European hotel.",
+      "coverSrc": "https://example.com/covers/northern-star.jpg",
+      "description": "A night manager at an old hotel is drawn into the search for a missing painting.",
       "id": "2",
       "isArchived": false,
       "publisherIds": ["1"],
-      "title": "The Grand Budapest Hotel"
+      "title": "Midnight at the Northern Star"
     }
   ],
   "publishers": [
-    { "id": "1", "isArchived": false, "name": "A24" },
-    { "id": "2", "isArchived": false, "name": "Paramount Pictures" }
+    { "id": "1", "isArchived": false, "name": "Northlight Studio" },
+    { "id": "2", "isArchived": false, "name": "Aurora Pictures" }
   ],
   "users": [
     {
-      "bornAt": "1989-01-25",
+      "bornAt": "1988-03-14",
       "countryId": "1",
-      "fullName": "Alexander Petrov",
+      "fullName": "Mira Volkova",
       "id": "1",
       "isArchived": false
     },
     {
-      "bornAt": "1984-09-05",
-      "countryId": "1",
-      "fullName": "Yulia Peresild",
+      "bornAt": "1991-11-02",
+      "countryId": "2",
+      "fullName": "Leon Vetrov",
       "id": "2",
       "isArchived": false
     }
@@ -149,14 +217,14 @@ PATCH  /movies/:id
 DELETE /movies/:id
 ```
 
-`POST` generates a string ID. `PUT` completely replaces the selected record, while `PATCH` updates only supplied fields; both preserve the existing ID and its type. An `id` supplied in any request body cannot override the server-controlled ID. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — are serialized and persisted in the JSON file.
+`POST` generates a string ID. `PUT` completely replaces the selected record, while `PATCH` updates only supplied fields; both preserve the existing ID and its type. An `id` supplied in any request body cannot override the server-controlled ID. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — are serialized; disk storage persists them in JSON, while memory storage retains them until the process exits.
 
 The database file must exist before startup. Resource names may contain Latin letters, numbers, `_` and `-`, and must start with a letter. Every resource is an array of JSON objects. Every record must have a non-empty string or finite numeric `id`; IDs must be unique within a resource when compared as strings, so `1` and `"1"` cannot coexist. The server rereads the file before every GET and write operation, so valid external edits become visible without a restart.
 
 Successful writes return the created, replaced, updated or deleted record. Errors use an appropriate HTTP status and this JSON shape:
 
 ```json
-{ "error": "Human-readable message" }
+{ "error": "..." }
 ```
 
 ## Pagination and sorting
@@ -165,21 +233,18 @@ Successful writes return the created, replaced, updated or deleted record. Error
 GET /movies?_page=1&_perPage=10&_sort=-id,title
 ```
 
-A GET collection always returns a page object. `_page` defaults to `1`, and `_perPage` defaults to `10`:
+A collection GET always returns the current page data and the total number of records after filtering. `_page` defaults to `1`, and `_perPage` defaults to `10`:
 
 ```json
 {
   "data": [],
-  "first": 1,
-  "items": 0,
-  "last": 1,
-  "next": null,
-  "pages": 1,
-  "prev": null
+  "total": 0
 }
 ```
 
-Both pagination parameters must be positive integers. `_perPage` cannot exceed `1000` by default; use the programmatic `maxPageSize` option to change that limit. Invalid values return `400` instead of being silently corrected. A page beyond the last page returns an empty `data` array and points `prev` to the last available page instead of silently clamping the request.
+`data` contains only the records on the requested page. `total` is the number of all records matching the filter before pagination is applied. When needed, a client can calculate the last page as `Math.max(1, Math.ceil(total / pageSize))`.
+
+Both pagination parameters must be positive integers. `_perPage` cannot exceed `1000` by default; change the limit through `server.maxPageSize` in the config passed to either the CLI or `createServer()`. Invalid values return `400` instead of being silently corrected. A page beyond the last page returns an empty `data` array while preserving the actual `total` value.
 
 `_sort` accepts comma-separated field paths. Rules are applied from left to right; prefix a field with `-` for descending order. Dot paths can address nested object fields, including fields added by `_embed`, for example `GET /users?_embed=country&_sort=country.name,-id`. Unknown or unsafe sort fields return `400`.
 
@@ -188,7 +253,7 @@ Both pagination parameters must be positive integers. `_perPage` cannot exceed `
 Pass a JSON object through `_where`:
 
 ```http
-GET /movies?_where={"title":{"contains":"father"}}
+GET /movies?_where={"title":{"contains":"ardenia"}}
 ```
 
 Nested objects and arrays can be filtered at any depth. Conditions in one object use `AND` by default:
@@ -196,7 +261,7 @@ Nested objects and arrays can be filtered at any depth. Conditions in one object
 ```json
 {
   "actors": { "some": { "userId": { "eq": "1" } } },
-  "title": { "contains": "father" }
+  "title": { "contains": "ardenia" }
 }
 ```
 
@@ -207,7 +272,7 @@ Use `and`, `or` and `not` for explicit logical groups:
   "and": [
     {
       "or": [
-        { "title": { "contains": "father" } },
+        { "title": { "contains": "ardenia" } },
         { "actors": { "some": { "userId": { "eq": "2" } } } }
       ]
     },
@@ -231,12 +296,14 @@ Field operators:
 Simple query parameters are supported too:
 
 ```http
-GET /movies?title:contains=father
+GET /movies?title:contains=ardenia
 ```
 
 Simple filter values recognize JSON primitives: numbers, `true`, `false` and `null`. Values with leading zeroes, such as `001`, remain strings. Unknown operators, invalid logical conditions and filter paths that do not exist in a non-empty resource return `400`.
 
-For a simple `in` filter, separate values with commas: `GET /movies?id:in=1,2`. If `_where` is present, it is the complete filter and other simple filter parameters are ignored. The examples show readable JSON; an HTTP client must URL-encode `_where` when constructing the URL manually.
+Multiple simple query filters are combined with `AND`. For an `in` filter, separate values with commas: `GET /movies?id:in=1,2`. On an array field, `in` means that at least one field element matches at least one supplied value. `every` returns `true` for an empty array, while `some` returns `false`.
+
+If `_where` is present, it is the complete filter and other simple filter parameters are ignored. The examples show readable JSON; an HTTP client must URL-encode `_where` when constructing the URL manually, for example with `encodeURIComponent(JSON.stringify(where))`.
 
 Filtering is performed after `_embed`. This means a filter can address fields added by an embedded relation when the same request includes that `_embed`; stored `...Id` and `...Ids` fields can always be filtered directly.
 
@@ -248,7 +315,7 @@ Use `_embed` to add related records to the response:
 GET /movies/1?_embed=actors.user.country&_embed=actors.genres&_embed=publishers
 ```
 
-The response contains actors, each actor's user and genres, the user's country, and publishers. Original ID fields remain in the response, and the database file is not modified. Embedding can follow any number of levels:
+The response contains actors, each actor's user and genres, the user's country, and publishers. Original ID fields remain in the response, and the database file is not modified. The server imposes no fixed depth limit, but every required level must be written explicitly in the finite `_embed` path:
 
 ```http
 GET /movies/1?_embed=actors.user.country
@@ -285,35 +352,37 @@ Add `files.directory` and `files.metadata` to the server config, then pass `--fi
 deep-json-server --files server.config.js
 ```
 
+For temporary tests, use `files.data` instead. Each initial record contains `id`, `name`, `mimeType`, and binary `content` as a `Uint8Array`; `size` and `url` are derived automatically. Uploaded files then remain in memory until the process exits.
+
 Upload one file as the request body. Both headers are required: `Content-Name` contains the relative logical name encoded with `encodeURIComponent`, and `Content-Type` contains the file MIME type:
 
 ```http
 POST /_files
-Content-Name: posters%2Fthe-godfather.jpg
+Content-Name: posters%2Fshadows-of-ardenia.jpg
 Content-Type: image/jpeg
 
 <binary body>
 ```
 
-The response contains metadata and a stable URL:
+A successful upload returns status `201`, metadata, and a stable URL:
 
 ```json
 {
   "id": "generated-id",
   "mimeType": "image/jpeg",
-  "name": "posters/the-godfather.jpg",
+  "name": "posters/shadows-of-ardenia.jpg",
   "size": 182340,
   "url": "/_files/generated-id"
 }
 ```
 
-Use `GET /_files/:id` to download the original bytes and `DELETE /_files/:id` to delete both the binary contents and their metadata. The returned `url` is relative to the mock-server origin. The server creates the configured directories automatically, stores binary contents under generated IDs without relying on the original file name, and keeps the logical names and other metadata in `files.metadata`. The metadata file may be absent initially and is created on the first upload. Do not edit it while the server is running.
+`GET /_files/:id` returns the original bytes with status `200`. `DELETE /_files/:id` removes both the binary contents and metadata, and returns the deleted metadata with status `200`. The returned `url` is relative to the mock-server origin. The server creates the configured directories automatically, stores binary contents under generated IDs without relying on the original file name, and keeps the logical names and other metadata in `files.metadata`. The metadata file may be absent initially and is created on the first upload. Do not edit it while the server is running.
 
-The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through the programmatic `maxFileSize` option. Unsafe or absolute `Content-Name` paths return `400`, an exceeded limit returns `413`, and a malformed or unsupported `Content-Type` returns `400` or `415`.
+The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. A missing or unsafe `Content-Name` returns `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
 ## Database schema and OpenAPI generation
 
-The optional JSON file referenced by `database.schema`, for example `mock/database-schema.json`, customizes inferred schemas. It is read both during normal server startup and during OpenAPI generation:
+The optional path or object in `database.schema` customizes inferred schemas. This is a Deep JSON Server configuration format, not a standard JSON Schema document: `$schema` is an object containing resource settings. For example, `mock/database-schema.json` may contain:
 
 ```json
 {
@@ -349,11 +418,15 @@ Schema configuration:
 | `$schema.<resource>.formats` | OpenAPI formats for inferred or explicit string fields, such as `date`, `date-time` or `uri` |
 | `$schema.<resource>.properties` | Recursive OpenAPI-compatible field schemas merged with inference |
 
+`formats` is shorthand for assigning `format` to an existing string field. `properties` can fully describe a field—including its `type`, `format`, constraints, and nested properties—or add a field that is absent from the data. If both mechanisms assign a format to the same field, the value from `formats` is applied last.
+
 Set `openapi.path` in the server config, then generate an OpenAPI 3.0.3 file and exit:
 
 ```bash
-deep-json-server --openapi --files server.config.js
+deep-json-server --openapi-only server.config.js
 ```
+
+To include file routes in the document, configure the `files` section and add `--files`: `deep-json-server --files --openapi-only server.config.js`.
 
 The generator infers resources and field types from all database records. Every inferred field is optional by default, while the top-level `id` is always required in response schemas and is omitted from create and update request schemas. Add other required fields to `required`. A nested required path marks that nested property as required; it does not automatically make every parent path required, so list the parent separately when necessary.
 
@@ -377,7 +450,7 @@ Use `properties` to describe fields that cannot be inferred, particularly for an
 
 An empty resource still receives a required string `id` property because IDs created by the server are strings. Generation stops with an actionable error when resources produce duplicate schema names or operation IDs; use an explicit `name` to resolve schema-name collisions. The output directory is created automatically, and the configured YAML file is replaced on every generation.
 
-`$info` becomes the OpenAPI `info` object, while resource settings live under `$schema`. The OpenAPI `servers` entry is generated automatically from `server.host` and `server.port`, their `HOST` and `PORT` environment variable fallbacks, or the default `http://127.0.0.1:4001`.
+`$info` becomes the OpenAPI `info` object, while resource settings live under `$schema`. In the CLI, the OpenAPI `servers` entry uses `server.host` and `server.port`, then the `HOST` and `PORT` environment-variable fallbacks, and finally `http://127.0.0.1:4001`. A direct `createServer()` call does not read those environment variables automatically: `server.openapi()` uses the config values or the same default URL.
 
 Use `name` when a resource needs an explicit schema name instead of the automatically singularized name:
 
@@ -391,73 +464,87 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 }
 ```
 
-The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only when `--openapi` is passed; normal server startup does not rewrite the file.
+The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
 
 During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed. Invalid bodies return `400`.
-
-## Scope and security
-
-Deep JSON Server is intended for local development and automated tests. It has no authentication or authorization, allows CORS from every origin, persists accepted writes directly to the configured files and does not enforce referential integrity. Keep the default loopback host unless the surrounding environment provides its own access controls; do not expose the server or file routes to an untrusted network.
 
 ## Programmatic API
 
 ```js
-import { createOpenApiDocument, createServer, generateOpenApi, startServer } from '@kollors/deep-json-server';
+import { createServer } from '@kollors/deep-json-server';
 
-// Create an instance without opening a port, for example for tests.
-const server = await createServer({
-  databasePath: 'mock/database.json',
-  filesDirectoryPath: 'mock/files',
-  filesMetadataPath: 'mock/files/_database.json',
-  logger: false,
-  maxFileSize: 100 * 1024 * 1024,
-  maxPageSize: 1000,
-  schemaPath: 'mock/database-schema.json',
+const config = {
+  database: {
+    path: 'mock/database.json',
+    schema: 'mock/database-schema.json',
+  },
+  files: {
+    directory: 'mock/files',
+    metadata: 'mock/files/_database.json',
+  },
+  openapi: {
+    path: 'mock/openapi-schema.yaml',
+  },
+  server: {
+    host: '127.0.0.1',
+    logger: false,
+    maxFileSize: 100 * 1024 * 1024,
+    maxPageSize: 1000,
+    port: 4001,
+  },
+};
+
+// Make a request without opening a network port—useful in automated tests.
+const server = await createServer(config);
+const fastify = server.fastify();
+const response = await fastify.inject({ method: 'GET', url: '/movies' });
+
+console.log(response.json());
+
+// Return the document and write it to config.openapi.path.
+const document = await server.openapi();
+
+await fastify.close();
+
+// Start a network server. With no arguments, listen uses server.host and server.port.
+const runningServer = await createServer(config);
+const runningFastify = runningServer.fastify();
+
+await runningFastify.listen();
+
+// Later, during application shutdown:
+await runningFastify.close();
+
+// Keep the database, schema, and files entirely in memory.
+const memoryServer = await createServer({
+  database: {
+    data: { movies: [{ id: '1', title: 'Shadows of Ardenia' }] },
+    schema: { $info: { title: 'Movie API', version: '1.0.0' } },
+  },
+  files: {
+    data: [{ content: new Uint8Array([1, 2, 3]), id: 'file-1', mimeType: 'application/octet-stream', name: 'example.bin' }],
+  },
 });
 
-const response = await server.inject({ method: 'GET', url: '/movies' });
+const memoryFastify = memoryServer.fastify();
+const memoryResponse = await memoryFastify.inject({ method: 'GET', url: '/movies/1' });
 
-await server.close();
+console.log(memoryResponse.json());
 
-// Create an instance and start listening.
-const listeningServer = await startServer({
-  databasePath: 'mock/database.json',
-  host: '127.0.0.1',
-  port: 4001,
-  schemaPath: 'mock/database-schema.json',
-});
-
-await listeningServer.close();
-
-// Read the database and schema files, then write an OpenAPI YAML file.
-await generateOpenApi({
-  databasePath: 'mock/database.json',
-  files: true,
-  host: '127.0.0.1',
-  outputPath: 'mock/openapi-schema.yaml',
-  port: 4001,
-  schemaPath: 'mock/database-schema.json',
-});
-
-// Build the same kind of OpenAPI document entirely in memory.
-const document = createOpenApiDocument(
-  { movies: [{ id: '1', title: 'The Godfather' }] },
-  { $info: { title: 'Movie API', version: '1.0.0' } },
-  { files: true, host: '127.0.0.1', port: 4001 },
-);
+await memoryFastify.close();
 ```
 
-Programmatic options:
+`createServer()` accepts exactly the same config shape as `server.config.js`. It loads and clones the configured sources, then returns a facade with two operations:
 
-| Option | Used by | Meaning |
+| Member | Meaning |
 | --- | --- | --- |
-| `databasePath` | `createServer`, `startServer`, `generateOpenApi` | Required JSON database path |
-| `schemaPath` | The same three functions | Optional database-schema path |
-| `filesDirectoryPath`, `filesMetadataPath` | `createServer`, `startServer` | Optional pair enabling file routes |
-| `files` | `generateOpenApi`, `createOpenApiDocument` | Whether file routes appear in OpenAPI |
-| `host`, `port` | `startServer`, `generateOpenApi`, `createOpenApiDocument` | Listening address or generated `servers` URL |
-| `logger` | `createServer`, `startServer` | Fastify logger settings; defaults to `true` |
-| `maxPageSize`, `maxFileSize` | `createServer`, `startServer` | Runtime limits; defaults are 1000 records and 100 MiB |
-| `outputPath` | `generateOpenApi` | Required generated YAML path |
+| `server.fastify()` | Lazily creates and caches the real Fastify instance; every native method remains available, and argument-less `listen()` uses `server.host` and `server.port` |
+| `server.openapi()` | Returns an OpenAPI document and also writes it when `openapi.path` is configured |
 
-`createServer()` returns a Fastify instance without opening a network port, which is useful with `server.inject()` in tests. `startServer()` also starts listening. `generateOpenApi()` reads files and writes YAML, while `createOpenApiDocument()` works with in-memory database and schema objects and does not write a file. These functions do not read `server.config.js`; pass their options explicitly. The package includes generated TypeScript declarations for all exported functions.
+File routes are enabled programmatically when a `files` section is present. The second argument has the shape `{ files?: boolean }`: pass `{ files: false }` to keep a configured store disabled, or `{ files: true }` to require a `files` section and enable the routes. `server.openapi()` uses the same feature state as `server.fastify()`.
+
+An argument-less `server.fastify().listen()` uses `server.host` and `server.port`, falling back to `127.0.0.1:4001`. Explicit `listen(options)` values take precedence. Relative paths passed directly to `createServer()` resolve from the current working directory; paths loaded from `server.config.js` resolve from the config directory. The package includes generated TypeScript declarations for the facade and every config variant.
+
+## Scope and security
+
+Deep JSON Server is intended for local development and automated tests. It has no authentication or authorization, allows CORS from every origin, persists accepted writes when disk storage is configured and does not enforce referential integrity. Keep the default loopback host unless the surrounding environment provides its own access controls; do not expose the server or file routes to an untrusted network.

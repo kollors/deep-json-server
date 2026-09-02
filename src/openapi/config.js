@@ -107,4 +107,18 @@ export const applyConfiguredFields = (schema, resource, resourceConfig) => {
   return applyRequiredFields(schemaWithFormats, '', new Set(requiredFields));
 };
 
-export const readSchemaConfig = async (schemaPath) => (schemaPath == null ? {} : readJsonObject(schemaPath, 'Файл схемы базы данных'));
+export const resolveSchemaConfig = async (schema) => {
+  if (schema == null) {
+    return {};
+  }
+
+  if (typeof schema === 'string') {
+    return readJsonObject(schema, 'Файл схемы базы данных');
+  }
+
+  if (!isObject(schema)) {
+    throw new Error('Схема базы данных должна содержать JSON-объект');
+  }
+
+  return structuredClone(schema);
+};

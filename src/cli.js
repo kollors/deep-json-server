@@ -1,28 +1,38 @@
 import process from 'node:process';
 import { readServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_PORT } from './constants.js';
-import { generateOpenApi } from './openapi/index.js';
-import { startServer } from './server.js';
+import { createServer } from './server.js';
 
 const HELP_TEXT = `Deep JSON Server
 
 Использование:
-  deep-json-server [--openapi] [--files] <server.config.js>
+  deep-json-server [--files] [--openapi | --openapi-only] <server.config.js>
 
 Параметры:
-  --openapi  Сгенерировать OpenAPI и завершить работу
-  --files    Добавить файловые маршруты в сервер или OpenAPI
-  --help     Показать справку`;
+  --files         Добавить файловые маршруты в сервер и OpenAPI
+  --openapi       Сгенерировать OpenAPI и запустить сервер
+  --openapi-only  Сгенерировать OpenAPI и завершить работу
+  --help          Показать справку`;
 
 const parseArguments = (args) => {
-  const flags = { files: false, openapi: false };
+  const options = { files: false, openapiMode: 'none' };
   let configPath;
 
   args.forEach((argument) => {
     if (argument === '--files') {
-      flags.files = true;
+      options.files = true;
     } else if (argument === '--openapi') {
-      flags.openapi = true;
+      if (options.openapiMode !== 'none') {
+        throw new Error('Параметры --openapi и --openapi-only нельзя использовать одновременно');
+      }
+
+      options.openapiMode = 'generate';
+    } else if (argument === '--openapi-only') {
+      if (options.openapiMode !== 'none') {
+        throw new Error('Параметры --openapi и --openapi-only нельзя использовать одновременно');
+      }
+
+      options.openapiMode = 'only';
     } else if (argument.startsWith('-')) {
       throw new Error(`Неизвестный параметр: ${argument}`);
     } else if (configPath == null) {
@@ -36,55 +46,46 @@ const parseArguments = (args) => {
     throw new Error('Укажите путь к файлу конфигурации');
   }
 
-  return { configPath, ...flags };
+  return { configPath, ...options };
 };
 
-const validateModeConfig = (config, { files, openapi }) => {
-  if (openapi && config.openapiPath == null) {
-    throw new Error('Для --openapi укажите ключ config.openapi.path');
+const validateModeConfig = (config, { files, openapiMode }) => {
+  if (openapiMode !== 'none' && config.openapi.path == null) {
+    throw new Error(`Для --openapi${openapiMode === 'only' ? '-only' : ''} укажите ключ config.openapi.path`);
   }
 
-  if (files && config.filesDirectoryPath == null) {
-    throw new Error('Для --files укажите ключ config.files.directory');
-  }
-
-  if (files && config.filesMetadataPath == null) {
-    throw new Error('Для --files укажите ключ config.files.metadata');
+  if (files && config.files == null) {
+    throw new Error('Для --files укажите секцию config.files');
   }
 };
 
-export async function runCli(args = process.argv.slice(2), services = { generateOpenApi, startServer }) {
+export async function runCli(args = process.argv.slice(2), services = { createServer }) {
   if (args.includes('--help')) {
     process.stdout.write(`${HELP_TEXT}\n`);
     return;
   }
 
-  const { configPath, files, openapi } = parseArguments(args);
+  const { configPath, files, openapiMode } = parseArguments(args);
   const config = await readServerConfig(configPath);
-  const host = config.host ?? process.env.HOST ?? DEFAULT_HOST;
-  const port = config.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
+  const host = config.server.host ?? process.env.HOST ?? DEFAULT_HOST;
+  const port = config.server.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
 
-  validateModeConfig(config, { files, openapi });
+  validateModeConfig(config, { files, openapiMode });
 
-  if (openapi) {
-    await services.generateOpenApi({
-      databasePath: config.databasePath,
-      files,
-      host,
-      outputPath: config.openapiPath,
-      port,
-      schemaPath: config.schemaPath,
-    });
-    process.stdout.write(`OpenAPI-схема сохранена в ${config.openapiPath}\n`);
+  const runtimeConfig = { ...config, server: { ...config.server, host, port } };
+  const server = await services.createServer(runtimeConfig, { files });
+
+  if (openapiMode !== 'none') {
+    await server.openapi();
+    process.stdout.write(`OpenAPI-схема сохранена в ${config.openapi.path}\n`);
+  }
+
+  if (openapiMode === 'only') {
     return;
   }
 
-  await services.startServer({
-    databasePath: config.databasePath,
-    filesDirectoryPath: files ? config.filesDirectoryPath : undefined,
-    filesMetadataPath: files ? config.filesMetadataPath : undefined,
-    host,
-    port,
-    schemaPath: config.schemaPath,
-  });
+  const fastify = server.fastify();
+
+  await fastify.listen({ host, port });
+  fastify.log.info({ database: 'path' in config.database ? config.database.path : 'memory' }, 'Deep JSON Server запущен');
 }

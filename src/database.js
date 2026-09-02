@@ -72,8 +72,7 @@ export const readJsonObject = async (path, label) => {
 
 export const readDatabaseFile = async (databasePath) => validateDatabase(await readJsonObject(databasePath, 'Файл базы данных'));
 
-/** @returns {Promise<any>} Internal LowDB-backed store. */
-export const createDatabaseStore = async (databasePath) => {
+const createDiskDatabaseStore = async (databasePath) => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = await readDatabaseFile(resolvedDatabasePath);
   const database = await JSONFilePreset(resolvedDatabasePath, initialData);
@@ -104,6 +103,36 @@ export const createDatabaseStore = async (databasePath) => {
 
   return { database, path: resolvedDatabasePath, read, update };
 };
+
+const createMemoryDatabaseStore = (sourceData) => {
+  const database = { data: validateDatabase(structuredClone(sourceData)) };
+  let updateQueue = Promise.resolve();
+
+  const read = async () => database.data;
+  const update = (operation) => {
+    const pendingOperation = updateQueue.then(() => {
+      const draft = { data: structuredClone(database.data) };
+      const result = operation(draft);
+
+      validateDatabase(draft.data);
+      database.data = draft.data;
+
+      return result;
+    });
+
+    updateQueue = pendingOperation.catch(() => undefined);
+
+    return pendingOperation;
+  };
+
+  return { database, read, update };
+};
+
+/**
+ * @param {import('./config.js').DatabaseConfig} config Database source.
+ * @returns {Promise<any>} Internal database store.
+ */
+export const createDatabaseStore = async (config) => ('data' in config ? createMemoryDatabaseStore(config.data) : createDiskDatabaseStore(config.path));
 
 export const getCollection = (database, resource) => {
   const collection = isSafeKey(resource) ? database.data[resource] : undefined;

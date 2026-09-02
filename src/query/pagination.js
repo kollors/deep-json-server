@@ -35,16 +35,10 @@ export const parsePagination = (query, maxPageSize = MAX_PAGE_SIZE) => {
 };
 
 export const paginateItems = (items, page, pageSize) => {
-  const pages = Math.max(1, Math.ceil(items.length / pageSize));
   const offset = (page - 1) * pageSize;
 
   return {
     data: items.slice(offset, offset + pageSize),
-    first: 1,
-    items: items.length,
-    last: pages,
-    next: page < pages ? page + 1 : null,
-    pages,
-    prev: page > 1 ? Math.min(page - 1, pages) : null,
+    total: items.length,
   };
 };

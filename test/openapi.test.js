@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { createOpenApiDocument, generateOpenApi } from '../index.js';
+import { createServer } from '../index.js';
+import { buildOpenapiDocument } from '../src/openapi/document.js';
 
 const database = {
   countries: [{ id: '1', name: 'Russia' }],
@@ -28,26 +29,38 @@ const schemaConfig = {
     users: { formats: { avatarSrc: 'uri', bornAt: 'date' }, required: ['bornAt', 'fullName'] },
   },
 };
+const createDocument = (data, schema, options = {}) => buildOpenapiDocument({ database: data, files: options.files, maxPageSize: options.server?.maxPageSize, schema });
 
 const withFiles = async (run) => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-openapi-'));
   const databasePath = join(directory, 'database.json');
   const schemaPath = join(directory, 'database-schema.json');
   const outputPath = join(directory, 'openapi-schema.yaml');
+  const filesDirectoryPath = join(directory, 'files');
+  const filesMetadataPath = join(filesDirectoryPath, '_database.json');
 
   await writeFile(databasePath, JSON.stringify(database));
   await writeFile(schemaPath, JSON.stringify(schemaConfig));
 
   try {
-    await run({ databasePath, outputPath, schemaPath });
+    await run({ databasePath, filesDirectoryPath, filesMetadataPath, outputPath, schemaPath });
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
 };
 
 test('generates CRUD schemas, formats and direct and reverse relations', async () => {
-  await withFiles(async ({ databasePath, outputPath, schemaPath }) => {
-    await generateOpenApi({ databasePath, files: true, outputPath, schemaPath });
+  await withFiles(async ({ databasePath, filesDirectoryPath, filesMetadataPath, outputPath, schemaPath }) => {
+    const server = await createServer(
+      {
+        database: { path: databasePath, schema: schemaPath },
+        files: { directory: filesDirectoryPath, metadata: filesMetadataPath },
+        openapi: { path: outputPath },
+      },
+      { files: true },
+    );
+
+    await server.openapi();
 
     const yaml = await readFile(outputPath, 'utf8');
     const document = parse(yaml);
@@ -75,6 +88,8 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.components.parameters.PerPage.schema.default, 10);
     assert.equal(document.components.parameters.PerPage.schema.maximum, 1000);
     assert.equal(document.components.parameters.PerPage.name, '_perPage');
+    assert.deepEqual(document.components.schemas.MoviePage.properties.total, { minimum: 0, type: 'integer' });
+    assert.deepEqual(document.components.schemas.MoviePage.required, ['data', 'total']);
     assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
     assert.equal(document.paths['/movies'].get.operationId, 'getMovies');
     assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
@@ -88,8 +103,18 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
   });
 });
 
+test('returns OpenAPI in memory and validates file configuration', async () => {
+  await withFiles(async ({ databasePath, filesDirectoryPath, outputPath }) => {
+    const server = await createServer({ database: { path: databasePath } });
+    const document = await server.openapi();
+
+    assert.equal(document.openapi, '3.0.3');
+    await assert.rejects(() => createServer({ database: { path: databasePath }, files: { directory: filesDirectoryPath }, openapi: { path: outputPath } }), /config\.files\.metadata/);
+  });
+});
+
 test('describes empty resources through explicit properties', () => {
-  const document = createOpenApiDocument(
+  const document = createDocument(
     { items: [] },
     { $schema: { items: { formats: { createdAt: 'date-time' }, properties: { createdAt: { type: 'string' }, name: { type: 'string' } }, required: ['name'] } } },
   );
@@ -101,7 +126,7 @@ test('describes empty resources through explicit properties', () => {
 });
 
 test('widens numeric ID schemas because POST creates string IDs', () => {
-  const document = createOpenApiDocument({ items: [{ id: 1, name: 'One' }] });
+  const document = createDocument({ items: [{ id: 1, name: 'One' }] });
   const idSchemas = document.components.schemas.Item.properties.id.oneOf;
 
   assert.deepEqual(
@@ -112,7 +137,7 @@ test('widens numeric ID schemas because POST creates string IDs', () => {
 });
 
 test('infers arrays, objects, primitives and nullable values independently', () => {
-  const document = createOpenApiDocument({
+  const document = createDocument({
     items: [
       { id: '1', value: ['one'] },
       { id: '2', value: 'two' },
@@ -130,22 +155,30 @@ test('infers arrays, objects, primitives and nullable values independently', () 
 });
 
 test('validates database contents and schema configuration', () => {
-  assert.throws(() => createOpenApiDocument({ $schema: [] }), /имя ресурса/);
-  assert.throws(() => createOpenApiDocument({ items: [null] }), /JSON-объект/);
-  assert.throws(() => createOpenApiDocument({ items: [{ name: 'Missing ID' }] }), /id/);
-  assert.throws(() => createOpenApiDocument({ items: [{ id: 1 }, { id: '1' }] }), /повторяющийся id/);
-  assert.throws(() => createOpenApiDocument({ 'bad/name': [] }), /имя ресурса/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $info: {} }), /title и version/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: [] }), /\$schema/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
-  assert.throws(() => createOpenApiDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
-  assert.throws(() => createOpenApiDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
+  assert.throws(() => createDocument({ $schema: [] }), /имя ресурса/);
+  assert.throws(() => createDocument({ items: [null] }), /JSON-объект/);
+  assert.throws(() => createDocument({ items: [{ name: 'Missing ID' }] }), /id/);
+  assert.throws(() => createDocument({ items: [{ id: 1 }, { id: '1' }] }), /повторяющийся id/);
+  assert.throws(() => createDocument({ 'bad/name': [] }), /имя ресурса/);
+  assert.throws(() => createDocument({ items: [] }, { $info: {} }), /title и version/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: [] }), /\$schema/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
+  assert.throws(() => createDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
+  assert.throws(() => buildOpenapiDocument({ database: { items: [] }, files: 'true' }), /Ключ files/);
 });
 
 test('rejects colliding component names and operation IDs', () => {
-  assert.throws(() => createOpenApiDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
-  assert.throws(() => createOpenApiDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
-  assert.throws(() => createOpenApiDocument({ files: [] }, { $schema: { files: { name: 'UploadedFile' } } }, { files: true }), /имя OpenAPI-схемы/i);
+  assert.throws(() => createDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
+  assert.throws(() => createDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
+  assert.throws(() => createDocument({ files: [] }, { $schema: { files: { name: 'UploadedFile' } } }, { files: true }), /имя OpenAPI-схемы/i);
+});
+
+test('keeps runtime server address outside an in-memory document', () => {
+  const document = createDocument({ items: [{ id: '1' }] }, undefined, { server: { maxPageSize: 25 } });
+
+  assert.equal(document.servers, undefined);
+  assert.equal(document.components.parameters.PerPage.schema.maximum, 25);
 });

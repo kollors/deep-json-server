@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createServer, startServer } from '../index.js';
+import { createServer } from '../index.js';
 
 const fixture = {
   countries: [
@@ -44,7 +44,12 @@ const withServer = async (run, data = fixture, schemaConfig, serverOptions = {})
     await writeFile(schemaPath, JSON.stringify(schemaConfig));
   }
 
-  const server = await createServer({ ...options, databasePath, filesDirectoryPath, filesMetadataPath, logger: false, schemaPath });
+  const serverFacade = await createServer({
+    database: { path: databasePath, schema: schemaPath },
+    files: serverOptions.files === true ? { directory: filesDirectoryPath, metadata: filesMetadataPath } : undefined,
+    server: { ...options, logger: false },
+  });
+  const server = serverFacade.fastify();
 
   try {
     await run({ databasePath, filesDirectoryPath, filesMetadataPath, server });
@@ -155,12 +160,12 @@ test('filters nested fields and combines conditions with AND, OR and NOT', async
       response.json().data.map(({ title }) => title),
       ['The Godfather'],
     );
-    assert.equal(orResponse.json().items, 2);
+    assert.equal(orResponse.json().total, 2);
     assert.deepEqual(
       notResponse.json().data.map(({ title }) => title),
       ['The Godfather'],
     );
-    assert.equal(emptyAndResponse.json().items, 2);
+    assert.equal(emptyAndResponse.json().total, 2);
   });
 });
 
@@ -193,7 +198,7 @@ test('supports every field operator', async () => {
       const response = await server.inject({ method: 'GET', query: { _where: JSON.stringify(condition) }, url: '/items' });
 
       assert.equal(response.statusCode, 200);
-      assert.equal(response.json().items >= 1, true);
+      assert.equal(response.json().total >= 1, true);
     }
 
     const simpleResponse = await server.inject({ method: 'GET', query: { amount: '20', code: '002' }, url: '/items' });
@@ -203,7 +208,7 @@ test('supports every field operator', async () => {
       simpleResponse.json().data.map(({ id }) => id),
       ['2'],
     );
-    assert.equal(inResponse.json().items, 2);
+    assert.equal(inResponse.json().total, 2);
   }, data);
 });
 
@@ -240,13 +245,17 @@ test('rejects invalid filters, sorting, embeds and pagination', async () => {
 
 test('returns an empty page without silently clamping an out-of-range page', async () => {
   await withServer(async ({ server }) => {
+    const firstPage = (await server.inject({ method: 'GET', query: { _page: 1, _perPage: 1 }, url: '/movies' })).json();
+    const lastPage = (await server.inject({ method: 'GET', query: { _page: 2, _perPage: 1 }, url: '/movies' })).json();
     const response = await server.inject({ method: 'GET', query: { _page: 100, _perPage: 1 }, url: '/movies' });
     const page = response.json();
 
+    assert.equal(firstPage.data.length, 1);
+    assert.equal(firstPage.total, 2);
+    assert.equal(lastPage.data.length, 1);
+    assert.equal(lastPage.total, 2);
     assert.deepEqual(page.data, []);
-    assert.equal(page.last, 2);
-    assert.equal(page.prev, 2);
-    assert.equal(page.next, null);
+    assert.equal(page.total, 2);
   });
 });
 
@@ -362,17 +371,55 @@ test('serializes concurrent writes and preserves stored numeric IDs', async () =
   );
 });
 
+test('supports in-memory database, schema and files without mutating config', async () => {
+  const database = { items: [{ id: '1', name: 'Original' }] };
+  const content = new Uint8Array([1, 2, 3, 255]);
+  const config = {
+    database: {
+      data: database,
+      schema: { $info: { title: 'Memory API', version: '1.0.0' }, $schema: { items: { required: ['name'] } } },
+    },
+    files: { data: [{ content, id: 'file-1', mimeType: 'application/octet-stream', name: 'initial.bin' }] },
+    server: { logger: false },
+  };
+  const serverFacade = await createServer(config);
+  const server = serverFacade.fastify();
+
+  try {
+    assert.equal(serverFacade.fastify(), server);
+    assert.deepEqual((await server.inject({ method: 'GET', url: '/items/1' })).json(), database.items[0]);
+    assert.deepEqual((await server.inject({ method: 'GET', url: '/_files/file-1' })).rawPayload, Buffer.from(content));
+
+    const patchResponse = await server.inject({ method: 'PATCH', payload: { name: 'Changed' }, url: '/items/1' });
+    const uploadResponse = await server.inject({ headers: { 'content-name': 'new.bin', 'content-type': 'application/octet-stream' }, method: 'POST', payload: 'new', url: '/_files' });
+
+    assert.equal(patchResponse.json().name, 'Changed');
+    assert.equal(uploadResponse.statusCode, 201);
+    assert.equal(database.items[0].name, 'Original');
+    assert.deepEqual(content, new Uint8Array([1, 2, 3, 255]));
+  } finally {
+    await server.close();
+  }
+});
+
 test('rejects missing files, unsafe resources and malformed or ambiguous records', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-invalid-'));
   const databasePath = join(directory, 'database.json');
 
   try {
-    await assert.rejects(() => createServer({ databasePath, logger: false }), /не найден/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, server: { logger: false } }), /не найден/);
 
     for (const data of [[], { items: {} }, { items: [null] }, { items: [{ name: 'Missing ID' }] }, { items: [{ id: true }] }, { items: [{ id: 1 }, { id: '1' }] }, { 'bad/name': [] }]) {
       await writeFile(databasePath, JSON.stringify(data));
-      await assert.rejects(() => createServer({ databasePath, logger: false }));
+      await assert.rejects(() => createServer({ database: { path: databasePath }, server: { logger: false } }));
     }
+
+    await assert.rejects(() => createServer({ database: { data: { items: [] }, path: databasePath } }), /ровно один/);
+    await assert.rejects(() => createServer({ database: { data: { items: [] } }, files: { data: [], directory: 'files', metadata: 'files.json' } }), /либо config\.files\.data/);
+    await assert.rejects(
+      () => createServer({ database: { data: { items: [] } }, files: { data: [{ content: 'invalid', id: '1', mimeType: 'text/plain', name: 'file.txt' }] } }),
+      /config\.files\.data/,
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
@@ -387,7 +434,14 @@ test('starts on an ephemeral port and validates server options', async () => {
   await writeFile(databasePath, JSON.stringify({ items: [{ id: '1', name: 'One' }] }));
 
   try {
-    const server = await startServer({ databasePath, filesDirectoryPath, filesMetadataPath, logger: false, port: 0 });
+    const serverFacade = await createServer({
+      database: { path: databasePath },
+      files: { directory: filesDirectoryPath, metadata: filesMetadataPath },
+      server: { host: '127.0.0.1', logger: false, port: 0 },
+    });
+    const server = serverFacade.fastify();
+
+    await server.listen();
     const address = server.server.address();
     const filePayload = Buffer.from([0, 1, 2, 255]);
     const uploadResponse = await fetch(`http://127.0.0.1:${address.port}/_files`, {
@@ -402,11 +456,11 @@ test('starts on an ephemeral port and validates server options', async () => {
     assert.equal(uploadResponse.status, 201);
     assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), filePayload);
     await server.close();
-    await assert.rejects(() => startServer({ databasePath, logger: false, port: -1 }), /Порт/);
-    await assert.rejects(() => createServer({ databasePath, logger: false, maxPageSize: 0 }), /Максимальный/);
-    await assert.rejects(() => createServer({ databasePath, logger: false, maxFileSize: 0 }), /Максимальный размер файла/);
-    await assert.rejects(() => createServer({ databasePath, filesDirectoryPath: '', filesMetadataPath, logger: false }), /директории файлов/);
-    await assert.rejects(() => createServer({ databasePath, filesDirectoryPath, logger: false }), /filesDirectoryPath и filesMetadataPath/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, server: { logger: false, port: -1 } }), /config\.server\.port/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, server: { logger: false, maxPageSize: 0 } }), /maxPageSize/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, server: { logger: false, maxFileSize: 0 } }), /maxFileSize/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, files: { directory: '', metadata: filesMetadataPath }, server: { logger: false } }), /config\.files\.directory/);
+    await assert.rejects(() => createServer({ database: { path: databasePath }, files: { directory: filesDirectoryPath }, server: { logger: false } }), /config\.files\.metadata/);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
