@@ -14,13 +14,16 @@ let configImportIndex = 0;
 /** @typedef {{ data: DatabaseData, path?: never, schema?: DatabaseSchema | string } | { data?: never, path: string, schema?: DatabaseSchema | string }} DatabaseConfig */
 /** @typedef {{ content: Uint8Array, id: string, mimeType: string, name: string }} MemoryFile */
 /** @typedef {{ data: MemoryFile[], directory?: never, metadata?: never } | { data?: never, directory: string, metadata: string }} FilesConfig */
+/** @typedef {{ path?: string }} OpenapiConfig */
+/** @typedef {{ host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number }} ServerConfig */
 /**
  * @typedef {object} DeepJsonServerConfig
  * @property {DatabaseConfig} database Database source and optional schema.
  * @property {FilesConfig} [files] Binary-file storage.
- * @property {{ path?: string }} [openapi] Generated OpenAPI file.
- * @property {{ host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number }} [server] Runtime settings.
+ * @property {OpenapiConfig} [openapi] Generated OpenAPI file.
+ * @property {ServerConfig} [server] Runtime settings.
  */
+/** @typedef {{ database: DatabaseConfig, files?: FilesConfig, openapi: OpenapiConfig, server: ServerConfig }} NormalizedServerConfig */
 
 const assertKnownKeys = (value, keys, path) => {
   const unknownKey = Object.keys(value).find((key) => !keys.has(key));
@@ -120,9 +123,10 @@ const normalizeFiles = (value, directoryPath) => {
 };
 
 /**
+ * Validates configuration and resolves relative paths.
  * @param {DeepJsonServerConfig} config Server configuration.
  * @param {string} [directoryPath] Base directory for relative paths.
- * @returns {{ database: DatabaseConfig, files?: FilesConfig, openapi: { path?: string }, server: { host?: string, logger?: boolean | Record<string, unknown>, maxFileSize?: number, maxPageSize?: number, port?: number } }} Normalized configuration.
+ * @returns {NormalizedServerConfig} Normalized configuration.
  */
 export const normalizeServerConfig = (config, directoryPath = '.') => {
   if (!isObject(config)) {
@@ -172,7 +176,11 @@ export const normalizeServerConfig = (config, directoryPath = '.') => {
   };
 };
 
-/** @param {string} configPath Configuration module path. */
+/**
+ * Loads an ES module config and resolves paths from its directory.
+ * @param {string} configPath Configuration module path.
+ * @returns {Promise<NormalizedServerConfig>} Normalized configuration.
+ */
 export async function readServerConfig(configPath) {
   const resolvedConfigPath = resolve(getString(configPath, 'config', true));
   let config;
@@ -180,6 +188,7 @@ export async function readServerConfig(configPath) {
   try {
     const configUrl = pathToFileURL(resolvedConfigPath);
 
+    // Bypass the module cache so repeated reads use the latest config.
     configUrl.searchParams.set('deep-json-server-import', String(configImportIndex++));
     config = (await import(configUrl.href)).default;
   } catch (error) {

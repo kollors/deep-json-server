@@ -73,10 +73,10 @@ export async function runCli(args = process.argv.slice(2), services = { createSe
   validateModeConfig(config, { files, openapiMode });
 
   const runtimeConfig = { ...config, server: { ...config.server, host, port } };
-  const server = await services.createServer(runtimeConfig, { files });
+  const serverFacade = await services.createServer(runtimeConfig, { files });
 
   if (openapiMode !== 'none') {
-    await server.openapi();
+    await serverFacade.openapi();
     process.stdout.write(`OpenAPI-схема сохранена в ${config.openapi.path}\n`);
   }
 
@@ -84,7 +84,7 @@ export async function runCli(args = process.argv.slice(2), services = { createSe
     return;
   }
 
-  const fastify = server.fastify();
+  const fastify = serverFacade.fastify();
 
   await fastify.listen({ host, port });
   fastify.log.info({ database: 'path' in config.database ? config.database.path : 'memory' }, 'Deep JSON Server запущен');

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import pluralize from 'pluralize';
 
@@ -9,6 +10,35 @@ export const createHttpError = (statusCode, message) => {
   error.statusCode = statusCode;
 
   return error;
+};
+
+/** @returns {<T>(operation: () => T | Promise<T>) => Promise<T>} Serialized operation scheduler. */
+export const createSerialQueue = () => {
+  let queue = Promise.resolve();
+
+  return (operation) => {
+    const pendingOperation = queue.then(operation);
+
+    // Keep the queue usable after a failed operation.
+    queue = pendingOperation.catch(() => undefined);
+
+    return pendingOperation;
+  };
+};
+
+/**
+ * Creates a random ID that is not currently in use.
+ * @param {(id: string) => boolean} isUsed Checks whether an ID already exists.
+ * @returns {string} Unique ID.
+ */
+export const createUniqueId = (isUsed) => {
+  let id;
+
+  do {
+    id = randomBytes(8).toString('base64url');
+  } while (isUsed(id));
+
+  return id;
 };
 
 export const getResourceNames = (data) => Object.keys(data);

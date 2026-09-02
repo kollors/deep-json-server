@@ -10,10 +10,19 @@ const isFilterEqual = (left, right) => {
   }
 
   if (typeof left === 'number' && typeof right === 'string' && NUMBER_PATTERN.test(right)) {
+    // Query parameters are strings, so numeric strings must match stored numbers.
     return left === Number(right);
   }
 
   return typeof right === 'number' && typeof left === 'string' && NUMBER_PATTERN.test(left) && right === Number(left);
+};
+
+const validateLogicalConditions = (operator, value) => {
+  if (!Array.isArray(value) || (operator === 'or' && value.length === 0) || value.some((condition) => !isObject(condition))) {
+    throw createHttpError(400, `Оператор «${operator}» должен содержать ${operator === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
+  }
+
+  return value;
 };
 
 const matchesOperator = (field, operator, expectedValue) => {
@@ -191,11 +200,7 @@ const validateCondition = (condition, samples, path) => {
 
   Object.entries(condition).forEach(([key, value]) => {
     if (key === 'and' || key === 'or') {
-      if (!Array.isArray(value) || (key === 'or' && value.length === 0) || value.some((nestedWhere) => !isObject(nestedWhere))) {
-        throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
-      }
-
-      value.forEach((nestedWhere) => {
+      validateLogicalConditions(key, value).forEach((nestedWhere) => {
         validateWhere(nestedWhere, samples, path);
       });
       return;
@@ -246,11 +251,7 @@ const validateCondition = (condition, samples, path) => {
 export const validateWhere = (where, items, path = '') => {
   Object.entries(where).forEach(([key, condition]) => {
     if (key === 'and' || key === 'or') {
-      if (!Array.isArray(condition) || (key === 'or' && condition.length === 0) || condition.some((nestedWhere) => !isObject(nestedWhere))) {
-        throw createHttpError(400, `Оператор «${key}» должен содержать ${key === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
-      }
-
-      condition.forEach((nestedWhere) => {
+      validateLogicalConditions(key, condition).forEach((nestedWhere) => {
         validateWhere(nestedWhere, items, path);
       });
       return;

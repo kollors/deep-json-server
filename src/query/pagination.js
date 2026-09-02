@@ -1,4 +1,4 @@
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
+import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
 import { createHttpError } from '../utils.js';
 
 const parsePositiveInteger = (value, name, defaultValue) => {
@@ -19,7 +19,7 @@ const parsePositiveInteger = (value, name, defaultValue) => {
   return number;
 };
 
-export const parsePagination = (query, maxPageSize = MAX_PAGE_SIZE) => {
+export const parsePagination = (query, maxPageSize = DEFAULT_MAX_PAGE_SIZE) => {
   const page = parsePositiveInteger(query._page, '_page', 1);
   const pageSize = parsePositiveInteger(query._perPage, '_perPage', DEFAULT_PAGE_SIZE);
 

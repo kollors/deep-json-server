@@ -4,17 +4,19 @@ import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises
 import { basename, dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createHttpError, isObject } from './utils.js';
+import { createHttpError, createSerialQueue, createUniqueId, isObject } from './utils.js';
 
-const createFileId = (files) => {
-  let id;
+/** @typedef {{ id: string, mimeType: string, name: string, size: number, url: string }} FileMetadata */
+/** @typedef {{ maxFileSize: number, mimeType: string, name: string, stream: Readable }} FileUpload */
+/**
+ * @typedef {object} FileStore
+ * @property {(id: string) => Promise<{ file: FileMetadata, stream: Readable }>} get Returns file metadata and contents.
+ * @property {(id: string) => Promise<FileMetadata>} remove Deletes a file.
+ * @property {(upload: FileUpload) => Promise<FileMetadata>} upload Stores a file.
+ */
 
-  do {
-    id = randomBytes(8).toString('base64url');
-  } while (files.some((file) => file.id === id));
-
-  return id;
-};
+const hasValidFileFields = (file) =>
+  isObject(file) && typeof file.id === 'string' && file.id !== '' && typeof file.mimeType === 'string' && file.mimeType !== '' && typeof file.name === 'string' && file.name !== '';
 
 const validateFileMetadata = (files, metadataPath) => {
   if (!Array.isArray(files)) {
@@ -24,18 +26,7 @@ const validateFileMetadata = (files, metadataPath) => {
   const ids = new Set();
 
   files.forEach((file, index) => {
-    if (
-      !isObject(file) ||
-      typeof file.id !== 'string' ||
-      file.id === '' ||
-      typeof file.mimeType !== 'string' ||
-      file.mimeType === '' ||
-      typeof file.name !== 'string' ||
-      file.name === '' ||
-      !Number.isInteger(file.size) ||
-      file.size < 0 ||
-      file.url !== `/_files/${file.id}`
-    ) {
+    if (!hasValidFileFields(file) || !Number.isInteger(file.size) || file.size < 0 || file.url !== `/_files/${file.id}`) {
       throw new Error(`Некорректная запись ${index} в файле метаданных ${metadataPath}`);
     }
 
@@ -65,6 +56,7 @@ const writeMetadata = async (metadataPath, files) => {
   const temporaryPath = `${metadataPath}.${randomBytes(6).toString('hex')}.tmp`;
 
   try {
+    // Atomic replacement prevents readers from seeing partially written JSON.
     await writeFile(temporaryPath, JSON.stringify(files, null, 2), { encoding: 'utf8', flag: 'wx' });
     await rename(temporaryPath, metadataPath);
   } catch (error) {
@@ -134,18 +126,10 @@ const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: s
 
   const directoryPath = resolve(sourceDirectoryPath);
   const metadataPath = resolve(sourceMetadataPath);
-  let operationQueue = Promise.resolve();
+  const schedule = createSerialQueue();
 
   await Promise.all([mkdir(directoryPath, { recursive: true }), mkdir(dirname(metadataPath), { recursive: true })]);
   await readMetadata(metadataPath);
-
-  const schedule = (operation) => {
-    const pendingOperation = operationQueue.then(operation);
-
-    operationQueue = pendingOperation.catch(() => undefined);
-
-    return pendingOperation;
-  };
 
   const get = (id) =>
     schedule(async () => {
@@ -174,7 +158,7 @@ const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: s
   const upload = ({ maxFileSize, mimeType, name, stream }) =>
     schedule(async () => {
       const files = await readMetadata(metadataPath);
-      const id = createFileId(files);
+      const id = createUniqueId((value) => files.some((file) => file.id === value));
       const path = join(directoryPath, id);
       const temporaryPath = `${path}.upload`;
       let size = 0;
@@ -225,6 +209,7 @@ const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: s
       try {
         await writeMetadata(metadataPath, files);
       } catch (error) {
+        // Restore the file when the metadata update cannot be committed.
         await rename(temporaryPath, path);
         throw error;
       }
@@ -240,16 +225,7 @@ const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: s
 const createMemoryFileStore = (sourceFiles) => {
   const ids = new Set();
   const storedFiles = sourceFiles.map((sourceFile, index) => {
-    if (
-      !isObject(sourceFile) ||
-      typeof sourceFile.id !== 'string' ||
-      sourceFile.id === '' ||
-      typeof sourceFile.mimeType !== 'string' ||
-      sourceFile.mimeType === '' ||
-      typeof sourceFile.name !== 'string' ||
-      sourceFile.name === '' ||
-      !(sourceFile.content instanceof Uint8Array)
-    ) {
+    if (!hasValidFileFields(sourceFile) || !(sourceFile.content instanceof Uint8Array)) {
       throw new Error(`Некорректная запись ${index} в config.files.data`);
     }
 
@@ -266,15 +242,7 @@ const createMemoryFileStore = (sourceFiles) => {
       file: { id: sourceFile.id, mimeType: sourceFile.mimeType, name: sourceFile.name, size: content.length, url: `/_files/${sourceFile.id}` },
     };
   });
-  let operationQueue = Promise.resolve();
-
-  const schedule = (operation) => {
-    const pendingOperation = operationQueue.then(operation);
-
-    operationQueue = pendingOperation.catch(() => undefined);
-
-    return pendingOperation;
-  };
+  const schedule = createSerialQueue();
 
   const get = (id) =>
     schedule(async () => {
@@ -304,7 +272,7 @@ const createMemoryFileStore = (sourceFiles) => {
         chunks.push(buffer);
       }
 
-      const id = createFileId(storedFiles.map(({ file }) => file));
+      const id = createUniqueId((value) => storedFiles.some(({ file }) => file.id === value));
       const file = { id, mimeType, name, size, url: `/_files/${id}` };
 
       storedFiles.push({ content: Buffer.concat(chunks), file });
@@ -326,13 +294,17 @@ const createMemoryFileStore = (sourceFiles) => {
   return { get, remove, upload };
 };
 
-/** @param {import('./config.js').FilesConfig} config File storage configuration. */
+/**
+ * Creates a disk- or memory-backed file store with serialized operations.
+ * @param {import('./config.js').FilesConfig} config File storage configuration.
+ * @returns {Promise<FileStore>} File store.
+ */
 export const createFileStore = async (config) => ('data' in config ? createMemoryFileStore(config.data) : createDiskFileStore(config));
 
 const getDownloadName = (name) => encodeURIComponent(basename(name)).replaceAll("'", '%27');
 
-export const registerFileRoutes = (server, { maxFileSize, store }) => {
-  server.register((fileServer, _options, done) => {
+export const registerFileRoutes = (fastify, { maxFileSize, store }) => {
+  fastify.register((fileServer, _options, done) => {
     fileServer.removeAllContentTypeParsers();
     fileServer.addContentTypeParser('*', (_request, payload, parserDone) => parserDone(null, payload));
 

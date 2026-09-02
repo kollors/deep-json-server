@@ -1,8 +1,16 @@
-import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { JSONFilePreset } from 'lowdb/node';
-import { createHttpError, isObject, isSafeKey, resolveDatabasePath } from './utils.js';
+import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey, resolveDatabasePath } from './utils.js';
+
+/** @typedef {{ data: import('./config.js').DatabaseData }} DatabaseContainer */
+/**
+ * @typedef {object} DatabaseStore
+ * @property {DatabaseContainer} database Current database container.
+ * @property {string} [path] Resolved database file path.
+ * @property {() => Promise<import('./config.js').DatabaseData>} read Returns current data and reloads disk-backed sources.
+ * @property {<T>(operation: (database: DatabaseContainer) => T) => Promise<T>} update Runs a serialized update.
+ */
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
@@ -76,7 +84,7 @@ const createDiskDatabaseStore = async (databasePath) => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = await readDatabaseFile(resolvedDatabasePath);
   const database = await JSONFilePreset(resolvedDatabasePath, initialData);
-  let writeQueue = Promise.resolve();
+  const schedule = createSerialQueue();
 
   const read = async () => {
     database.data = await readDatabaseFile(resolvedDatabasePath);
@@ -84,8 +92,8 @@ const createDiskDatabaseStore = async (databasePath) => {
     return database.data;
   };
 
-  const update = (operation) => {
-    const pendingOperation = writeQueue.then(async () => {
+  const update = (operation) =>
+    schedule(async () => {
       await read();
 
       const result = operation(database);
@@ -96,21 +104,16 @@ const createDiskDatabaseStore = async (databasePath) => {
       return result;
     });
 
-    writeQueue = pendingOperation.catch(() => undefined);
-
-    return pendingOperation;
-  };
-
   return { database, path: resolvedDatabasePath, read, update };
 };
 
 const createMemoryDatabaseStore = (sourceData) => {
   const database = { data: validateDatabase(structuredClone(sourceData)) };
-  let updateQueue = Promise.resolve();
+  const schedule = createSerialQueue();
 
   const read = async () => database.data;
-  const update = (operation) => {
-    const pendingOperation = updateQueue.then(() => {
+  const update = (operation) =>
+    schedule(() => {
       const draft = { data: structuredClone(database.data) };
       const result = operation(draft);
 
@@ -120,17 +123,13 @@ const createMemoryDatabaseStore = (sourceData) => {
       return result;
     });
 
-    updateQueue = pendingOperation.catch(() => undefined);
-
-    return pendingOperation;
-  };
-
   return { database, read, update };
 };
 
 /**
+ * Creates a disk- or memory-backed database with serialized updates.
  * @param {import('./config.js').DatabaseConfig} config Database source.
- * @returns {Promise<any>} Internal database store.
+ * @returns {Promise<DatabaseStore>} Database store.
  */
 export const createDatabaseStore = async (config) => ('data' in config ? createMemoryDatabaseStore(config.data) : createDiskDatabaseStore(config.path));
 
@@ -146,12 +145,4 @@ export const getCollection = (database, resource) => {
 
 export const findItem = (collection, id) => collection.find((item) => String(item.id) === String(id));
 
-export const createId = (collection) => {
-  let id;
-
-  do {
-    id = randomBytes(8).toString('base64url');
-  } while (findItem(collection, id) != null);
-
-  return id;
-};
+export const createId = (collection) => createUniqueId((id) => findItem(collection, id) != null);

@@ -15,6 +15,7 @@ export const resolveRelationResource = (resourceNames, relation, sourceResource)
 };
 
 export const getRelationMetadata = (key, resourceNames, sourceResource) => {
+  // Relation fields follow the <resource>Id and <resource>Ids conventions.
   const match = key.match(/^(.+)(Id|Ids)$/);
 
   if (match == null) {

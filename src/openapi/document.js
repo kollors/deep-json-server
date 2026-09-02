@@ -1,4 +1,4 @@
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants.js';
+import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
 import { validateDatabase } from '../database.js';
 import { getRelationMetadata } from '../relation-metadata.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
@@ -133,19 +133,32 @@ const createFilePaths = () => ({
   },
 });
 
-const createResourcePaths = (resource, componentName) => {
+const createResourceOperationIds = (resource) => {
   const resourceName = toPascalCase(resource);
+
+  return {
+    create: `post${resourceName}`,
+    get: `get${resourceName}ById`,
+    list: `get${resourceName}`,
+    remove: `delete${resourceName}ById`,
+    replace: `put${resourceName}ById`,
+    update: `patch${resourceName}ById`,
+  };
+};
+
+const createResourcePaths = (resource, componentName) => {
+  const operationIds = createResourceOperationIds(resource);
 
   return {
     [`/${resource}`]: {
       get: {
-        operationId: `get${resourceName}`,
+        operationId: operationIds.list,
         parameters: ['Page', 'PerPage', 'Sort', 'Where', 'Embed'].map(createParameterReference),
         responses: { 200: createResponse('Successful response', createSchemaReference(`${componentName}Page`)), 400: createResponse('Invalid query', createSchemaReference('Error')) },
         tags: [resource],
       },
       post: {
-        operationId: `post${resourceName}`,
+        operationId: operationIds.create,
         requestBody: createRequestBody(`${componentName}Create`),
         responses: { 201: createResponse('Created', createSchemaReference(componentName)), 400: createResponse('Invalid request', createSchemaReference('Error')) },
         tags: [resource],
@@ -153,13 +166,13 @@ const createResourcePaths = (resource, componentName) => {
     },
     [`/${resource}/{id}`]: {
       delete: {
-        operationId: `delete${resourceName}ById`,
+        operationId: operationIds.remove,
         parameters: [createParameterReference('Id')],
         responses: { 200: createResponse('Deleted', createSchemaReference(componentName)), 404: createResponse('Not found', createSchemaReference('Error')) },
         tags: [resource],
       },
       get: {
-        operationId: `get${resourceName}ById`,
+        operationId: operationIds.get,
         parameters: [createParameterReference('Id'), createParameterReference('Embed')],
         responses: {
           200: createResponse('Successful response', createSchemaReference(componentName)),
@@ -169,7 +182,7 @@ const createResourcePaths = (resource, componentName) => {
         tags: [resource],
       },
       patch: {
-        operationId: `patch${resourceName}ById`,
+        operationId: operationIds.update,
         parameters: [createParameterReference('Id')],
         requestBody: createRequestBody(`${componentName}Update`),
         responses: {
@@ -180,7 +193,7 @@ const createResourcePaths = (resource, componentName) => {
         tags: [resource],
       },
       put: {
-        operationId: `put${resourceName}ById`,
+        operationId: operationIds.replace,
         parameters: [createParameterReference('Id')],
         requestBody: createRequestBody(`${componentName}Create`),
         responses: {
@@ -192,12 +205,6 @@ const createResourcePaths = (resource, componentName) => {
       },
     },
   };
-};
-
-const getOperationIds = (resource) => {
-  const resourceName = toPascalCase(resource);
-
-  return [`get${resourceName}`, `post${resourceName}`, `delete${resourceName}ById`, `get${resourceName}ById`, `patch${resourceName}ById`, `put${resourceName}ById`];
 };
 
 const validateGeneratedNames = (resources, componentNames, files) => {
@@ -221,7 +228,7 @@ const validateGeneratedNames = (resources, componentNames, files) => {
       schemaOwners.set(schemaName, resource);
     });
 
-    getOperationIds(resource).forEach((operationId) => {
+    Object.values(createResourceOperationIds(resource)).forEach((operationId) => {
       const owner = operationOwners.get(operationId);
 
       if (owner != null) {
@@ -234,12 +241,12 @@ const validateGeneratedNames = (resources, componentNames, files) => {
 };
 
 /**
- * Builds an OpenAPI 3.0 document from resolved server data.
- * @param {{ database: Record<string, Array<Record<string, unknown>>>, files?: boolean, maxPageSize?: number, schema?: Record<string, unknown> }} options Document options.
+ * Builds an OpenAPI document without runtime server addresses.
+ * @param {{ database: Record<string, Array<Record<string, unknown>>>, files?: boolean, maxPageSize?: number, schema?: Record<string, unknown> }} options Source data and schema settings.
  * @returns {Record<string, unknown>} OpenAPI document.
  */
 export function buildOpenapiDocument(options) {
-  const { database, files = false, maxPageSize = MAX_PAGE_SIZE, schema: schemaConfig = {} } = options ?? {};
+  const { database, files = false, maxPageSize = DEFAULT_MAX_PAGE_SIZE, schema: schemaConfig = {} } = options ?? {};
 
   if (typeof files !== 'boolean') {
     throw new Error('Ключ files должен содержать boolean');

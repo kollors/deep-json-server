@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { normalizeServerConfig } from './config.js';
-import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT, MAX_PAGE_SIZE } from './constants.js';
+import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_PAGE_SIZE, DEFAULT_PORT } from './constants.js';
 import { createDatabaseStore, createId, findItem, getCollection } from './database.js';
 import { createFileStore, registerFileRoutes } from './files.js';
 import { resolveSchemaConfig } from './openapi/config.js';
@@ -11,6 +11,7 @@ import { embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
 import { createHttpError, getResourceNames, isObject } from './utils.js';
 
 /** @typedef {Record<string, unknown>} OpenapiDocument */
+/** @typedef {{ fastify: () => import('fastify').FastifyInstance, openapi: () => Promise<OpenapiDocument> }} ServerFacade */
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Name, Content-Type',
@@ -18,7 +19,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
 };
 
-const getRequestBody = (body) => {
+const getJsonObjectBody = (body) => {
   if (!isObject(body)) {
     throw createHttpError(400, 'Тело запроса должно быть JSON-объектом');
   }
@@ -28,7 +29,7 @@ const getRequestBody = (body) => {
 
 const getSchemaName = (reference) => reference.split('/').at(-1);
 
-const addRequestSchemas = (server, document, resources) => {
+const addRequestSchemas = (fastify, document, resources) => {
   const requestSchemaNames = new Set(
     resources.flatMap((resource) => {
       const resourcePath = document.paths[`/${resource}`];
@@ -39,17 +40,17 @@ const addRequestSchemas = (server, document, resources) => {
   );
 
   requestSchemaNames.forEach((schemaName) => {
-    server.addSchema({ $id: schemaName, ...document.components.schemas[schemaName] });
+    fastify.addSchema({ $id: schemaName, ...document.components.schemas[schemaName] });
   });
 };
 
-const registerResourceRoutes = (server, store, resource, document, maxPageSize) => {
+const registerResourceRoutes = (fastify, store, resource, document, maxPageSize) => {
   const resourcePath = `/${resource}`;
   const itemPath = `/${resource}/:id`;
   const createSchemaName = getSchemaName(document.paths[resourcePath].post.requestBody.content['application/json'].schema.$ref);
   const updateSchemaName = getSchemaName(document.paths[`/${resource}/{id}`].patch.requestBody.content['application/json'].schema.$ref);
 
-  server.get(resourcePath, async (request) => {
+  fastify.get(resourcePath, async (request) => {
     const collection = getCollection(store.database, resource);
     const where = parseWhere(request.query);
     const embedPaths = parseEmbedPaths(request.query._embed);
@@ -68,7 +69,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
     return paginateItems(sortedItems, pagination.page, pagination.pageSize);
   });
 
-  server.get(itemPath, async (request) => {
+  fastify.get(itemPath, async (request) => {
     const collection = getCollection(store.database, resource);
     const item = findItem(collection, request.params.id);
     const embedPaths = parseEmbedPaths(request.query._embed);
@@ -82,10 +83,10 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
     return embedItem(store.database, item, resource, embedPaths);
   });
 
-  server.post(resourcePath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request, reply) => {
+  fastify.post(resourcePath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request, reply) => {
     const item = await store.update((database) => {
       const collection = getCollection(database, resource);
-      const createdItem = { ...getRequestBody(request.body), id: createId(collection) };
+      const createdItem = { ...getJsonObjectBody(request.body), id: createId(collection) };
 
       collection.push(createdItem);
 
@@ -95,7 +96,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
     return reply.code(201).send(item);
   });
 
-  server.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) =>
+  fastify.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) =>
     store.update((database) => {
       const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
@@ -104,7 +105,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
         throw createHttpError(404, 'Запись не найдена');
       }
 
-      const item = { ...getRequestBody(request.body), id: currentItem.id };
+      const item = { ...getJsonObjectBody(request.body), id: currentItem.id };
 
       collection.splice(collection.indexOf(currentItem), 1, item);
 
@@ -112,7 +113,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
     }),
   );
 
-  server.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
+  fastify.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
     store.update((database) => {
       const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
@@ -121,7 +122,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
         throw createHttpError(404, 'Запись не найдена');
       }
 
-      const item = { ...currentItem, ...getRequestBody(request.body), id: currentItem.id };
+      const item = { ...currentItem, ...getJsonObjectBody(request.body), id: currentItem.id };
 
       collection.splice(collection.indexOf(currentItem), 1, item);
 
@@ -129,7 +130,7 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
     }),
   );
 
-  server.delete(itemPath, async (request) =>
+  fastify.delete(itemPath, async (request) =>
     store.update((database) => {
       const collection = getCollection(database, resource);
       const currentItem = findItem(collection, request.params.id);
@@ -146,21 +147,21 @@ const registerResourceRoutes = (server, store, resource, document, maxPageSize) 
 };
 
 /**
- * Creates a Deep JSON Server facade.
- * @param {import('./config.js').DeepJsonServerConfig} options Server options.
+ * Creates lazy Fastify and OpenAPI accessors from one configuration.
+ * @param {import('./config.js').DeepJsonServerConfig} config Server configuration.
  * @param {{ files?: boolean }} [features] Optional feature switches.
- * @returns {Promise<{ fastify: () => import('fastify').FastifyInstance, openapi: () => Promise<OpenapiDocument> }>} Server facade.
+ * @returns {Promise<ServerFacade>} Server facade.
  */
-export async function createServer(options, features = {}) {
-  const config = normalizeServerConfig(options);
-  const filesEnabled = features.files ?? config.files != null;
-  const { logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = MAX_PAGE_SIZE } = config.server;
-  const store = await createDatabaseStore(config.database);
-  const schema = await resolveSchemaConfig(config.database.schema);
-  const fileStore = filesEnabled && config.files != null ? await createFileStore(config.files) : undefined;
+export async function createServer(config, features = {}) {
+  const normalizedConfig = normalizeServerConfig(config);
+  const filesEnabled = features.files ?? normalizedConfig.files != null;
+  const { logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = DEFAULT_MAX_PAGE_SIZE } = normalizedConfig.server;
+  const store = await createDatabaseStore(normalizedConfig.database);
+  const schema = await resolveSchemaConfig(normalizedConfig.database.schema);
+  const fileStore = filesEnabled && normalizedConfig.files != null ? await createFileStore(normalizedConfig.files) : undefined;
   let fastifyInstance;
 
-  if (filesEnabled && config.files == null) {
+  if (filesEnabled && normalizedConfig.files == null) {
     throw new Error('Для файловых маршрутов укажите секцию config.files');
   }
 
@@ -172,45 +173,46 @@ export async function createServer(options, features = {}) {
       schema,
     });
 
-  const fastify = () => {
+  const getFastify = () => {
     if (fastifyInstance != null) {
       return fastifyInstance;
     }
 
     const document = buildDocument();
     const resources = getResourceNames(store.database.data);
-    const server = Fastify({ logger });
-    const listen = server.listen.bind(server);
+    const fastify = Fastify({ logger });
+    const originalListen = fastify.listen.bind(fastify);
 
-    server.listen = (...args) => listen(...(args.length === 0 ? [{ host: config.server.host ?? DEFAULT_HOST, port: config.server.port ?? DEFAULT_PORT }] : args));
+    // Calling fastify().listen() without arguments uses config defaults.
+    fastify.listen = (...args) => originalListen(...(args.length === 0 ? [{ host: normalizedConfig.server.host ?? DEFAULT_HOST, port: normalizedConfig.server.port ?? DEFAULT_PORT }] : args));
 
-    addRequestSchemas(server, document, resources);
+    addRequestSchemas(fastify, document, resources);
 
-    server.addHook('onRequest', async (_request, reply) => {
+    fastify.addHook('onRequest', async (_request, reply) => {
       Object.entries(CORS_HEADERS).forEach(([header, value]) => {
         reply.header(header, value);
       });
     });
 
-    server.addHook('preHandler', async (request) => {
+    fastify.addHook('preHandler', async (request) => {
       if (request.method === 'GET') {
         await store.read();
       }
     });
 
-    server.options('/', async (_request, reply) => reply.code(204).send());
-    server.options('/*', async (_request, reply) => reply.code(204).send());
-    server.get('/', async () => ({ resources }));
+    fastify.options('/', async (_request, reply) => reply.code(204).send());
+    fastify.options('/*', async (_request, reply) => reply.code(204).send());
+    fastify.get('/', async () => ({ resources }));
 
     resources.forEach((resource) => {
-      registerResourceRoutes(server, store, resource, document, maxPageSize);
+      registerResourceRoutes(fastify, store, resource, document, maxPageSize);
     });
 
     if (fileStore != null) {
-      registerFileRoutes(server, { maxFileSize, store: fileStore });
+      registerFileRoutes(fastify, { maxFileSize, store: fileStore });
     }
 
-    server.setErrorHandler((error, request, reply) => {
+    fastify.setErrorHandler((error, request, reply) => {
       const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
 
       if (statusCode === 500) {
@@ -220,7 +222,7 @@ export async function createServer(options, features = {}) {
       return reply.code(statusCode).send({ error: error.message });
     });
 
-    fastifyInstance = server;
+    fastifyInstance = fastify;
 
     return fastifyInstance;
   };
@@ -231,18 +233,18 @@ export async function createServer(options, features = {}) {
     const document = createOpenapi({
       database: store.database.data,
       files: filesEnabled,
-      host: config.server.host,
+      host: normalizedConfig.server.host,
       maxPageSize,
-      port: config.server.port,
+      port: normalizedConfig.server.port,
       schema,
     });
 
-    if (config.openapi.path != null) {
-      await writeOpenapi(document, config.openapi.path);
+    if (normalizedConfig.openapi.path != null) {
+      await writeOpenapi(document, normalizedConfig.openapi.path);
     }
 
     return document;
   };
 
-  return { fastify, openapi };
+  return { fastify: getFastify, openapi };
 }
