@@ -14,10 +14,52 @@ import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
+const validateJsonValue = (value, path, ancestors = new WeakSet()) => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${path} должен содержать конечное число`);
+    }
+
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    throw new Error(`${path} содержит значение, несовместимое с JSON`);
+  }
+
+  if (ancestors.has(value)) {
+    throw new Error(`${path} содержит циклическую ссылку`);
+  }
+
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+    throw new Error(`${path} должен содержать обычный JSON-объект`);
+  }
+
+  ancestors.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      validateJsonValue(item, `${path}[${index}]`, ancestors);
+    });
+  } else {
+    Object.entries(value).forEach(([key, item]) => {
+      validateJsonValue(item, `${path}.${key}`, ancestors);
+    });
+  }
+
+  ancestors.delete(value);
+};
+
 export const validateDatabase = (data) => {
   if (!isObject(data)) {
     throw new Error('База данных должна содержать JSON-объект');
   }
+
+  validateJsonValue(data, 'База данных');
 
   Object.entries(data).forEach(([resource, records]) => {
     if (!RESOURCE_NAME_PATTERN.test(resource) || !isSafeKey(resource)) {
@@ -56,7 +98,7 @@ export const validateDatabase = (data) => {
   return data;
 };
 
-export const readJsonObject = async (path, label) => {
+export const readJsonObjectFile = async (path, label) => {
   let source;
 
   try {
@@ -78,7 +120,7 @@ export const readJsonObject = async (path, label) => {
   return value;
 };
 
-export const readDatabaseFile = async (databasePath) => validateDatabase(await readJsonObject(databasePath, 'Файл базы данных'));
+export const readDatabaseFile = async (databasePath) => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'));
 
 const createDiskDatabaseStore = async (databasePath) => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
@@ -108,7 +150,9 @@ const createDiskDatabaseStore = async (databasePath) => {
 };
 
 const createMemoryDatabaseStore = (sourceData) => {
-  const database = { data: validateDatabase(structuredClone(sourceData)) };
+  validateDatabase(sourceData);
+
+  const database = { data: structuredClone(sourceData) };
   const schedule = createSerialQueue();
 
   const read = async () => database.data;

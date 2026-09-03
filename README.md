@@ -219,7 +219,7 @@ DELETE /movies/:id
 
 `POST` generates a string ID. `PUT` completely replaces the selected record, while `PATCH` updates only supplied fields; both preserve the existing ID and its type. An `id` supplied in any request body cannot override the server-controlled ID. All write operations — `POST`, `PUT`, `PATCH` and `DELETE` — are serialized; disk storage persists them in JSON, while memory storage retains them until the process exits.
 
-The database file must exist before startup. Resource names may contain Latin letters, numbers, `_` and `-`, and must start with a letter. Every resource is an array of JSON objects. Every record must have a non-empty string or finite numeric `id`; IDs must be unique within a resource when compared as strings, so `1` and `"1"` cannot coexist. The server rereads the file before every GET and write operation, so valid external edits become visible without a restart.
+The database file must exist before startup. Resource names may contain Latin letters, numbers, `_` and `-`, and must start with a letter. Every resource is an array of JSON objects. Every record must have a non-empty string or finite numeric `id`; IDs must be unique within a resource when compared as strings, so `1` and `"1"` cannot coexist. All nested values must be JSON-compatible: finite numbers, strings, booleans, `null`, arrays, and plain objects. The server rereads the file before every resource GET and write operation, so valid edits to existing resources become visible immediately. Resource names and routes are discovered at startup; restart the server after adding, removing, or renaming a top-level resource.
 
 Successful writes return the created, replaced, updated or deleted record. Errors use an appropriate HTTP status and this JSON shape:
 
@@ -405,7 +405,7 @@ Content-Type: application/json
 
 `PATCH` returns the updated metadata with status `200`; a conflicting destination returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the mock-server origin.
 
-In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically. The metadata file may be absent initially and is created on the first upload. Do not edit stored files or metadata while the server is running. Metadata created by versions before this path-based API is not compatible with the new format.
+In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Do not edit stored files or metadata until the server stops. Paths below `files.directory` may not contain symbolic links, so a configured relative path cannot escape the storage directory. The metadata file may be absent initially and is created on the first upload. Metadata created by versions before this path-based API is not compatible with the new format.
 
 The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
@@ -493,7 +493,7 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 }
 ```
 
-The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
+The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints with their actual arbitrary media types. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. Generation rejects duplicate schema names, operation IDs, and invalid schema overrides before producing a document. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
 
 During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed. Invalid bodies return `400`.
 
@@ -565,8 +565,8 @@ await memoryFastify.close();
 
 `createServer()` accepts exactly the same config shape as `server.config.js`. It loads and clones the configured sources, then returns a facade with two operations:
 
-| Member | Meaning |
-| --- | --- | --- |
+| Method | Purpose |
+| --- | --- |
 | `server.fastify()` | Lazily creates and caches the real Fastify instance; every native method remains available, and argument-less `listen()` uses `server.host` and `server.port` |
 | `server.openapi()` | Returns an OpenAPI document and also writes it when `openapi.path` is configured |
 

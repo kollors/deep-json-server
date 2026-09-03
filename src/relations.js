@@ -77,7 +77,9 @@ const findRelatedValue = (database, item, sourceResource, relation, targetResour
   return targetItems.filter((targetItem) => hasReference(targetItem, reverseRelationKeys, item.id));
 };
 
-const embedPath = (database, item, sourceResource, [relation, ...nestedRelations], indexes) => {
+const embedPath = (database, item, sourceResource, relations, indexes) => {
+  const [relation, ...nestedRelations] = relations;
+
   if (relation == null || !isSafeKey(relation)) {
     return item;
   }
@@ -150,7 +152,8 @@ const getNestedSamples = (samples, relation) =>
     return toArray(sample[relation]).filter(isObject);
   });
 
-const validateEmbedPath = (database, sourceResource, samples, [relation, ...nestedRelations], path = '') => {
+const validateEmbedPath = (database, sourceResource, samples, relations, path = '') => {
+  const [relation, ...nestedRelations] = relations;
   const relationPath = path === '' ? relation : `${path}.${relation}`;
   const targetResource = resolveRelationResource(getResourceNames(database.data), relation, sourceResource);
   const nestedSamples = targetResource == null ? getNestedSamples(samples, relation) : database.data[targetResource];

@@ -1,10 +1,30 @@
-import { readJsonObject } from '../database.js';
+import { readJsonObjectFile } from '../database.js';
 import { isObject } from '../utils.js';
 import { applyRequiredFields, getSchemasAtPath, updateSchemasAtPath } from './inference.js';
+
+const SCHEMA_CONFIG_KEYS = new Set(['$info', '$schema']);
+const RESOURCE_CONFIG_KEYS = new Set(['formats', 'name', 'properties', 'required']);
+const OPENAPI_TYPES = new Set(['array', 'boolean', 'integer', 'number', 'object', 'string']);
+
+const assertKnownKeys = (value, keys, path) => {
+  const unknownKey = Object.keys(value).find((key) => !keys.has(key));
+
+  if (unknownKey != null) {
+    throw new Error(`Неизвестный ключ ${path}.${unknownKey}`);
+  }
+};
 
 const validateSchemaOverride = (schema, path) => {
   if (!isObject(schema)) {
     throw new Error(`OpenAPI-схема свойства «${path}» должна содержать JSON-объект`);
+  }
+
+  if (schema.type != null && (typeof schema.type !== 'string' || !OPENAPI_TYPES.has(schema.type))) {
+    throw new Error(`type свойства «${path}» должен содержать поддерживаемый тип OpenAPI`);
+  }
+
+  if (schema.required != null && (!Array.isArray(schema.required) || schema.required.some((key) => typeof key !== 'string' || key === ''))) {
+    throw new Error(`required свойства «${path}» должен содержать массив непустых строк`);
   }
 
   if (schema.properties != null) {
@@ -21,18 +41,30 @@ const validateSchemaOverride = (schema, path) => {
     validateSchemaOverride(schema.items, `${path}[]`);
   }
 
-  if (schema.oneOf != null) {
-    if (!Array.isArray(schema.oneOf) || schema.oneOf.length === 0) {
-      throw new Error(`oneOf свойства «${path}» должен содержать непустой массив`);
-    }
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    if (schema[keyword] != null) {
+      if (!Array.isArray(schema[keyword]) || schema[keyword].length === 0) {
+        throw new Error(`${keyword} свойства «${path}» должен содержать непустой массив`);
+      }
 
-    schema.oneOf.forEach((value, index) => {
-      validateSchemaOverride(value, `${path}.oneOf[${index}]`);
-    });
+      schema[keyword].forEach((value, index) => {
+        validateSchemaOverride(value, `${path}.${keyword}[${index}]`);
+      });
+    }
+  }
+
+  if (schema.not != null) {
+    validateSchemaOverride(schema.not, `${path}.not`);
+  }
+
+  if (schema.additionalProperties != null && typeof schema.additionalProperties !== 'boolean') {
+    validateSchemaOverride(schema.additionalProperties, `${path}.additionalProperties`);
   }
 };
 
 export const validateSchemaConfig = (schemaConfig, resources) => {
+  assertKnownKeys(schemaConfig, SCHEMA_CONFIG_KEYS, 'schema');
+
   if (
     Object.hasOwn(schemaConfig, '$info') &&
     (!isObject(schemaConfig.$info) || !['title', 'version'].every((key) => typeof schemaConfig.$info[key] === 'string' && schemaConfig.$info[key].trim() !== ''))
@@ -54,6 +86,8 @@ export const validateSchemaConfig = (schemaConfig, resources) => {
     if (!isObject(resourceConfig)) {
       throw new Error(`Настройки ресурса «${resource}» должны содержать JSON-объект`);
     }
+
+    assertKnownKeys(resourceConfig, RESOURCE_CONFIG_KEYS, `$schema.${resource}`);
 
     if (resourceConfig.name != null && (typeof resourceConfig.name !== 'string' || resourceConfig.name.trim() === '')) {
       throw new Error(`$schema.${resource}.name должен содержать непустую строку`);
@@ -113,7 +147,7 @@ export const resolveSchemaConfig = async (schema) => {
   }
 
   if (typeof schema === 'string') {
-    return readJsonObject(schema, 'Файл схемы базы данных');
+    return readJsonObjectFile(schema, 'Файл схемы базы данных');
   }
 
   if (!isObject(schema)) {

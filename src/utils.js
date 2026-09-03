@@ -4,13 +4,7 @@ import pluralize from 'pluralize';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-export const createHttpError = (statusCode, message) => {
-  const error = new Error(message);
-
-  error.statusCode = statusCode;
-
-  return error;
-};
+export const createHttpError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 
 /** @returns {<T>(operation: () => T | Promise<T>) => Promise<T>} Serialized operation scheduler. */
 export const createSerialQueue = () => {
@@ -44,6 +38,11 @@ export const createUniqueId = (isUsed) => {
 export const getResourceNames = (data) => Object.keys(data);
 export const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isSafeKey = (key) => !UNSAFE_KEYS.has(key);
+/**
+ * @template T
+ * @param {T | T[]} value A single value or an array.
+ * @returns {T[]} The value represented as an array.
+ */
 export const toArray = (value) => (Array.isArray(value) ? value : [value]);
 
 export const isEqual = (left, right) => {

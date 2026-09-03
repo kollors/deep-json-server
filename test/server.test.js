@@ -514,6 +514,18 @@ test('rejects missing files, unsafe resources and malformed or ambiguous records
   }
 });
 
+test('rejects values that cannot be represented in JSON', async () => {
+  const cyclicRecord = { id: '1' };
+
+  cyclicRecord.self = cyclicRecord;
+
+  for (const value of [1n, undefined, () => undefined, Symbol('value'), Number.NaN, Number.POSITIVE_INFINITY, new Date(), cyclicRecord]) {
+    const data = value === cyclicRecord ? { items: [value] } : { items: [{ id: '1', value }] };
+
+    await assert.rejects(() => createServer({ database: { data }, server: { logger: false } }), /JSON|конечное число|обычный JSON-объект|циклическую ссылку/);
+  }
+});
+
 test('starts on an ephemeral port and validates server options', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-listen-'));
   const databasePath = join(directory, 'database.json');

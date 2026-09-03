@@ -1,5 +1,6 @@
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
 import { validateDatabase } from '../database.js';
+import { FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/contract.js';
 import { getRelationMetadata } from '../relation-metadata.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
 import { applyConfiguredFields, validateSchemaConfig } from './config.js';
@@ -89,7 +90,7 @@ const createParameters = (maxPageSize) => ({
   ContentName: { description: 'URI-encoded file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
   ContentOverride: { description: 'Overwrite an existing file at the same path', in: 'header', name: 'Content-Override', schema: { default: false, type: 'boolean' } },
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
-  FilePath: { allowReserved: true, description: 'URI-encoded file path relative to the storage directory', in: 'path', name: 'path', required: true, schema: { type: 'string' } },
+  FilePath: { description: 'Percent-encoded file path relative to the storage directory', in: 'path', name: 'path', required: true, schema: { type: 'string' } },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
   PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: maxPageSize, minimum: 1, type: 'integer' } },
@@ -108,7 +109,7 @@ const createFilePaths = () => ({
       operationId: 'downloadFile',
       parameters: [createParameterReference('FilePath')],
       responses: {
-        200: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, description: 'File download' },
+        200: { content: { '*/*': { schema: { format: 'binary', type: 'string' } } }, description: 'File download' },
         400: createResponse('Invalid path', createSchemaReference('Error')),
         404: createResponse('Not found', createSchemaReference('Error')),
       },
@@ -131,7 +132,7 @@ const createFilePaths = () => ({
     post: {
       operationId: 'uploadFile',
       parameters: ['ContentName', 'ContentDirectory', 'ContentOverride'].map(createParameterReference),
-      requestBody: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, required: true },
+      requestBody: { content: { '*/*': { schema: { format: 'binary', type: 'string' } } }, required: true },
       responses: {
         200: createResponse('Overwritten', createSchemaReference('FileMetadata')),
         201: createResponse('Created', createSchemaReference('FileMetadata')),
@@ -158,7 +159,7 @@ const createFilePaths = () => ({
       operationId: 'getFileContent',
       parameters: [createParameterReference('FilePath')],
       responses: {
-        200: { content: { 'application/octet-stream': { schema: { format: 'binary', type: 'string' } } }, description: 'File contents' },
+        200: { content: { '*/*': { schema: { format: 'binary', type: 'string' } } }, description: 'File contents' },
         400: createResponse('Invalid path', createSchemaReference('Error')),
         404: createResponse('Not found', createSchemaReference('Error')),
       },
@@ -256,17 +257,17 @@ const createResourcePaths = (resource, componentName) => {
 };
 
 const validateGeneratedNames = (resources, componentNames, files) => {
-  const schemaOwners = new Map([
-    ['Error', 'встроенная схема ошибки'],
-    ...(files
-      ? [
-          ['FileMetadata', 'встроенная схема метаданных файла'],
-          ['FileUpdate', 'встроенная схема изменения файла'],
-        ]
-      : []),
-  ]);
-  const operationOwners = new Map();
-
+  const schemaOwners = new Map(
+    /** @type {Array<[string, string]>} */ ([
+      ['Error', 'встроенная схема ошибки'],
+      ...(files
+        ? [
+            ['FileMetadata', 'встроенная схема метаданных файла'],
+            ['FileUpdate', 'встроенная схема изменения файла'],
+          ]
+        : []),
+    ]),
+  );
   resources.forEach((resource) => {
     const componentName = componentNames[resource];
 
@@ -283,15 +284,25 @@ const validateGeneratedNames = (resources, componentNames, files) => {
 
       schemaOwners.set(schemaName, resource);
     });
+  });
+};
 
-    Object.values(createResourceOperationIds(resource)).forEach((operationId) => {
-      const owner = operationOwners.get(operationId);
+const validateOperationIds = (paths) => {
+  const operationOwners = new Map();
 
-      if (owner != null) {
-        throw new Error(`operationId «${operationId}» используется ресурсами «${owner}» и «${resource}». Переименуйте один из ресурсов`);
+  Object.entries(paths).forEach(([path, pathItem]) => {
+    Object.entries(pathItem).forEach(([method, operation]) => {
+      if (!isObject(operation) || typeof operation.operationId !== 'string') {
+        return;
       }
 
-      operationOwners.set(operationId, resource);
+      const owner = operationOwners.get(operation.operationId);
+
+      if (owner != null) {
+        throw new Error(`operationId «${operation.operationId}» используется операциями «${owner}» и «${method.toUpperCase()} ${path}»`);
+      }
+
+      operationOwners.set(operation.operationId, `${method.toUpperCase()} ${path}`);
     });
   });
 };
@@ -343,25 +354,8 @@ export function buildOpenapiDocument(options) {
   const schemas = {
     Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' },
     ...(files && {
-      FileMetadata: {
-        properties: {
-          directory: { type: 'string' },
-          downloadUrl: { type: 'string' },
-          metadataUrl: { type: 'string' },
-          mimeType: { type: 'string' },
-          name: { type: 'string' },
-          size: { minimum: 0, type: 'integer' },
-          url: { type: 'string' },
-        },
-        required: ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url'],
-        type: 'object',
-      },
-      FileUpdate: {
-        additionalProperties: false,
-        anyOf: [{ required: ['directory'] }, { required: ['name'] }],
-        properties: { directory: { type: 'string' }, name: { type: 'string' } },
-        type: 'object',
-      },
+      FileMetadata: FILE_METADATA_SCHEMA,
+      FileUpdate: FILE_UPDATE_SCHEMA,
     }),
   };
 
@@ -384,11 +378,15 @@ export function buildOpenapiDocument(options) {
 
   addReverseRelations(schemas, rawSchemas, resources, componentNames);
 
+  const paths = Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {});
+
+  validateOperationIds(paths);
+
   return {
     components: { parameters: createParameters(maxPageSize), schemas },
     info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
-    paths: Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {}),
-    tags: [...resources.map((resource) => ({ name: resource })), ...(files ? [{ name: 'files' }] : [])],
+    paths,
+    tags: [...new Set([...resources, ...(files ? ['files'] : [])])].map((name) => ({ name })),
   };
 }

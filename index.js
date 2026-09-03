@@ -4,8 +4,8 @@
 /** @typedef {import('./src/config.js').MemoryFile} MemoryFile */
 /** @typedef {import('./src/config.js').OpenapiConfig} OpenapiConfig */
 /** @typedef {import('./src/config.js').ServerConfig} ServerConfig */
-/** @typedef {import('./src/files.js').FileMetadata} FileMetadata */
-/** @typedef {import('./src/files.js').FileUpdate} FileUpdate */
+/** @typedef {import('./src/files/contract.js').FileMetadata} FileMetadata */
+/** @typedef {import('./src/files/contract.js').FileUpdate} FileUpdate */
 /** @typedef {import('./src/server.js').OpenapiDocument} OpenapiDocument */
 /** @typedef {import('./src/server.js').ServerFacade} ServerFacade */
 

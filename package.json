@@ -23,15 +23,16 @@
     "README.ru.md"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check bin/deep-json-server.js && node --check src/*.js && node --check src/openapi/*.js && node --check src/query/*.js",
+    "check": "node --check index.js && node --check bin/deep-json-server.js && node --check src/*.js && node --check src/files/*.js && node --check src/openapi/*.js && node --check src/query/*.js",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepack": "npm run types",
     "prepublishOnly": "npm run verify",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90",
+    "typecheck": "tsc -p tsconfig.check.json",
     "types": "tsc -p tsconfig.types.json",
-    "verify": "npm run check && npm run lint && npm run test:coverage && npm run types"
+    "verify": "npm run check && npm run lint && npm run typecheck && npm run test:coverage && npm run types"
   },
   "engines": {
     "node": ">=20"
@@ -72,6 +73,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
+    "@types/node": "^24.10.0",
+    "@types/pluralize": "^0.0.33",
     "typescript": "^7.0.2"
   }
 }

@@ -86,10 +86,10 @@ const normalizeDatabase = (value, directoryPath) => {
   const schema = normalizeSchema(database.schema, directoryPath);
 
   if (hasData) {
-    return { data: getObject(database.data, 'config.database.data', true), schema };
+    return /** @type {DatabaseConfig} */ ({ data: getObject(database.data, 'config.database.data', true), schema });
   }
 
-  return { path: resolveConfigPath(getString(database.path, 'config.database.path', true), directoryPath), schema };
+  return /** @type {DatabaseConfig} */ ({ path: resolveConfigPath(getString(database.path, 'config.database.path', true), directoryPath), schema });
 };
 
 const normalizeFiles = (value, directoryPath) => {
@@ -113,13 +113,13 @@ const normalizeFiles = (value, directoryPath) => {
       throw new Error('Ключ config.files.data должен содержать массив');
     }
 
-    return { data: files.data };
+    return /** @type {FilesConfig} */ ({ data: files.data });
   }
 
-  return {
+  return /** @type {FilesConfig} */ ({
     directory: resolveConfigPath(getString(files.directory, 'config.files.directory', true), directoryPath),
     metadata: resolveConfigPath(getString(files.metadata, 'config.files.metadata', true), directoryPath),
-  };
+  });
 };
 
 /**

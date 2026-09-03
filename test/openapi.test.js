@@ -96,9 +96,9 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
     assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
     assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
-    assert.equal(document.paths['/_files/storage'].post.requestBody.content['application/octet-stream'].schema.format, 'binary');
+    assert.equal(document.paths['/_files/storage'].post.requestBody.content['*/*'].schema.format, 'binary');
     assert.equal(document.paths['/_files/storage/{path}'].get.operationId, 'getFileContent');
-    assert.equal(document.paths['/_files/storage/{path}'].get.responses[200].content['application/octet-stream'].schema.format, 'binary');
+    assert.equal(document.paths['/_files/storage/{path}'].get.responses[200].content['*/*'].schema.format, 'binary');
     assert.equal(document.paths['/_files/storage/{path}'].patch.operationId, 'updateFile');
     assert.equal(document.paths['/_files/storage/{path}'].delete.responses[204].description, 'Deleted');
     assert.equal(document.paths['/_files/metadata/{path}'].get.operationId, 'getFileMetadata');
@@ -108,6 +108,7 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.components.parameters.ContentDirectory.name, 'Content-Directory');
     assert.equal(document.components.parameters.ContentName.name, 'Content-Name');
     assert.equal(document.components.parameters.ContentOverride.name, 'Content-Override');
+    assert.equal(document.components.parameters.FilePath.allowReserved, undefined);
   });
 });
 
@@ -173,6 +174,9 @@ test('validates database contents and schema configuration', () => {
   assert.throws(() => createDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { require: ['name'] } } }), /require/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: { value: { type: 'invalid' } } } } }), /поддерживаемый тип/);
+  assert.throws(() => createDocument({ items: [] }, { unknown: true }), /schema\.unknown/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
   assert.throws(() => createDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
   assert.throws(() => buildOpenapiDocument({ database: { items: [] }, files: 'true' }), /Ключ files/);
@@ -182,6 +186,11 @@ test('rejects colliding component names and operation IDs', () => {
   assert.throws(() => createDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
   assert.throws(() => createDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
   assert.throws(() => createDocument({ files: [] }, { $schema: { files: { name: 'FileMetadata' } } }, { files: true }), /имя OpenAPI-схемы/i);
+  assert.throws(() => createDocument({ 'file-content': [] }, undefined, { files: true }), /operationId.*getFileContent/);
+
+  const document = createDocument({ files: [] }, { $schema: { files: { name: 'StoredFile' } } }, { files: true });
+
+  assert.equal(document.tags.filter(({ name }) => name === 'files').length, 1);
 });
 
 test('keeps runtime server address outside an in-memory document', () => {
