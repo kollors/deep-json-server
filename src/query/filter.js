@@ -137,9 +137,7 @@ const parseFilterKey = (key) => {
     return { operator, path };
   }
 
-  const legacyOperator = key.match(/^(.*)_([a-zA-Z]+)$/);
-
-  return legacyOperator?.[1] != null && legacyOperator[2] != null && FIELD_OPERATORS.has(legacyOperator[2]) ? { operator: legacyOperator[2], path: legacyOperator[1] } : { operator: 'eq', path: key };
+  return { operator: 'eq', path: key };
 };
 
 const setWhereOperator = (where, path, operator, value) => {
@@ -165,17 +163,19 @@ export const parseWhere = (query) => {
   const rawWhere = toArray(query._where).at(-1);
 
   if (rawWhere != null) {
+    let where;
+
     try {
-      const where = JSON.parse(rawWhere);
-
-      if (!isObject(where)) {
-        throw new Error();
-      }
-
-      return where;
+      where = JSON.parse(rawWhere);
     } catch {
       throw createHttpError(400, 'Параметр _where должен содержать JSON-объект');
     }
+
+    if (!isObject(where)) {
+      throw createHttpError(400, 'Параметр _where должен содержать JSON-объект');
+    }
+
+    return where;
   }
 
   const where = {};

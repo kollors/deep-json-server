@@ -16,6 +16,7 @@ import { createHttpError, isObject } from '../utils.js';
  */
 
 export const PATCH_BODY_LIMIT = 64 * 1024;
+const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+\/[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 
 export const FILE_METADATA_SCHEMA = {
   properties: {
@@ -68,9 +69,8 @@ export const validateDirectory = (value, source) => {
 
 export const normalizeMimeType = (value, source = 'Заголовок Content-Type') => {
   const mimeType = typeof value === 'string' ? value.split(';', 1)[0].trim().toLowerCase() : '';
-  const token = "[A-Za-z0-9!#$%&'*+.^_`|~-]+";
 
-  if (mimeType === '' || !new RegExp(`^${token}/${token}$`).test(mimeType)) {
+  if (mimeType === '' || !MIME_TYPE_PATTERN.test(mimeType)) {
     throw createHttpError(400, `${source} должен содержать корректный MIME-тип`);
   }
 

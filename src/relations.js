@@ -35,15 +35,7 @@ const hasReference = (value, relationKeys, id) => {
 
 const getResourceIndex = (database, resource, indexes) => {
   if (!indexes.has(resource)) {
-    const index = new Map();
-
-    database.data[resource].forEach((item) => {
-      if (isObject(item) && item.id != null && !index.has(item.id)) {
-        index.set(String(item.id), item);
-      }
-    });
-
-    indexes.set(resource, index);
+    indexes.set(resource, new Map(database.data[resource].map((item) => [String(item.id), item])));
   }
 
   return indexes.get(resource);
@@ -52,10 +44,6 @@ const getResourceIndex = (database, resource, indexes) => {
 const findRelatedValue = (database, item, sourceResource, relation, targetResource, indexes) => {
   const targetItems = database.data[targetResource];
   const localRelation = findLocalRelation(item, relation, targetResource);
-
-  if (!Array.isArray(targetItems)) {
-    return undefined;
-  }
 
   if (localRelation != null) {
     const targetIndex = getResourceIndex(database, targetResource, indexes);

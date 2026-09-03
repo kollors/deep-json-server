@@ -68,8 +68,9 @@ test('starts from config and enables files only with --files', async () => {
       [{ files: false }, { files: true }],
     );
     assert.deepEqual(calls[0].config.database, { path: fixture.databasePath, schema: fixture.schemaPath });
+    assert.deepEqual(calls[0].config.server, fixture.config.server);
     assert.equal(calls[0].fastifyCalls, 1);
-    assert.deepEqual(calls[0].listenOptions, { host: 'localhost', port: 5000 });
+    assert.equal(calls[0].listenOptions, undefined);
     assert.equal(calls[1].config.files.directory, fixture.filesDirectoryPath);
     assert.equal(calls[1].config.files.metadata, fixture.filesMetadataPath);
   } finally {

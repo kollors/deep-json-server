@@ -35,7 +35,9 @@ const validateJsonValue = (value, path, ancestors = new WeakSet()) => {
     throw new Error(`${path} содержит циклическую ссылку`);
   }
 
-  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+  const prototype = Object.getPrototypeOf(value);
+
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
     throw new Error(`${path} должен содержать обычный JSON-объект`);
   }
 
@@ -99,13 +101,14 @@ export const validateDatabase = (data) => {
 };
 
 export const readJsonObjectFile = async (path, label) => {
+  const resolvedPath = resolve(path);
   let source;
 
   try {
-    source = await readFile(resolve(path), 'utf8');
+    source = await readFile(resolvedPath, 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`${label} не найден: ${resolve(path)}`);
+      throw new Error(`${label} не найден: ${resolvedPath}`);
     }
 
     throw error;
@@ -187,6 +190,6 @@ export const getCollection = (database, resource) => {
   return collection;
 };
 
-export const findItem = (collection, id) => collection.find((item) => String(item.id) === String(id));
+export const findItemIndex = (collection, id) => collection.findIndex((item) => String(item.id) === String(id));
 
-export const createId = (collection) => createUniqueId((id) => findItem(collection, id) != null);
+export const createId = (collection) => createUniqueId((id) => findItemIndex(collection, id) !== -1);

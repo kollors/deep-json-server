@@ -62,7 +62,7 @@ const validateSchemaOverride = (schema, path) => {
   }
 };
 
-export const validateSchemaConfig = (schemaConfig, resources) => {
+export const normalizeSchemaConfig = (schemaConfig, resources) => {
   assertKnownKeys(schemaConfig, SCHEMA_CONFIG_KEYS, 'schema');
 
   if (
@@ -115,12 +115,25 @@ export const validateSchemaConfig = (schemaConfig, resources) => {
     }
   });
 
-  return resourceConfigs;
+  return Object.fromEntries(
+    resources.map((resource) => {
+      const resourceConfig = resourceConfigs[resource] ?? {};
+
+      return [
+        resource,
+        {
+          formats: resourceConfig.formats ?? {},
+          name: resourceConfig.name,
+          properties: resourceConfig.properties ?? {},
+          required: resourceConfig.required ?? [],
+        },
+      ];
+    }),
+  );
 };
 
 export const applyConfiguredFields = (schema, resource, resourceConfig) => {
-  const requiredFields = Array.isArray(resourceConfig.required) ? resourceConfig.required : [];
-  const formats = isObject(resourceConfig.formats) ? resourceConfig.formats : {};
+  const { formats, required: requiredFields } = resourceConfig;
 
   [...requiredFields, ...Object.keys(formats)].forEach((path) => {
     if (getSchemasAtPath(schema, path.split('.')).length === 0) {

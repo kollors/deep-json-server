@@ -86,6 +86,6 @@ export async function runCli(args = process.argv.slice(2), services = { createSe
 
   const fastify = serverFacade.fastify();
 
-  await fastify.listen({ host, port });
+  await fastify.listen();
   fastify.log.info({ database: 'path' in config.database ? config.database.path : 'memory' }, 'Deep JSON Server запущен');
 }

@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { normalizeServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_PAGE_SIZE, DEFAULT_PORT } from './constants.js';
-import { createDatabaseStore, createId, findItem, getCollection } from './database.js';
+import { createDatabaseStore, createId, findItemIndex, getCollection } from './database.js';
 import { createFileStore, registerFileRoutes } from './files/index.js';
 import { resolveSchemaConfig } from './openapi/config.js';
 import { buildOpenapiDocument } from './openapi/document.js';
@@ -36,6 +36,17 @@ const addRequestSchemas = (fastify, document, resources) => {
   });
 };
 
+const getCollectionItem = (database, resource, id) => {
+  const collection = getCollection(database, resource);
+  const index = findItemIndex(collection, id);
+
+  if (index === -1) {
+    throw createHttpError(404, 'Запись не найдена');
+  }
+
+  return { collection, index, item: collection[index] };
+};
+
 const registerResourceRoutes = (fastify, store, resource, document, maxPageSize) => {
   const resourcePath = `/${resource}`;
   const itemPath = `/${resource}/:id`;
@@ -66,13 +77,8 @@ const registerResourceRoutes = (fastify, store, resource, document, maxPageSize)
   fastify.get(itemPath, async (request) => {
     await store.read();
 
-    const collection = getCollection(store.database, resource);
-    const item = findItem(collection, request.params.id);
+    const { collection, item } = getCollectionItem(store.database, resource, request.params.id);
     const embedPaths = parseEmbedPaths(request.query._embed);
-
-    if (item == null) {
-      throw createHttpError(404, 'Запись не найдена');
-    }
 
     validateEmbedPaths(store.database, resource, collection, embedPaths);
 
@@ -94,16 +100,11 @@ const registerResourceRoutes = (fastify, store, resource, document, maxPageSize)
 
   fastify.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) =>
     store.update((database) => {
-      const collection = getCollection(database, resource);
-      const currentItem = findItem(collection, request.params.id);
-
-      if (currentItem == null) {
-        throw createHttpError(404, 'Запись не найдена');
-      }
+      const { collection, index, item: currentItem } = getCollectionItem(database, resource, request.params.id);
 
       const item = { ...request.body, id: currentItem.id };
 
-      collection.splice(collection.indexOf(currentItem), 1, item);
+      collection.splice(index, 1, item);
 
       return item;
     }),
@@ -111,16 +112,11 @@ const registerResourceRoutes = (fastify, store, resource, document, maxPageSize)
 
   fastify.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
     store.update((database) => {
-      const collection = getCollection(database, resource);
-      const currentItem = findItem(collection, request.params.id);
-
-      if (currentItem == null) {
-        throw createHttpError(404, 'Запись не найдена');
-      }
+      const { collection, index, item: currentItem } = getCollectionItem(database, resource, request.params.id);
 
       const item = { ...currentItem, ...request.body, id: currentItem.id };
 
-      collection.splice(collection.indexOf(currentItem), 1, item);
+      collection.splice(index, 1, item);
 
       return item;
     }),
@@ -128,16 +124,11 @@ const registerResourceRoutes = (fastify, store, resource, document, maxPageSize)
 
   fastify.delete(itemPath, async (request) =>
     store.update((database) => {
-      const collection = getCollection(database, resource);
-      const currentItem = findItem(collection, request.params.id);
+      const { collection, index, item } = getCollectionItem(database, resource, request.params.id);
 
-      if (currentItem == null) {
-        throw createHttpError(404, 'Запись не найдена');
-      }
+      collection.splice(index, 1);
 
-      collection.splice(collection.indexOf(currentItem), 1);
-
-      return currentItem;
+      return item;
     }),
   );
 };
@@ -161,17 +152,11 @@ export async function createServer(config, features = {}) {
     throw new Error('Для файловых маршрутов укажите секцию config.files');
   }
 
+  const getFileStore = () => (fileStorePromise ??= createFileStore(normalizedConfig.files));
+
   if (filesEnabled && 'data' in normalizedConfig.files) {
-    fileStorePromise = Promise.resolve(await createFileStore(normalizedConfig.files));
+    await getFileStore();
   }
-
-  const getFileStore = () => {
-    if (fileStorePromise == null) {
-      fileStorePromise = createFileStore(normalizedConfig.files);
-    }
-
-    return fileStorePromise;
-  };
 
   const buildDocument = () =>
     buildOpenapiDocument({

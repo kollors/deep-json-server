@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createHttpError, createSerialQueue } from '../utils.js';
@@ -36,6 +36,12 @@ const pathExists = async (path) => {
 
     throw error;
   }
+};
+
+const isPathInside = (rootPath, targetPath) => {
+  const relativePath = relative(rootPath, targetPath);
+
+  return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
 };
 
 const readMetadata = async (metadataPath) => {
@@ -108,28 +114,24 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
   const realDirectoryPath = await realpath(directoryPath);
   let files = await readMetadata(metadataPath);
 
-  const assertContained = (path, allowRoot = false) => {
-    const relativePath = relative(realDirectoryPath, path);
-
-    if ((!allowRoot && relativePath === '') || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+  const assertContained = (path) => {
+    if (!isPathInside(realDirectoryPath, path)) {
       throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
     }
   };
 
   const resolveFilePath = (path) => {
     const filePath = resolve(directoryPath, path);
-    const relativePath = relative(directoryPath, filePath);
-
-    if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath) || filePath === metadataPath || filePath === stagingPath || filePath.startsWith(`${stagingPath}/`)) {
+    if (filePath === directoryPath || !isPathInside(directoryPath, filePath) || filePath === metadataPath || isPathInside(stagingPath, filePath)) {
       throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
     }
 
     return filePath;
   };
 
-  const assertNoSymlinks = async (filePath, includeFile) => {
-    const relativePath = relative(directoryPath, includeFile ? filePath : dirname(filePath));
-    const parts = relativePath === '' ? [] : relativePath.split('/');
+  const assertNoSymlinks = async (targetPath) => {
+    const relativePath = relative(directoryPath, targetPath);
+    const parts = relativePath === '' ? [] : relativePath.split(sep);
     let currentPath = directoryPath;
 
     for (const part of parts) {
@@ -151,11 +153,11 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     const filePath = resolveFilePath(path);
 
     await mkdir(dirname(filePath), { recursive: true });
-    await assertNoSymlinks(filePath, false);
-    assertContained(await realpath(dirname(filePath)), true);
+    await assertNoSymlinks(dirname(filePath));
+    assertContained(await realpath(dirname(filePath)));
 
     if (await pathExists(filePath)) {
-      await assertNoSymlinks(filePath, true);
+      await assertNoSymlinks(filePath);
       assertContained(await realpath(filePath));
     }
 
@@ -166,7 +168,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     const filePath = resolveFilePath(path);
 
     try {
-      await assertNoSymlinks(filePath, true);
+      await assertNoSymlinks(filePath);
       assertContained(await realpath(filePath));
     } catch (error) {
       if (error?.code === 'ENOENT') {
@@ -244,7 +246,8 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
         await flushCleanup();
 
         const path = await prepareTargetPath(key);
-        const exists = files.has(key) || (await pathExists(path));
+        const existsOnDisk = await pathExists(path);
+        const exists = files.has(key) || existsOnDisk;
 
         if (exists && !override) {
           throw createHttpError(409, 'Файл уже существует');
@@ -256,7 +259,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
         let committed = false;
 
         try {
-          if (await pathExists(path)) {
+          if (existsOnDisk) {
             await rename(path, backupPath);
             backedUp = true;
           }
@@ -273,14 +276,12 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
 
           return { created: !exists, file: { ...storedFile, size } };
         } catch (error) {
-          if (!committed) {
-            if (installed) {
-              await rm(path, { force: true }).catch(() => undefined);
-            }
+          if (installed) {
+            await rm(path, { force: true }).catch(() => undefined);
+          }
 
-            if (backedUp) {
-              await rename(backupPath, path).catch(() => undefined);
-            }
+          if (backedUp) {
+            await rename(backupPath, path).catch(() => undefined);
           }
 
           throw error;

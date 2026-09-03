@@ -3,7 +3,7 @@ import { validateDatabase } from '../database.js';
 import { FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/contract.js';
 import { getRelationMetadata } from '../relation-metadata.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
-import { applyConfiguredFields, validateSchemaConfig } from './config.js';
+import { applyConfiguredFields, normalizeSchemaConfig } from './config.js';
 import { ensureGeneratedIdSchema, inferObjectSchema, mergeSchemaOverrides, omitId } from './inference.js';
 
 const createSchemaReference = (name) => ({ $ref: `#/components/schemas/${name}` });
@@ -330,11 +330,11 @@ export function buildOpenapiDocument(options) {
   }
 
   const resources = getResourceNames(database);
-  const resourceConfigs = validateSchemaConfig(schemaConfig, resources);
+  const resourceConfigs = normalizeSchemaConfig(schemaConfig, resources);
   const componentNames = Object.fromEntries(
     resources.map((resource) => {
-      const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
-      const componentName = typeof resourceConfig.name === 'string' && resourceConfig.name !== '' ? resourceConfig.name : toPascalCase(singularize(resource));
+      const resourceConfig = resourceConfigs[resource];
+      const componentName = resourceConfig.name ?? toPascalCase(singularize(resource));
 
       return [resource, componentName];
     }),
@@ -344,9 +344,9 @@ export function buildOpenapiDocument(options) {
 
   const rawSchemas = Object.fromEntries(
     resources.map((resource) => {
-      const resourceConfig = isObject(resourceConfigs[resource]) ? resourceConfigs[resource] : {};
+      const resourceConfig = resourceConfigs[resource];
       const inferredSchema = database[resource].length === 0 ? { properties: { id: { type: 'string' } }, type: 'object' } : inferObjectSchema(database[resource]);
-      const configuredSchema = mergeSchemaOverrides(inferredSchema, { properties: isObject(resourceConfig.properties) ? resourceConfig.properties : {} });
+      const configuredSchema = mergeSchemaOverrides(inferredSchema, { properties: resourceConfig.properties });
 
       return [resource, applyConfiguredFields(ensureGeneratedIdSchema(configuredSchema), resource, resourceConfig)];
     }),
@@ -384,7 +384,7 @@ export function buildOpenapiDocument(options) {
 
   return {
     components: { parameters: createParameters(maxPageSize), schemas },
-    info: isObject(schemaConfig.$info) ? schemaConfig.$info : { title: 'Deep JSON Server API', version: '1.0.0' },
+    info: schemaConfig.$info ?? { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
     paths,
     tags: [...new Set([...resources, ...(files ? ['files'] : [])])].map((name) => ({ name })),

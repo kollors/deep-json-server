@@ -262,8 +262,8 @@ test('filters nested fields and combines conditions with AND, OR and NOT', async
 test('supports every field operator', async () => {
   const data = {
     items: [
-      { amount: 10, children: [{ score: 2 }, { score: 4 }], code: '001', id: '1', name: 'Alpha', tags: ['a', 'b'] },
-      { amount: 20, children: [], code: '002', id: '2', name: 'Beta', tags: ['b'] },
+      { amount: 10, children: [{ score: 2 }, { score: 4 }], code: '001', id: '1', name: 'Alpha', status_eq: 'enabled', tags: ['a', 'b'] },
+      { amount: 20, children: [], code: '002', id: '2', name: 'Beta', status_eq: 'disabled', tags: ['b'] },
     ],
   };
 
@@ -293,12 +293,17 @@ test('supports every field operator', async () => {
 
     const simpleResponse = await server.inject({ method: 'GET', query: { amount: '20', code: '002' }, url: '/items' });
     const inResponse = await server.inject({ method: 'GET', query: { 'id:in': '1,2' }, url: '/items' });
+    const underscoreFieldResponse = await server.inject({ method: 'GET', query: { status_eq: 'enabled' }, url: '/items' });
 
     assert.deepEqual(
       simpleResponse.json().data.map(({ id }) => id),
       ['2'],
     );
     assert.equal(inResponse.json().total, 2);
+    assert.deepEqual(
+      underscoreFieldResponse.json().data.map(({ id }) => id),
+      ['1'],
+    );
   }, data);
 });
 
