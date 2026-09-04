@@ -4,7 +4,7 @@
 
 [GitHub](https://github.com/kollors/deep-json-server) | [npm](https://www.npmjs.com/package/@kollors/deep-json-server)
 
-A small REST mock server with CRUD, pagination, deep filtering, recursive relationship embedding, binary files, and OpenAPI generation. Data can be stored in JSON files or memory, and relations are inferred from conventional keys such as `countryId`, `genreIds`, and `publisherIds`.
+A small REST API mock server with CRUD, pagination, nested data filtering, relation embedding through `_embed`, binary files, and OpenAPI generation. Data can be stored in JSON files or memory, and relations are inferred from field names such as `countryId`, `genreIds`, and `publisherIds`.
 
 ## Installation
 
@@ -342,9 +342,9 @@ Relations are inferred by convention. A field named `<relation>Id` creates a sin
 - `publisherIds` points to `publishers`;
 - `parentIds` points back to the current resource when `_embed=parents` is requested; `_embed=children` resolves the reverse self-relation.
 
-Reverse relations use the source resource name. For example, `_embed=users` on a country finds users whose nested data contains the corresponding `countryId`. They are soft references: the server resolves them when requested but does not enforce referential integrity when data is written.
+Reverse relations use the source resource name. For example, `_embed=users` on a country finds users whose nested data contains the corresponding `countryId`. Relations are resolved when requested, but referential integrity is not enforced when data is written.
 
-An explicit `...Id` or `...Ids` field is the source of truth. If a record also contains an outdated embedded value, `_embed` replaces that response property with the current related record. A missing target becomes `null` for a single relation or is omitted from the resulting array for a collection relation. Relationship lookups use lazy per-request ID indexes, so each referenced resource is indexed only when needed.
+Explicit `...Id` and `...Ids` fields determine relations. If a record also contains an outdated embedded value, `_embed` replaces that response property with the current related record. A missing related record becomes `null` for a single relation or is omitted from the resulting array for a collection relation. Per-request ID indexes are created only for resources used by the current relation lookup.
 
 ## Files
 
@@ -405,7 +405,7 @@ Content-Type: application/json
 }
 ```
 
-`PATCH` returns the updated metadata with status `200`; a conflicting destination returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the mock-server origin.
+`PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the server origin.
 
 In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Use a disk-backed database and file storage from only one server process at a time, and do not edit stored files or metadata until that process stops. Paths below `files.directory` may not contain symbolic links, and file names are restricted to values that are portable across supported operating systems. The metadata file may be absent initially and is created on the first upload. Metadata created by versions before this path-based API is not compatible with the new format.
 
@@ -495,7 +495,7 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 }
 ```
 
-The generated document describes CRUD endpoints, pagination, sorting, deep filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints with their actual arbitrary media types. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. Generation rejects duplicate schema names, operation IDs, and invalid schema overrides before producing a document. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
+The generated document describes CRUD endpoints, pagination, sorting, nested data filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints for arbitrary media types. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. Generation rejects duplicate schema names, operation IDs, and invalid schema overrides before producing a document. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
 
 During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed. Invalid bodies return `400`.
 
@@ -566,16 +566,16 @@ console.log(memoryResponse.json());
 await memoryFastify.close();
 ```
 
-`createServer()` accepts exactly the same config shape as `server.config.js`. It loads and clones the configured sources, then returns a facade with two operations:
+`createServer()` accepts exactly the same config shape as `server.config.js`. It loads and clones the database, schema, and file storage, then returns an object with two methods:
 
 | Method | Purpose |
 | --- | --- |
 | `server.fastify()` | Lazily creates and caches the real Fastify instance; every native method remains available, and argument-less `listen()` uses `server.host` and `server.port` |
 | `server.openapi()` | Returns an OpenAPI document and also writes it when `openapi.path` is configured |
 
-File routes are enabled programmatically when a `files` section is present. The second argument has the shape `{ files?: boolean }`: pass `{ files: false }` to keep a configured store disabled, or `{ files: true }` to require a `files` section and enable the routes. `server.openapi()` uses the same feature state as `server.fastify()`.
+File routes are enabled programmatically when a `files` section is present. The second argument has the shape `{ files?: boolean }`: pass `{ files: false }` to keep a configured store disabled, or `{ files: true }` to require a `files` section and enable the routes. `server.openapi()` uses the same file-route setting as `server.fastify()`.
 
-An argument-less `server.fastify().listen()` uses `server.host` and `server.port`, falling back to `127.0.0.1:4001`. Explicit `listen(options)` values take precedence. Relative paths passed directly to `createServer()` resolve from the current working directory; paths loaded from `server.config.js` resolve from the config directory. The package includes generated TypeScript declarations for the facade and every config variant.
+An argument-less `server.fastify().listen()` uses `server.host` and `server.port`, falling back to `127.0.0.1:4001`. Explicit `listen(options)` values take precedence. Relative paths passed directly to `createServer()` resolve from the current working directory; paths loaded from `server.config.js` resolve from the config directory. The package includes generated TypeScript declarations for the returned object and every config variant.
 
 ## Scope and security
 

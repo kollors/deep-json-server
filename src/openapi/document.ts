@@ -111,7 +111,7 @@ const createParameters = (maxPageSize: number): OpenapiObject => ({
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
   PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: maxPageSize, minimum: 1, type: 'integer' } },
   Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
-  Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
+  Where: { description: 'JSON-encoded filter for nested data', in: 'query', name: '_where', schema: { type: 'string' } },
 });
 
 const createJsonContent = (schema: OpenapiSchema): OpenapiObject => ({ content: { 'application/json': { schema } } });

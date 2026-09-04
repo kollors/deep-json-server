@@ -1,7 +1,7 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.8.0",
-  "description": "JSON mock server with deep filters and recursive relationship embedding",
+  "version": "0.8.1",
+  "description": "JSON mock server with nested data filtering and relation embedding",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
