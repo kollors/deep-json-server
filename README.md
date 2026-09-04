@@ -8,7 +8,7 @@ A small REST API mock server with CRUD, pagination, nested data filtering, relat
 
 ## Installation
 
-Node.js 20 or newer is required.
+Node.js 22 or newer is required.
 
 ```bash
 npm install --save-dev @kollors/deep-json-server
