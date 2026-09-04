@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createServer } from '../index.js';
+import { createServer } from '../dist/index.js';
 
 const fixture = {
   countries: [
@@ -293,6 +293,7 @@ test('supports every field operator', async () => {
 
     const simpleResponse = await server.inject({ method: 'GET', query: { amount: '20', code: '002' }, url: '/items' });
     const inResponse = await server.inject({ method: 'GET', query: { 'id:in': '1,2' }, url: '/items' });
+    const repeatedIdResponse = await server.inject({ method: 'GET', url: '/items?id=1&id=2' });
     const underscoreFieldResponse = await server.inject({ method: 'GET', query: { status_eq: 'enabled' }, url: '/items' });
 
     assert.deepEqual(
@@ -300,6 +301,7 @@ test('supports every field operator', async () => {
       ['2'],
     );
     assert.equal(inResponse.json().total, 2);
+    assert.equal(repeatedIdResponse.json().total, 2);
     assert.deepEqual(
       underscoreFieldResponse.json().data.map(({ id }) => id),
       ['1'],
@@ -317,6 +319,9 @@ test('rejects invalid filters, sorting, embeds and pagination', async () => {
         { 'name..value': 'Original' },
         { _where: JSON.stringify({ name: { some: { eq: 'Original' } } }) },
         { _where: JSON.stringify({ amount: { startsWith: '2' } }) },
+        { _where: JSON.stringify({ amount: { gt: {} } }) },
+        { _where: JSON.stringify({ name: { contains: {} } }) },
+        { _where: JSON.stringify({ name: { startsWith: 2 } }) },
         { _page: 'abc' },
         { _page: '0' },
         { _page: '1.5' },
@@ -324,6 +329,7 @@ test('rejects invalid filters, sorting, embeds and pagination', async () => {
         { _perPage: '1001' },
         { _sort: 'missing' },
         { _sort: '__proto__' },
+        { _sort: 'details' },
         { _embed: 'missing' },
         { _embed: 'children..owner' },
       ];
@@ -334,7 +340,7 @@ test('rejects invalid filters, sorting, embeds and pagination', async () => {
         assert.equal(response.statusCode, 400, JSON.stringify(query));
       }
     },
-    { items: [{ amount: 20, code: '001', id: '1', name: 'Original' }] },
+    { items: [{ amount: 20, code: '001', details: { value: 1 }, id: '1', name: 'Original' }] },
   );
 });
 
@@ -402,6 +408,21 @@ test('supports root discovery, CORS, sorting and persistent CRUD', async () => {
   });
 });
 
+test('can disable CORS routes and response headers', async () => {
+  const facade = await createServer({ database: { data: { items: [{ id: '1' }] } }, server: { cors: false, logger: false } });
+  const server = facade.fastify();
+
+  try {
+    const getResponse = await server.inject({ method: 'GET', url: '/items' });
+    const optionsResponse = await server.inject({ method: 'OPTIONS', url: '/items' });
+
+    assert.equal(getResponse.headers['access-control-allow-origin'], undefined);
+    assert.equal(optionsResponse.statusCode, 404);
+  } finally {
+    await server.close();
+  }
+});
+
 test('returns 404 for missing records across CRUD methods', async () => {
   await withServer(
     async ({ server }) => {
@@ -441,6 +462,24 @@ test('validates POST, PUT and PATCH bodies against the configured schema', async
     },
     { items: [{ count: 1, id: '1', name: 'One', website: 'https://example.com/one' }] },
     { $schema: { items: { formats: { website: 'uri' }, required: ['name'] } } },
+  );
+});
+
+test('accepts integers and decimals when a field contains both numeric forms', async () => {
+  await withServer(
+    async ({ server }) => {
+      const integerResponse = await server.inject({ method: 'POST', payload: { value: 2 }, url: '/items' });
+      const decimalResponse = await server.inject({ method: 'POST', payload: { value: 2.5 }, url: '/items' });
+
+      assert.equal(integerResponse.statusCode, 201);
+      assert.equal(decimalResponse.statusCode, 201);
+    },
+    {
+      items: [
+        { id: '1', value: 1 },
+        { id: '2', value: 1.5 },
+      ],
+    },
   );
 });
 
@@ -529,6 +568,13 @@ test('rejects values that cannot be represented in JSON', async () => {
 
     await assert.rejects(() => createServer({ database: { data }, server: { logger: false } }), /JSON|конечное число|обычный JSON-объект|циклическую ссылку/);
   }
+
+  await assert.rejects(() => createServer({ database: { data: { items: Array(1) } }, server: { logger: false } }), /разреженные массивы/);
+});
+
+test('validates feature switches before initializing the server', async () => {
+  await assert.rejects(() => createServer({ database: { data: { items: [] } } }, { files: 'false' }), /features/);
+  await assert.rejects(() => createServer({ database: { data: { items: [] } } }, { unknown: true }), /features/);
 });
 
 test('starts on an ephemeral port and validates server options', async () => {

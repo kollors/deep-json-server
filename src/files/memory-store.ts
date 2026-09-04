@@ -1,9 +1,10 @@
 import { Readable } from 'node:stream';
+import type { MemoryFile } from '../config.js';
 import { createHttpError, createSerialQueue } from '../utils.js';
-import { getFileKey, normalizeStoredFileMetadata } from './contract.js';
+import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata } from './contract.js';
 
-const readUpload = async (stream, maxFileSize) => {
-  const chunks = [];
+const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
   let size = 0;
 
   for await (const chunk of stream) {
@@ -21,9 +22,8 @@ const readUpload = async (stream, maxFileSize) => {
   return Buffer.concat(chunks);
 };
 
-/** @param {import('../config.js').MemoryFile[]} sourceFiles */
-export const createMemoryFileStore = (sourceFiles) => {
-  const storedFiles = new Map();
+export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
+  const storedFiles = new Map<string, { content: Buffer; file: FileRecord }>();
 
   sourceFiles.forEach((sourceFile, index) => {
     if (!(sourceFile.content instanceof Uint8Array)) {
@@ -45,7 +45,7 @@ export const createMemoryFileStore = (sourceFiles) => {
 
   const schedule = createSerialQueue();
 
-  const findStoredFile = (path) => {
+  const findStoredFile = (path: string): { content: Buffer; file: FileRecord } => {
     const storedFile = storedFiles.get(path);
 
     if (storedFile == null) {
@@ -55,14 +55,14 @@ export const createMemoryFileStore = (sourceFiles) => {
     return storedFile;
   };
 
-  const metadata = async (path) => findStoredFile(path).file;
-  const get = async (path) => {
+  const metadata = async (path: string): Promise<FileRecord> => findStoredFile(path).file;
+  const get = async (path: string): ReturnType<FileStore['get']> => {
     const storedFile = findStoredFile(path);
 
     return { file: storedFile.file, stream: Readable.from([storedFile.content]) };
   };
 
-  const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }) => {
+  const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }: FileUpload): ReturnType<FileStore['upload']> => {
     const path = getFileKey({ directory, name });
 
     if (storedFiles.has(path) && !override) {
@@ -86,7 +86,7 @@ export const createMemoryFileStore = (sourceFiles) => {
     });
   };
 
-  const update = (sourcePath, updates) =>
+  const update = (sourcePath: string, updates: FileUpdate): ReturnType<FileStore['update']> =>
     schedule(() => {
       const storedFile = findStoredFile(sourcePath);
       const file = { ...storedFile.file, ...updates };
@@ -102,7 +102,7 @@ export const createMemoryFileStore = (sourceFiles) => {
       return file;
     });
 
-  const remove = (path) =>
+  const remove = (path: string): ReturnType<FileStore['remove']> =>
     schedule(() => {
       if (!storedFiles.delete(path)) {
         throw createHttpError(404, 'Файл не найден');

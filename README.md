@@ -53,7 +53,7 @@ The API is available at `http://127.0.0.1:4001` by default. For example, `GET ht
 
 ## Configuration and startup
 
-Create the ESM module `server.config.js`. The example below enables every feature:
+Create the ESM module `server.config.js`. The example below shows settings for every feature:
 
 ```js
 import process from 'node:process';
@@ -71,6 +71,7 @@ export default {
     path: 'mock/openapi-schema.yaml',
   },
   server: {
+    cors: true,
     host: '127.0.0.1',
     logger: true,
     maxFileSize: 100 * 1024 * 1024,
@@ -91,6 +92,7 @@ Configuration keys:
 | `files.metadata` | Together with `files.directory` | JSON file containing file metadata on disk |
 | `files.data` | Instead of the `directory` and `metadata` pair | In-memory files with `Uint8Array` contents |
 | `openapi.path` | Required by the `--openapi` and `--openapi-only` CLI flags | Generated OpenAPI YAML file; the programmatic API can return a document without this path |
+| `server.cors` | No | Enables permissive CORS headers and `OPTIONS` routes; defaults to `true` |
 | `server.host` | No | Host used by the CLI, `server.openapi()`, and argument-less `server.fastify().listen()`; defaults to `127.0.0.1` |
 | `server.logger` | No | Fastify logger settings; defaults to `true` |
 | `server.maxFileSize` | No | Maximum uploaded-file size in bytes when file routes are enabled; defaults to 100 MiB |
@@ -301,7 +303,7 @@ GET /movies?title:contains=ardenia
 
 Simple filter values recognize JSON primitives: numbers, `true`, `false` and `null`. Values with leading zeroes, such as `001`, remain strings. Unknown operators, invalid logical conditions and filter paths that do not exist in a non-empty resource return `400`.
 
-Multiple simple query filters are combined with `AND`. For an `in` filter, separate values with commas: `GET /movies?id:in=1,2`. On an array field, `in` means that at least one field element matches at least one supplied value. `every` returns `true` for an empty array, while `some` returns `false`.
+Different simple query filters are combined with `AND`. Repeating the same equality filter selects any of its values, so `GET /movies?id=1&id=2` is equivalent to `GET /movies?id:in=1,2`. For an `in` filter, values are separated with commas. On an array field, `in` means that at least one field element matches at least one supplied value. `every` returns `true` for an empty array, while `some` returns `false`.
 
 If `_where` is present, it is the complete filter and other simple filter parameters are ignored. The examples show readable JSON; an HTTP client must URL-encode `_where` when constructing the URL manually, for example with `encodeURIComponent(JSON.stringify(where))`.
 
@@ -405,7 +407,7 @@ Content-Type: application/json
 
 `PATCH` returns the updated metadata with status `200`; a conflicting destination returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the mock-server origin.
 
-In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Do not edit stored files or metadata until the server stops. Paths below `files.directory` may not contain symbolic links, so a configured relative path cannot escape the storage directory. The metadata file may be absent initially and is created on the first upload. Metadata created by versions before this path-based API is not compatible with the new format.
+In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Use a disk-backed database and file storage from only one server process at a time, and do not edit stored files or metadata until that process stops. Paths below `files.directory` may not contain symbolic links, and file names are restricted to values that are portable across supported operating systems. The metadata file may be absent initially and is created on the first upload. Metadata created by versions before this path-based API is not compatible with the new format.
 
 The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
@@ -459,7 +461,7 @@ To include file routes in the document, configure the `files` section and add `-
 
 The generator infers resources and field types from all database records. Every inferred field is optional by default, while the top-level `id` is always required in response schemas and is omitted from create and update request schemas. Add other required fields to `required`. A nested required path marks that nested property as required; it does not automatically make every parent path required, so list the parent separately when necessary.
 
-Different value types are inferred independently and combined through `oneOf`. Configuration is validated before generation: `$info`, resource and schema names, and the structure of `properties` are validated, while paths from `required` and `formats` must exist in the resulting schema.
+Different non-overlapping value types are inferred independently and combined through `oneOf`; mixed integers and decimal numbers are represented by one `number` schema. Configuration is validated before generation: `$info`, resource and component names, supported `properties` keywords and their value types are checked, while paths from `required` and `formats` must exist in the resulting schema. Explicit component names may contain ASCII letters, digits, dots, underscores, and hyphens.
 
 Use `properties` to describe fields that cannot be inferred, particularly for an empty resource. Explicit properties are merged with inferred properties:
 
@@ -515,6 +517,7 @@ const config = {
     path: 'mock/openapi-schema.yaml',
   },
   server: {
+    cors: true,
     host: '127.0.0.1',
     logger: false,
     maxFileSize: 100 * 1024 * 1024,
@@ -576,4 +579,4 @@ An argument-less `server.fastify().listen()` uses `server.host` and `server.port
 
 ## Scope and security
 
-Deep JSON Server is intended for local development and automated tests. It has no authentication or authorization, allows CORS from every origin, persists accepted writes when disk storage is configured and does not enforce referential integrity. Keep the default loopback host unless the surrounding environment provides its own access controls; do not expose the server or file routes to an untrusted network.
+Deep JSON Server is intended for local development and automated tests. It has no authentication or authorization, allows CORS from every origin by default, persists accepted writes when disk storage is configured and does not enforce referential integrity. Set `server.cors` to `false` to disable the built-in CORS headers and `OPTIONS` routes. Keep the default loopback host unless the surrounding environment provides its own access controls; do not expose the server or file routes to an untrusted network.

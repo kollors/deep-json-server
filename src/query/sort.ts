@@ -1,6 +1,13 @@
 import { createHttpError, isObject, isSafeKey } from '../utils.js';
 
-const compareValues = (left, right) => {
+interface SortRule {
+  isDescending: boolean;
+  path: string;
+}
+
+const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+const compareValues = (left: unknown, right: unknown): number => {
   if (Object.is(left, right)) {
     return 0;
   }
@@ -13,12 +20,13 @@ const compareValues = (left, right) => {
     return -1;
   }
 
-  return typeof left === 'number' && typeof right === 'number' ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
+  return typeof left === 'number' && typeof right === 'number' ? left - right : collator.compare(String(left), String(right));
 };
 
-const getValueByPath = (value, path) => path.split('.').reduce((currentValue, key) => (isObject(currentValue) && isSafeKey(key) ? currentValue[key] : undefined), value);
+const getValueByPath = (value: unknown, path: string): unknown =>
+  path.split('.').reduce<unknown>((currentValue, key) => (isObject(currentValue) && isSafeKey(key) ? currentValue[key] : undefined), value);
 
-const parseSortRules = (sort, items) => {
+const parseSortRules = (sort: unknown, items: unknown[]): SortRule[] => {
   if (sort == null || sort === '') {
     return [];
   }
@@ -36,15 +44,21 @@ const parseSortRules = (sort, items) => {
       throw createHttpError(400, `Недопустимое поле сортировки «${path}»`);
     }
 
-    if (items.length > 0 && !items.some((item) => getValueByPath(item, path) !== undefined)) {
+    const samples = items.map((item) => getValueByPath(item, path)).filter((value) => value !== undefined);
+
+    if (items.length > 0 && samples.length === 0) {
       throw createHttpError(400, `Неизвестное поле сортировки «${path}»`);
+    }
+
+    if (samples.some((value) => isObject(value) || Array.isArray(value))) {
+      throw createHttpError(400, `Поле сортировки «${path}» должно содержать примитивные значения`);
     }
 
     return { isDescending, path };
   });
 };
 
-export const sortItems = (items, sort, validationItems = items) => {
+export const sortItems = <T>(items: T[], sort: unknown, validationItems: unknown[] = items): T[] => {
   const sortRules = parseSortRules(sort, validationItems);
 
   return sortRules.length === 0

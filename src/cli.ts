@@ -1,7 +1,14 @@
 import process from 'node:process';
-import { readServerConfig } from './config.js';
+import { type NormalizedServerConfig, readServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_PORT } from './constants.js';
 import { createServer } from './server.js';
+
+type OpenapiMode = 'generate' | 'none' | 'only';
+interface CliOptions {
+  configPath: string;
+  files: boolean;
+  openapiMode: OpenapiMode;
+}
 
 const HELP_TEXT = `Deep JSON Server
 
@@ -14,9 +21,9 @@ const HELP_TEXT = `Deep JSON Server
   --openapi-only  Сгенерировать OpenAPI и завершить работу
   --help          Показать справку`;
 
-const parseArguments = (args) => {
-  const options = { files: false, openapiMode: 'none' };
-  let configPath;
+const parseArguments = (args: string[]): CliOptions => {
+  const options: Omit<CliOptions, 'configPath'> = { files: false, openapiMode: 'none' };
+  let configPath: string | undefined;
 
   args.forEach((argument) => {
     if (argument === '--files') {
@@ -49,7 +56,7 @@ const parseArguments = (args) => {
   return { configPath, ...options };
 };
 
-const validateModeConfig = (config, { files, openapiMode }) => {
+const validateModeConfig = (config: NormalizedServerConfig, { files, openapiMode }: Pick<CliOptions, 'files' | 'openapiMode'>): void => {
   if (openapiMode !== 'none' && config.openapi.path == null) {
     throw new Error(`Для --openapi${openapiMode === 'only' ? '-only' : ''} укажите ключ config.openapi.path`);
   }
@@ -59,7 +66,7 @@ const validateModeConfig = (config, { files, openapiMode }) => {
   }
 };
 
-export async function runCli(args = process.argv.slice(2), services = { createServer }) {
+export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createServer } = { createServer }): Promise<void> {
   if (args.includes('--help')) {
     process.stdout.write(`${HELP_TEXT}\n`);
     return;

@@ -1,12 +1,19 @@
+import type { JsonObject, JsonValue, OpenapiSchema } from '../types.js';
 import { isObject } from '../utils.js';
 
-export const mergeSchemas = (schemas) => {
+type InferredSchema = Omit<OpenapiSchema, 'type'> & { type?: OpenapiSchema['type'] | 'null' };
+
+export const mergeSchemas = (schemas: InferredSchema[]): OpenapiSchema => {
   const uniqueSchemas = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
   const nullable = uniqueSchemas.some((schema) => schema.type === 'null');
-  const nonNullSchemas = uniqueSchemas.filter((schema) => schema.type !== 'null');
+  let nonNullSchemas: OpenapiSchema[] = uniqueSchemas.filter((schema): schema is OpenapiSchema => schema.type !== 'null');
+
+  if (nonNullSchemas.some((schema) => schema.type === 'number')) {
+    nonNullSchemas = nonNullSchemas.filter((schema) => schema.type !== 'integer');
+  }
 
   if (nonNullSchemas.length === 0) {
-    return { nullable: true };
+    return { enum: [null], nullable: true };
   }
 
   if (nonNullSchemas.length === 1) {
@@ -16,19 +23,19 @@ export const mergeSchemas = (schemas) => {
   return { oneOf: nonNullSchemas, ...(nullable && { nullable: true }) };
 };
 
-export const mergeSchemaOverrides = (schema, overrides) => {
+export const mergeSchemaOverrides = (schema: OpenapiSchema, overrides: unknown): OpenapiSchema => {
   if (!isObject(overrides)) {
     return schema;
   }
 
-  const result = { ...schema, ...overrides };
+  const result: OpenapiSchema = { ...schema, ...overrides };
 
   if (Object.hasOwn(overrides, 'type') && !Object.hasOwn(overrides, 'oneOf')) {
     delete result.oneOf;
   }
 
   if (isObject(schema.properties) || isObject(overrides.properties)) {
-    const properties = isObject(schema.properties) ? { ...schema.properties } : {};
+    const properties: Record<string, OpenapiSchema> = isObject(schema.properties) ? { ...schema.properties } : {};
 
     Object.entries(isObject(overrides.properties) ? overrides.properties : {}).forEach(([key, value]) => {
       properties[key] = mergeSchemaOverrides(properties[key] ?? {}, value);
@@ -44,7 +51,7 @@ export const mergeSchemaOverrides = (schema, overrides) => {
   return result;
 };
 
-export const applyRequiredFields = (schema, path, requiredFields) => {
+export const applyRequiredFields = (schema: OpenapiSchema, path: string, requiredFields: Set<string>): OpenapiSchema => {
   if (Array.isArray(schema.oneOf)) {
     return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => applyRequiredFields(nestedSchema, path, requiredFields)) };
   }
@@ -76,10 +83,10 @@ export const applyRequiredFields = (schema, path, requiredFields) => {
   return required.length === 0 ? result : { ...result, required };
 };
 
-export const inferSchema = (values) => {
-  const schemas = [];
-  const arrays = values.filter(Array.isArray);
-  const objects = values.filter(isObject);
+export const inferSchema = (values: JsonValue[]): OpenapiSchema => {
+  const schemas: InferredSchema[] = [];
+  const arrays = values.filter((value): value is JsonValue[] => Array.isArray(value));
+  const objects = values.filter((value): value is JsonObject => isObject(value));
 
   if (arrays.length > 0) {
     const items = arrays.flat();
@@ -99,14 +106,14 @@ export const inferSchema = (values) => {
       } else if (typeof value === 'number') {
         schemas.push({ type: Number.isInteger(value) ? 'integer' : 'number' });
       } else {
-        schemas.push({ type: typeof value });
+        schemas.push({ type: typeof value as 'boolean' | 'string' });
       }
     });
 
   return mergeSchemas(schemas);
 };
 
-export function inferObjectSchema(values) {
+export function inferObjectSchema(values: JsonObject[]): OpenapiSchema {
   const keys = [...new Set(values.flatMap((value) => Object.keys(value)))].sort((left, right) => (left === 'id' ? -1 : right === 'id' ? 1 : left.localeCompare(right)));
   const properties = Object.fromEntries(
     keys.map((key) => {
@@ -119,18 +126,18 @@ export function inferObjectSchema(values) {
   return { properties, type: 'object' };
 }
 
-export const ensureGeneratedIdSchema = (schema) => {
+export const ensureGeneratedIdSchema = (schema: OpenapiSchema): OpenapiSchema => {
   const idSchema = schema.properties?.id ?? {};
   const idSchemas = Array.isArray(idSchema.oneOf) ? idSchema.oneOf : [idSchema];
   const properties = {
     ...schema.properties,
-    id: idSchemas.some(({ type }) => type === 'string') ? idSchema : { oneOf: [...idSchemas, { type: 'string' }] },
+    id: idSchemas.some(({ type }) => type === 'string') ? idSchema : { oneOf: [...idSchemas, { type: 'string' as const }] },
   };
 
   return { ...schema, properties };
 };
 
-export const getSchemasAtPath = (schema, keys) => {
+export const getSchemasAtPath = (schema: OpenapiSchema, keys: string[]): OpenapiSchema[] => {
   if (Array.isArray(schema.oneOf)) {
     return schema.oneOf.flatMap((nestedSchema) => getSchemasAtPath(nestedSchema, keys));
   }
@@ -150,7 +157,7 @@ export const getSchemasAtPath = (schema, keys) => {
   return getSchemasAtPath(schema.properties[keys[0]], keys.slice(1));
 };
 
-export const updateSchemasAtPath = (schema, keys, update) => {
+export const updateSchemasAtPath = (schema: OpenapiSchema, keys: string[], update: (schema: OpenapiSchema) => OpenapiSchema): OpenapiSchema => {
   if (Array.isArray(schema.oneOf)) {
     return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => updateSchemasAtPath(nestedSchema, keys, update)) };
   }
@@ -176,12 +183,12 @@ export const updateSchemasAtPath = (schema, keys, update) => {
   };
 };
 
-export const omitId = (schema, keepRequired) => {
+export const omitId = (schema: OpenapiSchema, keepRequired: boolean): OpenapiSchema => {
   const properties = Object.fromEntries(Object.entries(schema.properties ?? {}).filter(([key]) => key !== 'id'));
   const required = keepRequired ? schema.required?.filter((key) => key !== 'id') : undefined;
   const result = { ...schema, properties };
 
   delete result.required;
 
-  return required?.length > 0 ? { ...result, required } : result;
+  return required != null && required.length > 0 ? { ...result, required } : result;
 };

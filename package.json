@@ -1,38 +1,36 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "JSON mock server with deep filters and recursive relationship embedding",
   "type": "module",
-  "types": "./types/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
-    "deep-json-server": "bin/deep-json-server.js"
+    "deep-json-server": "dist/bin/deep-json-server.js"
   },
   "exports": {
     ".": {
-      "types": "./types/index.d.ts",
-      "import": "./index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "files": [
-    "bin",
-    "index.js",
-    "src",
-    "types",
+    "dist",
     "LICENSE",
     "README.md",
     "README.ru.md"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check bin/deep-json-server.js && node --check src/*.js && node --check src/files/*.js && node --check src/openapi/*.js && node --check src/query/*.js",
+    "build": "node scripts/clean-dist.js && tsc && node scripts/prepare-dist.js",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "prepack": "npm run types",
+    "pack:check": "node scripts/check-package.js",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run verify",
-    "test": "node --test",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90",
-    "typecheck": "tsc -p tsconfig.check.json",
-    "types": "tsc -p tsconfig.types.json",
-    "verify": "npm run check && npm run lint && npm run typecheck && npm run test:coverage && npm run types"
+    "test": "npm run build && node --test",
+    "test:coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run lint && npm run test:coverage && npm run pack:check"
   },
   "engines": {
     "node": ">=20"

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { createServer } from '../index.js';
-import { createMemoryFileStore } from '../src/files/memory-store.js';
+import { createServer } from '../dist/index.js';
+import { createMemoryFileStore } from '../dist/src/files/memory-store.js';
 
 const withDiskServer = async (run) => {
   const rootPath = await mkdtemp(join(tmpdir(), 'deep-json-server-files-'));
@@ -47,6 +47,16 @@ test('does not follow symbolic links outside disk storage', async () => {
 
     assert.equal(response.statusCode, 400);
     await assert.rejects(() => access(join(outsidePath, 'file.txt')), { code: 'ENOENT' });
+
+    const nestedResponse = await server.inject({
+      headers: { 'content-directory': 'escape/created', 'content-name': 'nested.txt', 'content-type': 'text/plain' },
+      method: 'POST',
+      payload: 'outside',
+      url: '/_files/storage',
+    });
+
+    assert.equal(nestedResponse.statusCode, 400);
+    await assert.rejects(() => access(join(outsidePath, 'created')), { code: 'ENOENT' });
   });
 });
 
@@ -66,6 +76,7 @@ test('keeps file routes independent from an invalid resource database', async ()
 
     assert.equal(metadataResponse.statusCode, 200);
     assert.equal(resourceResponse.statusCode, 500);
+    assert.deepEqual(resourceResponse.json(), { error: 'Внутренняя ошибка сервера' });
   });
 });
 
@@ -154,6 +165,21 @@ test('supports update and delete in memory and validates stored MIME types', asy
   }
 
   await assert.rejects(() => createServer({ database: { data: { items: [] } }, files: { data: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }), /mimeType.*MIME-тип/);
+});
+
+test('rejects file names that are not portable across supported platforms', async () => {
+  const facade = await createServer({ database: { data: { items: [] } }, files: { data: [] }, server: { logger: false } });
+  const server = facade.fastify();
+
+  try {
+    for (const name of ['CON', 'NUL.txt', 'file.', 'file ', 'file:name.txt']) {
+      const response = await server.inject({ headers: { 'content-name': name, 'content-type': 'text/plain' }, method: 'POST', payload: 'content', url: '/_files/storage' });
+
+      assert.equal(response.statusCode, 400, name);
+    }
+  } finally {
+    await server.close();
+  }
 });
 
 test('does not initialize disk file storage when only OpenAPI is generated', async () => {

@@ -1,31 +1,34 @@
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
+import type { Query } from '../types.js';
 import { createHttpError } from '../utils.js';
 
-const parsePositiveInteger = (value, name, defaultValue) => {
+export interface Pagination {
+  page: number;
+  pageSize: number;
+}
+
+export interface Page<T> {
+  data: T[];
+  total: number;
+}
+
+const parsePositiveInteger = (value: Query[string], name: string, defaultValue: number): number => {
   if (value == null) {
     return defaultValue;
   }
 
-  if (Array.isArray(value) || !/^[1-9]\d*$/.test(String(value))) {
-    throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
-  }
-
   const number = Number(value);
 
-  if (!Number.isSafeInteger(number)) {
+  if (Array.isArray(value) || !/^[1-9]\d*$/.test(String(value)) || !Number.isSafeInteger(number)) {
     throw createHttpError(400, `Параметр ${name} должен быть положительным целым числом`);
   }
 
   return number;
 };
 
-export const parsePagination = (query, maxPageSize = DEFAULT_MAX_PAGE_SIZE) => {
+export const parsePagination = (query: Query, maxPageSize = DEFAULT_MAX_PAGE_SIZE): Pagination => {
   const page = parsePositiveInteger(query._page, '_page', 1);
   const pageSize = parsePositiveInteger(query._perPage, '_perPage', DEFAULT_PAGE_SIZE);
-
-  if (!Number.isInteger(maxPageSize) || maxPageSize < 1) {
-    throw new Error('Максимальный размер страницы должен быть положительным целым числом');
-  }
 
   if (pageSize > maxPageSize) {
     throw createHttpError(400, `Параметр _perPage не должен превышать ${maxPageSize}`);
@@ -34,7 +37,7 @@ export const parsePagination = (query, maxPageSize = DEFAULT_MAX_PAGE_SIZE) => {
   return { page, pageSize };
 };
 
-export const paginateItems = (items, page, pageSize) => {
+export const paginateItems = <T>(items: T[], page: number, pageSize: number): Page<T> => {
   const offset = (page - 1) * pageSize;
 
   return {

@@ -2,16 +2,16 @@ import { randomBytes } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { Transform } from 'node:stream';
+import { Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createHttpError, createSerialQueue } from '../utils.js';
-import { getFileKey, normalizeStoredFileMetadata } from './contract.js';
+import { createHttpError, createSerialQueue, isSystemError } from '../utils.js';
+import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata, type StoredFileMetadata } from './contract.js';
 
-const createSizeLimiter = (maxFileSize, onSize) => {
+const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void): Transform => {
   let size = 0;
 
   return new Transform({
-    transform(chunk, _encoding, callback) {
+    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
       size += chunk.length;
 
       if (size > maxFileSize) {
@@ -25,12 +25,12 @@ const createSizeLimiter = (maxFileSize, onSize) => {
   });
 };
 
-const pathExists = async (path) => {
+const pathExists = async (path: string): Promise<boolean> => {
   try {
     await access(path);
     return true;
   } catch (error) {
-    if (error?.code === 'ENOENT') {
+    if (isSystemError(error) && error.code === 'ENOENT') {
       return false;
     }
 
@@ -38,19 +38,19 @@ const pathExists = async (path) => {
   }
 };
 
-const isPathInside = (rootPath, targetPath) => {
+const isPathInside = (rootPath: string, targetPath: string): boolean => {
   const relativePath = relative(rootPath, targetPath);
 
   return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
 };
 
-const readMetadata = async (metadataPath) => {
-  let source;
+const readMetadata = async (metadataPath: string): Promise<Map<string, StoredFileMetadata>> => {
+  let source: unknown;
 
   try {
     source = JSON.parse(await readFile(metadataPath, 'utf8'));
   } catch (error) {
-    if (error?.code === 'ENOENT') {
+    if (isSystemError(error) && error.code === 'ENOENT') {
       return new Map();
     }
 
@@ -61,7 +61,7 @@ const readMetadata = async (metadataPath) => {
     throw new Error(`Файл метаданных ${metadataPath} должен содержать JSON-массив`);
   }
 
-  const files = new Map();
+  const files = new Map<string, StoredFileMetadata>();
 
   source.forEach((value, index) => {
     const file = normalizeStoredFileMetadata(value, `Запись ${index} в файле метаданных ${metadataPath}`);
@@ -77,7 +77,7 @@ const readMetadata = async (metadataPath) => {
   return files;
 };
 
-const writeMetadata = async (metadataPath, files) => {
+const writeMetadata = async (metadataPath: string, files: Map<string, StoredFileMetadata>): Promise<void> => {
   const temporaryPath = `${metadataPath}.${randomBytes(6).toString('hex')}.tmp`;
 
   try {
@@ -89,11 +89,11 @@ const writeMetadata = async (metadataPath, files) => {
   }
 };
 
-const getFileSize = async (path) => {
+const getFileSize = async (path: string): Promise<number> => {
   try {
     return (await stat(path)).size;
   } catch (error) {
-    if (error?.code === 'ENOENT') {
+    if (isSystemError(error) && error.code === 'ENOENT') {
       throw createHttpError(404, 'Файл не найден');
     }
 
@@ -101,26 +101,41 @@ const getFileSize = async (path) => {
   }
 };
 
-/** @param {{ directory: string, metadata: string }} config */
-export const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: sourceMetadataPath }) => {
+export const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: sourceMetadataPath }: { directory: string; metadata: string }): Promise<FileStore> => {
   const directoryPath = resolve(sourceDirectoryPath);
   const metadataPath = resolve(sourceMetadataPath);
   const stagingPath = resolve(directoryPath, '.deep-json-server');
   const schedule = createSerialQueue();
-  const pendingCleanup = new Set();
+  const pendingCleanup = new Set<string>();
 
   await Promise.all([mkdir(directoryPath, { recursive: true }), mkdir(dirname(metadataPath), { recursive: true }), mkdir(stagingPath, { recursive: true })]);
 
   const realDirectoryPath = await realpath(directoryPath);
   let files = await readMetadata(metadataPath);
 
-  const assertContained = (path) => {
+  const commitMetadata = async (nextFiles: Map<string, StoredFileMetadata>, rollback: () => Promise<void>, rollbackMessage: string): Promise<void> => {
+    try {
+      await writeMetadata(metadataPath, nextFiles);
+    } catch (error) {
+      try {
+        await rollback();
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], rollbackMessage);
+      }
+
+      throw error;
+    }
+
+    files = nextFiles;
+  };
+
+  const assertContained = (path: string): void => {
     if (!isPathInside(realDirectoryPath, path)) {
       throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
     }
   };
 
-  const resolveFilePath = (path) => {
+  const resolveFilePath = (path: string): string => {
     const filePath = resolve(directoryPath, path);
     if (filePath === directoryPath || !isPathInside(directoryPath, filePath) || filePath === metadataPath || isPathInside(stagingPath, filePath)) {
       throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
@@ -129,7 +144,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     return filePath;
   };
 
-  const assertNoSymlinks = async (targetPath) => {
+  const assertNoSymlinks = async (targetPath: string): Promise<void> => {
     const relativePath = relative(directoryPath, targetPath);
     const parts = relativePath === '' ? [] : relativePath.split(sep);
     let currentPath = directoryPath;
@@ -142,19 +157,38 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
           throw createHttpError(400, 'Путь файла не должен содержать символические ссылки');
         }
       } catch (error) {
-        if (error?.code !== 'ENOENT') {
+        if (!isSystemError(error) || error.code !== 'ENOENT') {
           throw error;
         }
       }
     }
   };
 
-  const prepareTargetPath = async (path) => {
+  const prepareTargetPath = async (path: string): Promise<string> => {
     const filePath = resolveFilePath(path);
+    const targetDirectory = dirname(filePath);
+    const parts = relative(directoryPath, targetDirectory).split(sep).filter(Boolean);
+    let currentPath = directoryPath;
 
-    await mkdir(dirname(filePath), { recursive: true });
-    await assertNoSymlinks(dirname(filePath));
-    assertContained(await realpath(dirname(filePath)));
+    for (const part of parts) {
+      currentPath = resolve(currentPath, part);
+
+      try {
+        await mkdir(currentPath);
+      } catch (error) {
+        if (!isSystemError(error) || error.code !== 'EEXIST') {
+          throw error;
+        }
+      }
+
+      const currentStats = await lstat(currentPath);
+
+      if (currentStats.isSymbolicLink() || !currentStats.isDirectory()) {
+        throw createHttpError(400, 'Путь файла должен содержать только обычные директории');
+      }
+
+      assertContained(await realpath(currentPath));
+    }
 
     if (await pathExists(filePath)) {
       await assertNoSymlinks(filePath);
@@ -164,14 +198,14 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     return filePath;
   };
 
-  const resolveExistingPath = async (path) => {
+  const resolveExistingPath = async (path: string): Promise<string> => {
     const filePath = resolveFilePath(path);
 
     try {
       await assertNoSymlinks(filePath);
       assertContained(await realpath(filePath));
     } catch (error) {
-      if (error?.code === 'ENOENT') {
+      if (isSystemError(error) && error.code === 'ENOENT') {
         throw createHttpError(404, 'Файл не найден');
       }
 
@@ -181,7 +215,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     return filePath;
   };
 
-  const cleanupLater = async (path) => {
+  const cleanupLater = async (path: string): Promise<void> => {
     try {
       await rm(path, { force: true });
       pendingCleanup.delete(path);
@@ -190,9 +224,11 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     }
   };
 
-  const flushCleanup = async () => Promise.all([...pendingCleanup].map(cleanupLater));
+  const flushCleanup = async (): Promise<void> => {
+    await Promise.all([...pendingCleanup].map(cleanupLater));
+  };
 
-  const findFile = (path) => {
+  const findFile = (path: string): StoredFileMetadata => {
     const file = files.get(path);
 
     if (file == null) {
@@ -202,14 +238,14 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     return file;
   };
 
-  const metadata = async (path) => {
+  const metadata = async (path: string): Promise<FileRecord> => {
     const file = findFile(path);
     const filePath = await resolveExistingPath(path);
 
     return { ...file, size: await getFileSize(filePath) };
   };
 
-  const get = async (path) => {
+  const get = async (path: string): ReturnType<FileStore['get']> => {
     const file = findFile(path);
     const filePath = await resolveExistingPath(path);
     const handle = await open(filePath, 'r');
@@ -224,7 +260,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     }
   };
 
-  const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }) => {
+  const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }: FileUpload): ReturnType<FileStore['upload']> => {
     const storedFile = { directory, mimeType, name };
     const key = getFileKey(storedFile);
 
@@ -238,7 +274,9 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     try {
       await pipeline(
         stream,
-        createSizeLimiter(maxFileSize, (value) => (size = value)),
+        createSizeLimiter(maxFileSize, (value) => {
+          size = value;
+        }),
         createWriteStream(stagedPath, { flags: 'wx' }),
       );
 
@@ -276,12 +314,18 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
 
           return { created: !exists, file: { ...storedFile, size } };
         } catch (error) {
+          const rollbackErrors: unknown[] = [];
+
           if (installed) {
-            await rm(path, { force: true }).catch(() => undefined);
+            await rm(path, { force: true }).catch((rollbackError: unknown) => rollbackErrors.push(rollbackError));
           }
 
           if (backedUp) {
-            await rename(backupPath, path).catch(() => undefined);
+            await rename(backupPath, path).catch((rollbackError: unknown) => rollbackErrors.push(rollbackError));
+          }
+
+          if (rollbackErrors.length > 0) {
+            throw new AggregateError([error, ...rollbackErrors], 'Не удалось сохранить файл и полностью откатить операцию');
           }
 
           throw error;
@@ -296,7 +340,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     }
   };
 
-  const update = (sourcePath, updates) =>
+  const update = (sourcePath: string, updates: FileUpdate): ReturnType<FileStore['update']> =>
     schedule(async () => {
       await flushCleanup();
 
@@ -322,19 +366,12 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
       nextFiles.delete(sourcePath);
       nextFiles.set(targetPath, updatedFile);
 
-      try {
-        await writeMetadata(metadataPath, nextFiles);
-      } catch (error) {
-        await rename(targetFilePath, sourceFilePath).catch(() => undefined);
-        throw error;
-      }
-
-      files = nextFiles;
+      await commitMetadata(nextFiles, () => rename(targetFilePath, sourceFilePath), 'Не удалось обновить файл и откатить перемещение');
 
       return { ...updatedFile, size: await getFileSize(targetFilePath) };
     });
 
-  const remove = (path) =>
+  const remove = (path: string): ReturnType<FileStore['remove']> =>
     schedule(async () => {
       await flushCleanup();
       findFile(path);
@@ -348,14 +385,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
 
       nextFiles.delete(path);
 
-      try {
-        await writeMetadata(metadataPath, nextFiles);
-      } catch (error) {
-        await rename(temporaryPath, filePath).catch(() => undefined);
-        throw error;
-      }
-
-      files = nextFiles;
+      await commitMetadata(nextFiles, () => rename(temporaryPath, filePath), 'Не удалось удалить файл и откатить операцию');
       await cleanupLater(temporaryPath);
     });
 

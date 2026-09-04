@@ -2,9 +2,10 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { stringify } from 'yaml';
 import { DEFAULT_HOST, DEFAULT_PORT } from '../constants.js';
+import type { DatabaseData, JsonObject, OpenapiDocument } from '../types.js';
 import { buildOpenapiDocument } from './document.js';
 
-const getServerUrl = (host, port) => {
+const getServerUrl = (host: string, port: number): string => {
   const serverPort = Number(port);
 
   if (typeof host !== 'string' || host === '') {
@@ -20,7 +21,21 @@ const getServerUrl = (host, port) => {
   return `http://${serverHost}:${serverPort}`;
 };
 
-export const createOpenapi = ({ database, files, host = DEFAULT_HOST, maxPageSize, port = DEFAULT_PORT, schema }) => {
+export const createOpenapi = ({
+  database,
+  files,
+  host = DEFAULT_HOST,
+  maxPageSize,
+  port = DEFAULT_PORT,
+  schema,
+}: {
+  database: DatabaseData;
+  files: boolean;
+  host?: string;
+  maxPageSize: number;
+  port?: number;
+  schema: JsonObject;
+}): OpenapiDocument => {
   const document = buildOpenapiDocument({ database, files, maxPageSize, schema });
 
   document.servers = [{ url: getServerUrl(host, port) }];
@@ -28,7 +43,7 @@ export const createOpenapi = ({ database, files, host = DEFAULT_HOST, maxPageSiz
   return document;
 };
 
-export const writeOpenapi = async (document, outputPath) => {
+export const writeOpenapi = async (document: OpenapiDocument, outputPath: string): Promise<void> => {
   const resolvedOutputPath = resolve(outputPath);
 
   await mkdir(dirname(resolvedOutputPath), { recursive: true });

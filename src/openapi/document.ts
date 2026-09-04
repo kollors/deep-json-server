@@ -1,14 +1,25 @@
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
 import { validateDatabase } from '../database.js';
-import { FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/contract.js';
-import { getRelationMetadata } from '../relation-metadata.js';
+import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_ROUTES, FILE_UPDATE_SCHEMA } from '../files/contract.js';
+import { getRelationMetadata, type RelationMetadata } from '../relation-metadata.js';
+import type { DatabaseData, JsonObject, OpenapiDocument, OpenapiSchema } from '../types.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
 import { applyConfiguredFields, normalizeSchemaConfig } from './config.js';
 import { ensureGeneratedIdSchema, inferObjectSchema, mergeSchemaOverrides, omitId } from './inference.js';
 
-const createSchemaReference = (name) => ({ $ref: `#/components/schemas/${name}` });
+type OpenapiObject = Record<string, unknown>;
+type SchemaMap = Record<string, OpenapiSchema>;
 
-const addForwardRelations = (schema, resources, componentNames, sourceResource) => {
+export interface BuildOpenapiOptions {
+  database: DatabaseData;
+  files?: boolean;
+  maxPageSize?: number;
+  schema?: JsonObject;
+}
+
+const createSchemaReference = (name: string): OpenapiSchema => ({ $ref: `#/components/schemas/${name}` });
+
+const addForwardRelations = (schema: OpenapiSchema, resources: string[], componentNames: Record<string, string>, sourceResource: string): OpenapiSchema => {
   if (Array.isArray(schema.oneOf)) {
     return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => addForwardRelations(nestedSchema, resources, componentNames, sourceResource)) };
   }
@@ -36,7 +47,7 @@ const addForwardRelations = (schema, resources, componentNames, sourceResource) 
   return { ...schema, properties };
 };
 
-const collectRelations = (schema, resources, sourceResource, relations = []) => {
+const collectRelations = (schema: OpenapiSchema, resources: string[], sourceResource: string, relations: RelationMetadata[] = []): RelationMetadata[] => {
   if (Array.isArray(schema.oneOf)) {
     schema.oneOf.forEach((nestedSchema) => {
       collectRelations(nestedSchema, resources, sourceResource, relations);
@@ -66,7 +77,7 @@ const collectRelations = (schema, resources, sourceResource, relations = []) => 
   return relations;
 };
 
-const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => {
+const addReverseRelations = (schemas: SchemaMap, rawSchemas: SchemaMap, resources: string[], componentNames: Record<string, string>): void => {
   resources.forEach((sourceResource) => {
     collectRelations(rawSchemas[sourceResource], resources, sourceResource).forEach(({ reverseRelationName, targetResource }) => {
       const targetComponentName = componentNames[targetResource];
@@ -85,10 +96,15 @@ const addReverseRelations = (schemas, rawSchemas, resources, componentNames) => 
   });
 };
 
-const createParameters = (maxPageSize) => ({
-  ContentDirectory: { description: 'URI-encoded relative storage directory', in: 'header', name: 'Content-Directory', schema: { type: 'string' } },
-  ContentName: { description: 'URI-encoded file name', in: 'header', name: 'Content-Name', required: true, schema: { type: 'string' } },
-  ContentOverride: { description: 'Overwrite an existing file at the same path', in: 'header', name: 'Content-Override', schema: { default: false, type: 'boolean' } },
+const createParameters = (maxPageSize: number): OpenapiObject => ({
+  ContentDirectory: { description: 'URI-encoded relative storage directory', in: 'header', name: FILE_HEADERS.directory.name, schema: { type: 'string' } },
+  ContentName: { description: 'URI-encoded file name', in: 'header', name: FILE_HEADERS.name.name, required: true, schema: { type: 'string' } },
+  ContentOverride: {
+    description: 'Overwrite an existing file at the same path',
+    in: 'header',
+    name: FILE_HEADERS.override.name,
+    schema: { default: 'false', enum: ['false', 'true'], type: 'string' },
+  },
   Embed: { description: 'Relationship paths to embed', explode: true, in: 'query', name: '_embed', schema: { items: { type: 'string' }, type: 'array' }, style: 'form' },
   FilePath: { description: 'Percent-encoded file path relative to the storage directory', in: 'path', name: 'path', required: true, schema: { type: 'string' } },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
@@ -98,37 +114,38 @@ const createParameters = (maxPageSize) => ({
   Where: { description: 'JSON-encoded deep filter', in: 'query', name: '_where', schema: { type: 'string' } },
 });
 
-const createJsonContent = (schema) => ({ content: { 'application/json': { schema } } });
-const createResponse = (description, schema) => ({ description, ...(schema != null && createJsonContent(schema)) });
-const createParameterReference = (name) => ({ $ref: `#/components/parameters/${name}` });
-const createRequestBody = (name) => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
+const createJsonContent = (schema: OpenapiSchema): OpenapiObject => ({ content: { 'application/json': { schema } } });
+const createResponse = (description: string, schema?: OpenapiSchema): OpenapiObject => ({ description, ...(schema != null && createJsonContent(schema)) });
+const createErrorResponse = (description: string): OpenapiObject => createResponse(description, createSchemaReference('Error'));
+const createParameterReference = (name: string): OpenapiObject => ({ $ref: `#/components/parameters/${name}` });
+const createRequestBody = (name: string): OpenapiObject => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
 
-const createFilePaths = () => ({
-  '/_files/download/{path}': {
+const createFilePaths = (): Record<string, OpenapiObject> => ({
+  [`${FILE_ROUTES.download}/{path}`]: {
     get: {
       operationId: 'downloadFile',
       parameters: [createParameterReference('FilePath')],
       responses: {
         200: { content: { '*/*': { schema: { format: 'binary', type: 'string' } } }, description: 'File download' },
-        400: createResponse('Invalid path', createSchemaReference('Error')),
-        404: createResponse('Not found', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid path'),
+        404: createErrorResponse('Not found'),
       },
       tags: ['files'],
     },
   },
-  '/_files/metadata/{path}': {
+  [`${FILE_ROUTES.metadata}/{path}`]: {
     get: {
       operationId: 'getFileMetadata',
       parameters: [createParameterReference('FilePath')],
       responses: {
         200: createResponse('File metadata', createSchemaReference('FileMetadata')),
-        400: createResponse('Invalid path', createSchemaReference('Error')),
-        404: createResponse('Not found', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid path'),
+        404: createErrorResponse('Not found'),
       },
       tags: ['files'],
     },
   },
-  '/_files/storage': {
+  [FILE_ROUTES.storage]: {
     post: {
       operationId: 'uploadFile',
       parameters: ['ContentName', 'ContentDirectory', 'ContentOverride'].map(createParameterReference),
@@ -136,22 +153,22 @@ const createFilePaths = () => ({
       responses: {
         200: createResponse('Overwritten', createSchemaReference('FileMetadata')),
         201: createResponse('Created', createSchemaReference('FileMetadata')),
-        400: createResponse('Invalid request', createSchemaReference('Error')),
-        409: createResponse('Already exists', createSchemaReference('Error')),
-        413: createResponse('File is too large', createSchemaReference('Error')),
-        415: createResponse('Unsupported media type', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid request'),
+        409: createErrorResponse('Already exists'),
+        413: createErrorResponse('File is too large'),
+        415: createErrorResponse('Unsupported media type'),
       },
       tags: ['files'],
     },
   },
-  '/_files/storage/{path}': {
+  [`${FILE_ROUTES.storage}/{path}`]: {
     delete: {
       operationId: 'deleteFile',
       parameters: [createParameterReference('FilePath')],
       responses: {
         204: { description: 'Deleted' },
-        400: createResponse('Invalid path', createSchemaReference('Error')),
-        404: createResponse('Not found', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid path'),
+        404: createErrorResponse('Not found'),
       },
       tags: ['files'],
     },
@@ -160,8 +177,8 @@ const createFilePaths = () => ({
       parameters: [createParameterReference('FilePath')],
       responses: {
         200: { content: { '*/*': { schema: { format: 'binary', type: 'string' } } }, description: 'File contents' },
-        400: createResponse('Invalid path', createSchemaReference('Error')),
-        404: createResponse('Not found', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid path'),
+        404: createErrorResponse('Not found'),
       },
       tags: ['files'],
     },
@@ -171,18 +188,18 @@ const createFilePaths = () => ({
       requestBody: createRequestBody('FileUpdate'),
       responses: {
         200: createResponse('Updated', createSchemaReference('FileMetadata')),
-        400: createResponse('Invalid request', createSchemaReference('Error')),
-        404: createResponse('Not found', createSchemaReference('Error')),
-        409: createResponse('Already exists', createSchemaReference('Error')),
-        413: createResponse('Request is too large', createSchemaReference('Error')),
-        415: createResponse('Unsupported media type', createSchemaReference('Error')),
+        400: createErrorResponse('Invalid request'),
+        404: createErrorResponse('Not found'),
+        409: createErrorResponse('Already exists'),
+        413: createErrorResponse('Request is too large'),
+        415: createErrorResponse('Unsupported media type'),
       },
       tags: ['files'],
     },
   },
 });
 
-const createResourceOperationIds = (resource) => {
+const createResourceOperationIds = (resource: string): Record<'create' | 'get' | 'list' | 'remove' | 'replace' | 'update', string> => {
   const resourceName = toPascalCase(resource);
 
   return {
@@ -195,7 +212,7 @@ const createResourceOperationIds = (resource) => {
   };
 };
 
-const createResourcePaths = (resource, componentName) => {
+const createResourcePaths = (resource: string, componentName: string): Record<string, OpenapiObject> => {
   const operationIds = createResourceOperationIds(resource);
 
   return {
@@ -203,13 +220,13 @@ const createResourcePaths = (resource, componentName) => {
       get: {
         operationId: operationIds.list,
         parameters: ['Page', 'PerPage', 'Sort', 'Where', 'Embed'].map(createParameterReference),
-        responses: { 200: createResponse('Successful response', createSchemaReference(`${componentName}Page`)), 400: createResponse('Invalid query', createSchemaReference('Error')) },
+        responses: { 200: createResponse('Successful response', createSchemaReference(`${componentName}Page`)), 400: createErrorResponse('Invalid query') },
         tags: [resource],
       },
       post: {
         operationId: operationIds.create,
         requestBody: createRequestBody(`${componentName}Create`),
-        responses: { 201: createResponse('Created', createSchemaReference(componentName)), 400: createResponse('Invalid request', createSchemaReference('Error')) },
+        responses: { 201: createResponse('Created', createSchemaReference(componentName)), 400: createErrorResponse('Invalid request') },
         tags: [resource],
       },
     },
@@ -217,7 +234,7 @@ const createResourcePaths = (resource, componentName) => {
       delete: {
         operationId: operationIds.remove,
         parameters: [createParameterReference('Id')],
-        responses: { 200: createResponse('Deleted', createSchemaReference(componentName)), 404: createResponse('Not found', createSchemaReference('Error')) },
+        responses: { 200: createResponse('Deleted', createSchemaReference(componentName)), 404: createErrorResponse('Not found') },
         tags: [resource],
       },
       get: {
@@ -225,8 +242,8 @@ const createResourcePaths = (resource, componentName) => {
         parameters: [createParameterReference('Id'), createParameterReference('Embed')],
         responses: {
           200: createResponse('Successful response', createSchemaReference(componentName)),
-          400: createResponse('Invalid query', createSchemaReference('Error')),
-          404: createResponse('Not found', createSchemaReference('Error')),
+          400: createErrorResponse('Invalid query'),
+          404: createErrorResponse('Not found'),
         },
         tags: [resource],
       },
@@ -236,8 +253,8 @@ const createResourcePaths = (resource, componentName) => {
         requestBody: createRequestBody(`${componentName}Update`),
         responses: {
           200: createResponse('Updated', createSchemaReference(componentName)),
-          400: createResponse('Invalid request', createSchemaReference('Error')),
-          404: createResponse('Not found', createSchemaReference('Error')),
+          400: createErrorResponse('Invalid request'),
+          404: createErrorResponse('Not found'),
         },
         tags: [resource],
       },
@@ -247,8 +264,8 @@ const createResourcePaths = (resource, componentName) => {
         requestBody: createRequestBody(`${componentName}Create`),
         responses: {
           200: createResponse('Replaced', createSchemaReference(componentName)),
-          400: createResponse('Invalid request', createSchemaReference('Error')),
-          404: createResponse('Not found', createSchemaReference('Error')),
+          400: createErrorResponse('Invalid request'),
+          404: createErrorResponse('Not found'),
         },
         tags: [resource],
       },
@@ -256,18 +273,16 @@ const createResourcePaths = (resource, componentName) => {
   };
 };
 
-const validateGeneratedNames = (resources, componentNames, files) => {
-  const schemaOwners = new Map(
-    /** @type {Array<[string, string]>} */ ([
-      ['Error', 'встроенная схема ошибки'],
-      ...(files
-        ? [
-            ['FileMetadata', 'встроенная схема метаданных файла'],
-            ['FileUpdate', 'встроенная схема изменения файла'],
-          ]
-        : []),
-    ]),
-  );
+const validateGeneratedNames = (resources: string[], componentNames: Record<string, string>, files: boolean): void => {
+  const schemaOwners = new Map<string, string>([
+    ['Error', 'встроенная схема ошибки'],
+    ...(files
+      ? [
+          ['FileMetadata', 'встроенная схема метаданных файла'],
+          ['FileUpdate', 'встроенная схема изменения файла'],
+        ]
+      : []),
+  ] as Array<[string, string]>);
   resources.forEach((resource) => {
     const componentName = componentNames[resource];
 
@@ -287,8 +302,8 @@ const validateGeneratedNames = (resources, componentNames, files) => {
   });
 };
 
-const validateOperationIds = (paths) => {
-  const operationOwners = new Map();
+const validateOperationIds = (paths: Record<string, OpenapiObject>): void => {
+  const operationOwners = new Map<string, string>();
 
   Object.entries(paths).forEach(([path, pathItem]) => {
     Object.entries(pathItem).forEach(([method, operation]) => {
@@ -307,12 +322,8 @@ const validateOperationIds = (paths) => {
   });
 };
 
-/**
- * Builds an OpenAPI document without runtime server addresses.
- * @param {{ database: Record<string, Array<Record<string, unknown>>>, files?: boolean, maxPageSize?: number, schema?: Record<string, unknown> }} options Source data and schema settings.
- * @returns {Record<string, unknown>} OpenAPI document.
- */
-export function buildOpenapiDocument(options) {
+/** Builds an OpenAPI document without runtime server addresses. */
+export function buildOpenapiDocument(options: BuildOpenapiOptions): OpenapiDocument {
   const { database, files = false, maxPageSize = DEFAULT_MAX_PAGE_SIZE, schema: schemaConfig = {} } = options ?? {};
 
   if (typeof files !== 'boolean') {
@@ -331,7 +342,7 @@ export function buildOpenapiDocument(options) {
 
   const resources = getResourceNames(database);
   const resourceConfigs = normalizeSchemaConfig(schemaConfig, resources);
-  const componentNames = Object.fromEntries(
+  const componentNames: Record<string, string> = Object.fromEntries(
     resources.map((resource) => {
       const resourceConfig = resourceConfigs[resource];
       const componentName = resourceConfig.name ?? toPascalCase(singularize(resource));
@@ -342,16 +353,16 @@ export function buildOpenapiDocument(options) {
 
   validateGeneratedNames(resources, componentNames, files);
 
-  const rawSchemas = Object.fromEntries(
+  const rawSchemas: SchemaMap = Object.fromEntries(
     resources.map((resource) => {
       const resourceConfig = resourceConfigs[resource];
-      const inferredSchema = database[resource].length === 0 ? { properties: { id: { type: 'string' } }, type: 'object' } : inferObjectSchema(database[resource]);
+      const inferredSchema: OpenapiSchema = database[resource].length === 0 ? { properties: { id: { type: 'string' } }, type: 'object' } : inferObjectSchema(database[resource]);
       const configuredSchema = mergeSchemaOverrides(inferredSchema, { properties: resourceConfig.properties });
 
       return [resource, applyConfiguredFields(ensureGeneratedIdSchema(configuredSchema), resource, resourceConfig)];
     }),
   );
-  const schemas = {
+  const schemas: SchemaMap = {
     Error: { properties: { error: { type: 'string' } }, required: ['error'], type: 'object' },
     ...(files && {
       FileMetadata: FILE_METADATA_SCHEMA,
@@ -378,13 +389,13 @@ export function buildOpenapiDocument(options) {
 
   addReverseRelations(schemas, rawSchemas, resources, componentNames);
 
-  const paths = Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {});
+  const paths: Record<string, OpenapiObject> = Object.assign({}, ...resources.map((resource) => createResourcePaths(resource, componentNames[resource])), files ? createFilePaths() : {});
 
   validateOperationIds(paths);
 
   return {
     components: { parameters: createParameters(maxPageSize), schemas },
-    info: schemaConfig.$info ?? { title: 'Deep JSON Server API', version: '1.0.0' },
+    info: isObject(schemaConfig.$info) ? (schemaConfig.$info as JsonObject) : { title: 'Deep JSON Server API', version: '1.0.0' },
     openapi: '3.0.3',
     paths,
     tags: [...new Set([...resources, ...(files ? ['files'] : [])])].map((name) => ({ name })),

@@ -1,20 +1,23 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { JSONFilePreset } from 'lowdb/node';
-import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey, resolveDatabasePath } from './utils.js';
+import type { DatabaseConfig } from './config.js';
+import type { DatabaseData, DatabaseRecord } from './types.js';
+import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
 
-/** @typedef {{ data: import('./config.js').DatabaseData }} DatabaseContainer */
-/**
- * @typedef {object} DatabaseStore
- * @property {DatabaseContainer} database Current database container.
- * @property {string} [path] Resolved database file path.
- * @property {() => Promise<import('./config.js').DatabaseData>} read Returns current data and reloads disk-backed sources.
- * @property {<T>(operation: (database: DatabaseContainer) => T) => Promise<T>} update Runs a serialized update.
- */
+export interface DatabaseContainer {
+  data: DatabaseData;
+}
+export interface DatabaseStore {
+  database: DatabaseContainer;
+  path?: string;
+  read(): Promise<DatabaseData>;
+  update<T>(operation: (database: DatabaseContainer) => T): Promise<T>;
+}
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
-const validateJsonValue = (value, path, ancestors = new WeakSet()) => {
+export const validateJsonValue = (value: unknown, path: string, ancestors = new WeakSet<object>()): void => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return;
   }
@@ -44,9 +47,13 @@ const validateJsonValue = (value, path, ancestors = new WeakSet()) => {
   ancestors.add(value);
 
   if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      validateJsonValue(item, `${path}[${index}]`, ancestors);
-    });
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) {
+        throw new Error(`${path}[${index}] отсутствует; разреженные массивы несовместимы с JSON`);
+      }
+
+      validateJsonValue(value[index], `${path}[${index}]`, ancestors);
+    }
   } else {
     Object.entries(value).forEach(([key, item]) => {
       validateJsonValue(item, `${path}.${key}`, ancestors);
@@ -56,7 +63,7 @@ const validateJsonValue = (value, path, ancestors = new WeakSet()) => {
   ancestors.delete(value);
 };
 
-export const validateDatabase = (data) => {
+export const validateDatabase = (data: unknown): DatabaseData => {
   if (!isObject(data)) {
     throw new Error('База данных должна содержать JSON-объект');
   }
@@ -97,17 +104,17 @@ export const validateDatabase = (data) => {
     });
   });
 
-  return data;
+  return data as DatabaseData;
 };
 
-export const readJsonObjectFile = async (path, label) => {
+export const readJsonObjectFile = async (path: string, label: string): Promise<Record<string, unknown>> => {
   const resolvedPath = resolve(path);
-  let source;
+  let source: string;
 
   try {
     source = await readFile(resolvedPath, 'utf8');
   } catch (error) {
-    if (error?.code === 'ENOENT') {
+    if (isSystemError(error) && error.code === 'ENOENT') {
       throw new Error(`${label} не найден: ${resolvedPath}`);
     }
 
@@ -123,9 +130,9 @@ export const readJsonObjectFile = async (path, label) => {
   return value;
 };
 
-export const readDatabaseFile = async (databasePath) => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'));
+export const readDatabaseFile = async (databasePath: string): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'));
 
-const createDiskDatabaseStore = async (databasePath) => {
+const createDiskDatabaseStore = async (databasePath: string): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = await readDatabaseFile(resolvedDatabasePath);
   const database = await JSONFilePreset(resolvedDatabasePath, initialData);
@@ -137,7 +144,7 @@ const createDiskDatabaseStore = async (databasePath) => {
     return database.data;
   };
 
-  const update = (operation) =>
+  const update = <T>(operation: (database: DatabaseContainer) => T): Promise<T> =>
     schedule(async () => {
       await read();
 
@@ -152,14 +159,14 @@ const createDiskDatabaseStore = async (databasePath) => {
   return { database, path: resolvedDatabasePath, read, update };
 };
 
-const createMemoryDatabaseStore = (sourceData) => {
+const createMemoryDatabaseStore = (sourceData: DatabaseData): DatabaseStore => {
   validateDatabase(sourceData);
 
   const database = { data: structuredClone(sourceData) };
   const schedule = createSerialQueue();
 
   const read = async () => database.data;
-  const update = (operation) =>
+  const update = <T>(operation: (database: DatabaseContainer) => T): Promise<T> =>
     schedule(() => {
       const draft = { data: structuredClone(database.data) };
       const result = operation(draft);
@@ -173,14 +180,10 @@ const createMemoryDatabaseStore = (sourceData) => {
   return { database, read, update };
 };
 
-/**
- * Creates a disk- or memory-backed database with serialized updates.
- * @param {import('./config.js').DatabaseConfig} config Database source.
- * @returns {Promise<DatabaseStore>} Database store.
- */
-export const createDatabaseStore = async (config) => ('data' in config ? createMemoryDatabaseStore(config.data) : createDiskDatabaseStore(config.path));
+/** Creates a disk- or memory-backed database with serialized updates. */
+export const createDatabaseStore = async (config: DatabaseConfig): Promise<DatabaseStore> => (config.data != null ? createMemoryDatabaseStore(config.data) : createDiskDatabaseStore(config.path));
 
-export const getCollection = (database, resource) => {
+export const getCollection = (database: DatabaseContainer, resource: string): DatabaseRecord[] => {
   const collection = isSafeKey(resource) ? database.data[resource] : undefined;
 
   if (!Array.isArray(collection)) {
@@ -190,6 +193,6 @@ export const getCollection = (database, resource) => {
   return collection;
 };
 
-export const findItemIndex = (collection, id) => collection.findIndex((item) => String(item.id) === String(id));
+export const findItemIndex = (collection: DatabaseRecord[], id: unknown): number => collection.findIndex((item) => String(item.id) === String(id));
 
-export const createId = (collection) => createUniqueId((id) => findItemIndex(collection, id) !== -1);
+export const createId = (collection: DatabaseRecord[]): string => createUniqueId((id) => findItemIndex(collection, id) !== -1);

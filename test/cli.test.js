@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { runCli } from '../src/cli.js';
+import { runCli } from '../dist/src/cli.js';
 
 const createFixture = async () => {
   const directoryPath = await mkdtemp(join(tmpdir(), 'deep-json-server-cli-'));
@@ -18,7 +18,7 @@ const createFixture = async () => {
     database: { path: 'database.json', schema: 'database-schema.json' },
     files: { directory: 'files', metadata: 'files/_database.json' },
     openapi: { path: 'openapi-schema.yaml' },
-    server: { host: 'localhost', logger: false, maxFileSize: 2048, maxPageSize: 250, port: 5000 },
+    server: { cors: false, host: 'localhost', logger: false, maxFileSize: 2048, maxPageSize: 250, port: 5000 },
   };
 
   await writeFile(databasePath, JSON.stringify({ items: [{ id: '1', name: 'One' }] }));
@@ -187,6 +187,9 @@ test('validates CLI arguments and conditional config keys', async () => {
 
     await writeConfig({ database: { path: 'database.json' }, server: { logger: 'false' } });
     await assert.rejects(() => runCli([fixture.configPath], services), /config\.server\.logger/);
+
+    await writeConfig({ database: { path: 'database.json' }, server: { cors: 'true' } });
+    await assert.rejects(() => runCli([fixture.configPath], services), /config\.server\.cors/);
 
     await writeFile(fixture.configPath, 'export default {');
     await assert.rejects(() => runCli([fixture.configPath], services), /Не удалось загрузить конфигурацию/);

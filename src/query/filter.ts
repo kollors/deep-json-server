@@ -1,10 +1,14 @@
+import type { Query } from '../types.js';
 import { createHttpError, isEqual, isObject, isSafeKey, toArray } from '../utils.js';
 
-const FIELD_OPERATORS = new Set(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
+type FieldOperator = 'contains' | 'endsWith' | 'eq' | 'every' | 'gt' | 'gte' | 'in' | 'lt' | 'lte' | 'ne' | 'none' | 'not' | 'some' | 'startsWith';
+type Where = Record<string, unknown>;
+
+const FIELD_OPERATORS = new Set<FieldOperator>(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
 const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_perPage', '_sort', '_where']);
 const NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
-const isFilterEqual = (left, right) => {
+const isFilterEqual = (left: unknown, right: unknown): boolean => {
   if (isEqual(left, right)) {
     return true;
   }
@@ -17,15 +21,17 @@ const isFilterEqual = (left, right) => {
   return typeof right === 'number' && typeof left === 'string' && NUMBER_PATTERN.test(left) && right === Number(left);
 };
 
-const validateLogicalConditions = (operator, value) => {
+const validateLogicalConditions = (operator: 'and' | 'or', value: unknown): Where[] => {
   if (!Array.isArray(value) || (operator === 'or' && value.length === 0) || value.some((condition) => !isObject(condition))) {
     throw createHttpError(400, `Оператор «${operator}» должен содержать ${operator === 'or' ? 'непустой ' : ''}массив JSON-объектов`);
   }
 
-  return value;
+  return value as Where[];
 };
 
-const matchesOperator = (field, operator, expectedValue) => {
+const isComparable = (value: unknown): value is number | string => typeof value === 'number' || typeof value === 'string';
+
+const matchesOperator = (field: unknown, operator: FieldOperator, expectedValue: unknown): boolean => {
   switch (operator) {
     case 'contains':
       return typeof field === 'string' ? field.toLowerCase().includes(String(expectedValue).toLowerCase()) : Array.isArray(field) && field.some((value) => isFilterEqual(value, expectedValue));
@@ -36,9 +42,9 @@ const matchesOperator = (field, operator, expectedValue) => {
     case 'every':
       return Array.isArray(field) && field.every((value) => matchesValue(value, expectedValue));
     case 'gt':
-      return field != null && field > expectedValue;
+      return isComparable(field) && isComparable(expectedValue) && field > expectedValue;
     case 'gte':
-      return field != null && field >= expectedValue;
+      return isComparable(field) && isComparable(expectedValue) && field >= expectedValue;
     case 'in': {
       const expectedValues = toArray(expectedValue);
 
@@ -47,9 +53,9 @@ const matchesOperator = (field, operator, expectedValue) => {
         : expectedValues.some((expectedItem) => isFilterEqual(field, expectedItem));
     }
     case 'lt':
-      return field != null && field < expectedValue;
+      return isComparable(field) && isComparable(expectedValue) && field < expectedValue;
     case 'lte':
-      return field != null && field <= expectedValue;
+      return isComparable(field) && isComparable(expectedValue) && field <= expectedValue;
     case 'ne':
       return !isFilterEqual(field, expectedValue);
     case 'none':
@@ -65,14 +71,14 @@ const matchesOperator = (field, operator, expectedValue) => {
   }
 };
 
-function matchesValue(field, condition) {
+function matchesValue(field: unknown, condition: unknown): boolean {
   if (!isObject(condition)) {
     return isFilterEqual(field, condition);
   }
 
   const conditionEntries = Object.entries(condition);
-  const operatorEntries = conditionEntries.filter(([operator]) => FIELD_OPERATORS.has(operator));
-  const nestedEntries = conditionEntries.filter(([key]) => !FIELD_OPERATORS.has(key));
+  const operatorEntries = conditionEntries.filter((entry): entry is [FieldOperator, unknown] => FIELD_OPERATORS.has(entry[0] as FieldOperator));
+  const nestedEntries = conditionEntries.filter(([key]) => !FIELD_OPERATORS.has(key as FieldOperator));
 
   if (!operatorEntries.every(([operator, expectedValue]) => matchesOperator(field, operator, expectedValue))) {
     return false;
@@ -81,7 +87,7 @@ function matchesValue(field, condition) {
   return nestedEntries.length === 0 || (isObject(field) && matchesWhere(field, Object.fromEntries(nestedEntries)));
 }
 
-export function matchesWhere(value, where) {
+export function matchesWhere(value: unknown, where: unknown): boolean {
   if (!isObject(value) || !isObject(where)) {
     return false;
   }
@@ -103,7 +109,7 @@ export function matchesWhere(value, where) {
   });
 }
 
-const parsePrimitive = (value) => {
+const parsePrimitive = (value: unknown): unknown => {
   if (typeof value !== 'string') {
     return value;
   }
@@ -123,47 +129,47 @@ const parsePrimitive = (value) => {
   return NUMBER_PATTERN.test(value) && Number.isFinite(Number(value)) ? Number(value) : value;
 };
 
-const parseFilterKey = (key) => {
+const parseFilterKey = (key: string): { operator: FieldOperator; path: string } => {
   const colonIndex = key.lastIndexOf(':');
 
   if (colonIndex !== -1) {
     const path = key.slice(0, colonIndex);
     const operator = key.slice(colonIndex + 1);
 
-    if (!FIELD_OPERATORS.has(operator)) {
+    if (!FIELD_OPERATORS.has(operator as FieldOperator)) {
       throw createHttpError(400, `Неизвестный оператор «${operator}» в фильтре «${key}»`);
     }
 
-    return { operator, path };
+    return { operator: operator as FieldOperator, path };
   }
 
   return { operator: 'eq', path: key };
 };
 
-const setWhereOperator = (where, path, operator, value) => {
+const setWhereOperator = (where: Where, path: string, operator: FieldOperator, value: unknown): void => {
   const keys = path.split('.');
 
   if (keys.some((key) => key === '' || !isSafeKey(key))) {
     throw createHttpError(400, `Недопустимый путь фильтра «${path}»`);
   }
 
-  const fieldKey = keys.pop();
-  let currentValue = where;
+  const fieldKey = keys.pop() as string;
+  let currentValue: Where = where;
 
   keys.forEach((key) => {
     currentValue[key] = isObject(currentValue[key]) ? currentValue[key] : {};
-    currentValue = currentValue[key];
+    currentValue = currentValue[key] as Where;
   });
 
   currentValue[fieldKey] = isObject(currentValue[fieldKey]) ? currentValue[fieldKey] : {};
-  currentValue[fieldKey][operator] = operator === 'in' && typeof value === 'string' ? value.split(',').map((item) => parsePrimitive(item.trim())) : parsePrimitive(value);
+  (currentValue[fieldKey] as Where)[operator] = operator === 'in' && typeof value === 'string' ? value.split(',').map((item) => parsePrimitive(item.trim())) : parsePrimitive(value);
 };
 
-export const parseWhere = (query) => {
-  const rawWhere = toArray(query._where).at(-1);
+export const parseWhere = (query: Query): Where => {
+  const rawWhere = Array.isArray(query._where) ? query._where.at(-1) : query._where;
 
   if (rawWhere != null) {
-    let where;
+    let where: unknown;
 
     try {
       where = JSON.parse(rawWhere);
@@ -183,17 +189,40 @@ export const parseWhere = (query) => {
   Object.entries(query).forEach(([key, rawValue]) => {
     if (!RESERVED_QUERY_KEYS.has(key)) {
       const filterKey = parseFilterKey(key);
+      const values = toArray(rawValue);
 
-      toArray(rawValue).forEach((value) => {
-        setWhereOperator(where, filterKey.path, filterKey.operator, value);
-      });
+      if (filterKey.operator === 'eq' && values.length > 1) {
+        setWhereOperator(where, filterKey.path, 'in', values.map(parsePrimitive));
+      } else {
+        values.forEach((value) => {
+          setWhereOperator(where, filterKey.path, filterKey.operator, value);
+        });
+      }
     }
   });
 
   return where;
 };
 
-const validateCondition = (condition, samples, path) => {
+const validateExpectedValue = (operator: FieldOperator, value: unknown, samples: unknown[], path: string): void => {
+  if (['startsWith', 'endsWith'].includes(operator) && typeof value !== 'string') {
+    throw createHttpError(400, `Оператор «${operator}» в фильтре «${path}» должен содержать строку`);
+  }
+
+  if (['gt', 'gte', 'lt', 'lte'].includes(operator) && !isComparable(value)) {
+    throw createHttpError(400, `Оператор «${operator}» в фильтре «${path}» должен содержать строку или число`);
+  }
+
+  if (operator === 'contains' && samples.some((sample) => typeof sample === 'string') && typeof value !== 'string') {
+    throw createHttpError(400, `Оператор «contains» в строковом фильтре «${path}» должен содержать строку`);
+  }
+
+  if (['every', 'none', 'some'].includes(operator) && isObject(value) && Object.keys(value).length === 0) {
+    throw createHttpError(400, `Оператор «${operator}» в фильтре «${path}» не должен содержать пустое условие`);
+  }
+};
+
+const validateCondition = (condition: unknown, samples: unknown[], path: string): void => {
   if (!isObject(condition)) {
     return;
   }
@@ -206,7 +235,11 @@ const validateCondition = (condition, samples, path) => {
       return;
     }
 
-    if (FIELD_OPERATORS.has(key)) {
+    if (FIELD_OPERATORS.has(key as FieldOperator)) {
+      const operator = key as FieldOperator;
+
+      validateExpectedValue(operator, value, samples, path);
+
       if (['every', 'none', 'some'].includes(key)) {
         if (samples.length > 0 && !samples.some(Array.isArray)) {
           throw createHttpError(400, `Оператор «${key}» в фильтре «${path}» можно применить только к массиву`);
@@ -248,7 +281,7 @@ const validateCondition = (condition, samples, path) => {
   });
 };
 
-export const validateWhere = (where, items, path = '') => {
+export const validateWhere = (where: Where, items: unknown[], path = ''): void => {
   Object.entries(where).forEach(([key, condition]) => {
     if (key === 'and' || key === 'or') {
       validateLogicalConditions(key, condition).forEach((nestedWhere) => {

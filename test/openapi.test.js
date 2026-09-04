@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { createServer } from '../index.js';
-import { buildOpenapiDocument } from '../src/openapi/document.js';
+import { createServer } from '../dist/index.js';
+import { buildOpenapiDocument } from '../dist/src/openapi/document.js';
 
 const database = {
   countries: [{ id: '1', name: 'Russia' }],
@@ -108,6 +108,7 @@ test('generates CRUD schemas, formats and direct and reverse relations', async (
     assert.equal(document.components.parameters.ContentDirectory.name, 'Content-Directory');
     assert.equal(document.components.parameters.ContentName.name, 'Content-Name');
     assert.equal(document.components.parameters.ContentOverride.name, 'Content-Override');
+    assert.deepEqual(document.components.parameters.ContentOverride.schema, { default: 'false', enum: ['false', 'true'], type: 'string' });
     assert.equal(document.components.parameters.FilePath.allowReserved, undefined);
   });
 });
@@ -132,6 +133,29 @@ test('describes empty resources through explicit properties', () => {
   assert.equal(document.components.schemas.Item.properties.id.type, 'string');
   assert.equal(document.components.schemas.Item.properties.createdAt.format, 'date-time');
   assert.deepEqual(document.components.schemas.ItemCreate.required, ['name']);
+});
+
+test('accepts supported OpenAPI property constraints', () => {
+  const document = createDocument(
+    { items: [] },
+    {
+      $schema: {
+        items: {
+          properties: {
+            details: { additionalProperties: false, properties: { active: { type: 'boolean' } }, type: 'object' },
+            labels: { items: { minLength: 1, type: 'string' }, minItems: 1, type: 'array', uniqueItems: true },
+            rating: { maximum: 5, minimum: 1, type: 'number' },
+            title: { enum: ['One', 'Two'], maxLength: 20, minLength: 1, nullable: true, pattern: '^[A-Z]', type: 'string' },
+            value: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(document.components.schemas.Item.properties.rating.maximum, 5);
+  assert.equal(document.components.schemas.Item.properties.labels.items.minLength, 1);
+  assert.equal(document.components.schemas.Item.properties.details.additionalProperties, false);
 });
 
 test('widens numeric ID schemas because POST creates string IDs', () => {
@@ -161,6 +185,22 @@ test('infers arrays, objects, primitives and nullable values independently', () 
     true,
   );
   assert.equal(valueSchema.nullable, true);
+
+  const nullSchema = createDocument({ items: [{ id: '1', value: null }] }).components.schemas.Item.properties.value;
+
+  assert.deepEqual(nullSchema.enum, [null]);
+  assert.equal(nullSchema.nullable, true);
+});
+
+test('normalizes overlapping numeric schemas', () => {
+  const document = createDocument({
+    items: [
+      { id: '1', value: 1 },
+      { id: '2', value: 1.5 },
+    ],
+  });
+
+  assert.deepEqual(document.components.schemas.Item.properties.value, { type: 'number' });
 });
 
 test('validates database contents and schema configuration', () => {
@@ -173,9 +213,18 @@ test('validates database contents and schema configuration', () => {
   assert.throws(() => createDocument({ items: [] }, { $schema: [] }), /\$schema/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
+  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: 'Bad/Name' } } }), /шаблону/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { require: ['name'] } } }), /require/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: { value: { type: 'invalid' } } } } }), /поддерживаемый тип/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { minimum: 'bad' } } } } }), /minimum/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { unknown: true } } } } }), /Неизвестный ключ/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { minimum: 1, type: 'string' } } } } }), /несовместим/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { minLength: -1 } } } } }), /minLength/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { nullable: 'true' } } } } }), /nullable/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { enum: [] } } } } }), /enum/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { oneOf: [] } } } } }), /oneOf/);
+  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { items: 'invalid' } } } } }), /JSON-объект/);
   assert.throws(() => createDocument({ items: [] }, { unknown: true }), /schema\.unknown/);
   assert.throws(() => createDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
   assert.throws(() => createDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
