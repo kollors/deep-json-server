@@ -89,9 +89,18 @@ const writeMetadata = async (metadataPath: string, files: Map<string, StoredFile
   }
 };
 
+const assertRegularFile = (stats: { isFile(): boolean }): void => {
+  if (!stats.isFile()) {
+    throw createHttpError(400, 'Путь должен указывать на обычный файл');
+  }
+};
+
 const getFileSize = async (path: string): Promise<number> => {
   try {
-    return (await stat(path)).size;
+    const stats = await stat(path);
+
+    assertRegularFile(stats);
+    return stats.size;
   } catch (error) {
     if (isSystemError(error) && error.code === 'ENOENT') {
       throw createHttpError(404, 'Файл не найден');
@@ -193,6 +202,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     if (await pathExists(filePath)) {
       await assertNoSymlinks(filePath);
       assertContained(await realpath(filePath));
+      assertRegularFile(await lstat(filePath));
     }
 
     return filePath;
@@ -204,6 +214,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     try {
       await assertNoSymlinks(filePath);
       assertContained(await realpath(filePath));
+      assertRegularFile(await lstat(filePath));
     } catch (error) {
       if (isSystemError(error) && error.code === 'ENOENT') {
         throw createHttpError(404, 'Файл не найден');
@@ -251,7 +262,10 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     const handle = await open(filePath, 'r');
 
     try {
-      const size = (await handle.stat()).size;
+      const stats = await handle.stat();
+
+      assertRegularFile(stats);
+      const size = stats.size;
 
       return { file: { ...file, size }, stream: handle.createReadStream() };
     } catch (error) {

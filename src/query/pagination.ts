@@ -26,9 +26,11 @@ const parsePositiveInteger = (value: Query[string], name: string, defaultValue: 
   return number;
 };
 
+export const getDefaultPageSize = (maxPageSize: number): number => Math.min(DEFAULT_PAGE_SIZE, maxPageSize);
+
 export const parsePagination = (query: Query, maxPageSize = DEFAULT_MAX_PAGE_SIZE): Pagination => {
   const page = parsePositiveInteger(query._page, '_page', 1);
-  const pageSize = parsePositiveInteger(query._perPage, '_perPage', DEFAULT_PAGE_SIZE);
+  const pageSize = parsePositiveInteger(query._perPage, '_perPage', getDefaultPageSize(maxPageSize));
 
   if (pageSize > maxPageSize) {
     throw createHttpError(400, `Параметр _perPage не должен превышать ${maxPageSize}`);

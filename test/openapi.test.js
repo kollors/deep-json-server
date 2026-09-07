@@ -184,12 +184,17 @@ test('infers arrays, objects, primitives and nullable values independently', () 
     valueSchema.oneOf.some(({ type }) => type === 'string'),
     true,
   );
-  assert.equal(valueSchema.nullable, true);
+  assert.equal(valueSchema.nullable, undefined);
+  assert.deepEqual(
+    valueSchema.oneOf.find(({ nullable }) => nullable),
+    { enum: [null], nullable: true, type: 'string' },
+  );
 
   const nullSchema = createDocument({ items: [{ id: '1', value: null }] }).components.schemas.Item.properties.value;
 
   assert.deepEqual(nullSchema.enum, [null]);
   assert.equal(nullSchema.nullable, true);
+  assert.equal(nullSchema.type, 'string');
 });
 
 test('normalizes overlapping numeric schemas', () => {

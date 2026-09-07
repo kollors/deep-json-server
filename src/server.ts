@@ -8,8 +8,9 @@ import { createFileStore, registerFileRoutes } from './files/index.js';
 import { resolveSchemaConfig } from './openapi/config.js';
 import { buildOpenapiDocument } from './openapi/document.js';
 import { createOpenapi, writeOpenapi } from './openapi/index.js';
+import { withoutDefaults } from './openapi/traversal.js';
 import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query/index.js';
-import { createRelationContext, embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
+import { createEmbedTree, createRelationContext, embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
 import type { DatabaseId, DatabaseRecord, JsonObject, OpenapiDocument, Query } from './types.js';
 import { createHttpError, getResourceNames, isObject } from './utils.js';
 
@@ -47,17 +48,22 @@ const CORS_HEADERS = {
 const getSchemaName = (reference: string): string => reference.split('/').at(-1) as string;
 
 const addRequestSchemas = (fastify: FastifyInstance, document: OpenapiDocument, resources: string[]): void => {
-  const requestSchemaNames = new Set(
+  const requestSchemaNames = new Map(
     resources.flatMap((resource) => {
       const resourcePath = document.paths[`/${resource}`] as { post: RequestSchemaOperation };
       const itemPath = document.paths[`/${resource}/{id}`] as { patch: RequestSchemaOperation };
 
-      return [getSchemaName(resourcePath.post.requestBody.content['application/json'].schema.$ref), getSchemaName(itemPath.patch.requestBody.content['application/json'].schema.$ref)];
+      return [
+        [getSchemaName(resourcePath.post.requestBody.content['application/json'].schema.$ref), false] as const,
+        [getSchemaName(itemPath.patch.requestBody.content['application/json'].schema.$ref), true] as const,
+      ];
     }),
   );
 
-  requestSchemaNames.forEach((schemaName) => {
-    fastify.addSchema({ $id: schemaName, ...document.components.schemas[schemaName] });
+  requestSchemaNames.forEach((isPatch, schemaName) => {
+    const schema = structuredClone(document.components.schemas[schemaName]);
+
+    fastify.addSchema({ $id: schemaName, ...(isPatch ? withoutDefaults(schema) : schema) });
   });
 };
 
@@ -92,7 +98,8 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
     validateEmbedPaths(store.database, resource, collection, embedPaths);
 
     const relationContext = createRelationContext(store.database);
-    const embeddedItems = collection.map((item) => embedItem(store.database, item, resource, embedPaths, relationContext));
+    const embedTree = createEmbedTree(embedPaths);
+    const embeddedItems = collection.map((item) => embedItem(store.database, item, resource, embedTree, relationContext));
 
     validateWhere(where, embeddedItems);
 
@@ -112,7 +119,7 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
 
     validateEmbedPaths(store.database, resource, collection, embedPaths);
 
-    return embedItem(store.database, item, resource, embedPaths);
+    return embedItem(store.database, item, resource, createEmbedTree(embedPaths));
   });
 
   fastify.post(resourcePath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request, reply) => {
@@ -176,6 +183,7 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
   const schema = await resolveSchemaConfig(normalizedConfig.database.schema);
   let fileStorePromise: ReturnType<typeof createFileStore> | undefined;
   let fastifyInstance: FastifyInstance | undefined;
+  let cachedDocument: OpenapiDocument | undefined;
 
   if (filesEnabled && normalizedConfig.files == null) {
     throw new Error('Для файловых маршрутов укажите секцию config.files');
@@ -188,12 +196,12 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
   }
 
   const buildDocument = () =>
-    buildOpenapiDocument({
+    (cachedDocument ??= buildOpenapiDocument({
       database: store.database.data,
       files: filesEnabled,
       maxPageSize,
       schema,
-    });
+    }));
 
   const getFastify = (): FastifyInstance => {
     if (fastifyInstance != null) {
@@ -202,7 +210,7 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
 
     const document = buildDocument();
     const resources = getResourceNames(store.database.data);
-    const fastify = Fastify({ logger });
+    const fastify = Fastify({ ajv: { customOptions: { coerceTypes: false } }, logger });
     const originalListen = fastify.listen.bind(fastify);
 
     // Calling fastify().listen() without arguments uses config defaults.
@@ -264,15 +272,10 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
   };
 
   const openapi = async () => {
-    await store.read();
-
     const document = createOpenapi({
-      database: store.database.data,
-      files: filesEnabled,
+      document: buildDocument(),
       host: normalizedConfig.server.host,
-      maxPageSize,
       port: normalizedConfig.server.port,
-      schema,
     });
 
     if (normalizedConfig.openapi.path != null) {

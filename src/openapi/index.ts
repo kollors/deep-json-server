@@ -2,8 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { stringify } from 'yaml';
 import { DEFAULT_HOST, DEFAULT_PORT } from '../constants.js';
-import type { DatabaseData, JsonObject, OpenapiDocument } from '../types.js';
-import { buildOpenapiDocument } from './document.js';
+import type { OpenapiDocument } from '../types.js';
 
 const getServerUrl = (host: string, port: number): string => {
   const serverPort = Number(port);
@@ -21,22 +20,8 @@ const getServerUrl = (host: string, port: number): string => {
   return `http://${serverHost}:${serverPort}`;
 };
 
-export const createOpenapi = ({
-  database,
-  files,
-  host = DEFAULT_HOST,
-  maxPageSize,
-  port = DEFAULT_PORT,
-  schema,
-}: {
-  database: DatabaseData;
-  files: boolean;
-  host?: string;
-  maxPageSize: number;
-  port?: number;
-  schema: JsonObject;
-}): OpenapiDocument => {
-  const document = buildOpenapiDocument({ database, files, maxPageSize, schema });
+export const createOpenapi = ({ document: sourceDocument, host = DEFAULT_HOST, port = DEFAULT_PORT }: { document: OpenapiDocument; host?: string; port?: number }): OpenapiDocument => {
+  const document = structuredClone(sourceDocument);
 
   document.servers = [{ url: getServerUrl(host, port) }];
 

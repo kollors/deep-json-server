@@ -235,7 +235,7 @@ Successful writes return the created, replaced, updated or deleted record. Error
 GET /movies?_page=1&_perPage=10&_sort=-id,title
 ```
 
-A collection GET always returns the current page data and the total number of records after filtering. `_page` defaults to `1`, and `_perPage` defaults to `10`:
+A collection GET always returns the current page data and the total number of records after filtering. `_page` defaults to `1`, and `_perPage` defaults to `Math.min(10, server.maxPageSize)` (`10` with the default configuration):
 
 ```json
 {
@@ -498,6 +498,12 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 The generated document describes CRUD endpoints, pagination, sorting, nested data filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints for arbitrary media types. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. Generation rejects duplicate schema names, operation IDs, and invalid schema overrides before producing a document. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
 
 During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed. Invalid bodies return `400`.
+
+JSON body types are checked without coercion: a string such as `"1"` does not satisfy an integer schema. Inferred null-only fields use `{ "type": "string", "nullable": true, "enum": [null] }`, which accepts only `null` in OpenAPI 3.0.3. Mixed types include a separate null-only `oneOf` branch when needed.
+
+Explicit nested `properties.required` constraints are preserved and combined with shorthand required paths. Required paths, formats, and relation discovery traverse `oneOf`, `anyOf`, and `allOf`, including their sibling properties. `PATCH` performs a shallow merge: an omitted top-level property is untouched, while a supplied object replaces that property and must satisfy its nested requirements. Defaults may be inserted by validation for `POST` and `PUT`; `PATCH` never inserts defaults, including inside supplied objects or arrays.
+
+Each `createServer()` instance uses one fixed contract for request validation and `server.openapi()`, inferred from the data loaded during creation and the configured schema. CRUD and external file edits still change the data read by the API, but do not change this contract. Create a new server instance (or restart the CLI) to infer new field types or resources. Fields absent from an initially empty resource remain unrestricted unless declared in `properties`. Each `server.openapi()` call returns an independent copy of the contract.
 
 ## Programmatic API
 

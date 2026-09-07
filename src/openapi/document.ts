@@ -1,11 +1,13 @@
-import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from '../constants.js';
+import { DEFAULT_MAX_PAGE_SIZE } from '../constants.js';
 import { validateDatabase } from '../database.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_ROUTES, FILE_UPDATE_SCHEMA } from '../files/contract.js';
+import { getDefaultPageSize } from '../query/pagination.js';
 import { getRelationMetadata, type RelationMetadata } from '../relation-metadata.js';
 import type { DatabaseData, JsonObject, OpenapiDocument, OpenapiSchema } from '../types.js';
 import { getResourceNames, isObject, singularize, toPascalCase } from '../utils.js';
 import { applyConfiguredFields, normalizeSchemaConfig } from './config.js';
 import { ensureGeneratedIdSchema, inferObjectSchema, mergeSchemaOverrides, omitId } from './inference.js';
+import { COMPOSITION_KEYWORDS, mapCompositions } from './traversal.js';
 
 type OpenapiObject = Record<string, unknown>;
 type SchemaMap = Record<string, OpenapiSchema>;
@@ -20,16 +22,14 @@ export interface BuildOpenapiOptions {
 const createSchemaReference = (name: string): OpenapiSchema => ({ $ref: `#/components/schemas/${name}` });
 
 const addForwardRelations = (schema: OpenapiSchema, resources: string[], componentNames: Record<string, string>, sourceResource: string): OpenapiSchema => {
-  if (Array.isArray(schema.oneOf)) {
-    return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => addForwardRelations(nestedSchema, resources, componentNames, sourceResource)) };
+  const result = mapCompositions(schema, (nestedSchema) => addForwardRelations(nestedSchema, resources, componentNames, sourceResource));
+
+  if (schema.items != null) {
+    result.items = addForwardRelations(schema.items, resources, componentNames, sourceResource);
   }
 
-  if (schema.type === 'array') {
-    return { ...schema, items: addForwardRelations(schema.items ?? {}, resources, componentNames, sourceResource) };
-  }
-
-  if (schema.type !== 'object' || !isObject(schema.properties)) {
-    return schema;
+  if (!isObject(schema.properties)) {
+    return result;
   }
 
   const properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, addForwardRelations(value, resources, componentNames, sourceResource)]));
@@ -44,23 +44,21 @@ const addForwardRelations = (schema: OpenapiSchema, resources: string[], compone
     }
   });
 
-  return { ...schema, properties };
+  return { ...result, properties };
 };
 
 const collectRelations = (schema: OpenapiSchema, resources: string[], sourceResource: string, relations: RelationMetadata[] = []): RelationMetadata[] => {
-  if (Array.isArray(schema.oneOf)) {
-    schema.oneOf.forEach((nestedSchema) => {
+  COMPOSITION_KEYWORDS.forEach((keyword) => {
+    schema[keyword]?.forEach((nestedSchema) => {
       collectRelations(nestedSchema, resources, sourceResource, relations);
     });
-    return relations;
+  });
+
+  if (schema.items != null) {
+    collectRelations(schema.items, resources, sourceResource, relations);
   }
 
-  if (schema.type === 'array') {
-    collectRelations(schema.items ?? {}, resources, sourceResource, relations);
-    return relations;
-  }
-
-  if (schema.type !== 'object' || !isObject(schema.properties)) {
+  if (!isObject(schema.properties)) {
     return relations;
   }
 
@@ -109,7 +107,7 @@ const createParameters = (maxPageSize: number): OpenapiObject => ({
   FilePath: { description: 'Percent-encoded file path relative to the storage directory', in: 'path', name: 'path', required: true, schema: { type: 'string' } },
   Id: { in: 'path', name: 'id', required: true, schema: { type: 'string' } },
   Page: { in: 'query', name: '_page', required: false, schema: { default: 1, minimum: 1, type: 'integer' } },
-  PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: DEFAULT_PAGE_SIZE, maximum: maxPageSize, minimum: 1, type: 'integer' } },
+  PerPage: { in: 'query', name: '_perPage', required: false, schema: { default: getDefaultPageSize(maxPageSize), maximum: maxPageSize, minimum: 1, type: 'integer' } },
   Sort: { description: 'Comma-separated fields; prefix with - for descending order', in: 'query', name: '_sort', schema: { type: 'string' } },
   Where: { description: 'JSON-encoded filter for nested data', in: 'query', name: '_where', schema: { type: 'string' } },
 });

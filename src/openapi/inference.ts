@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue, OpenapiSchema } from '../types.js';
 import { isObject } from '../utils.js';
+import { COMPOSITION_KEYWORDS, mapCompositions } from './traversal.js';
 
 type InferredSchema = Omit<OpenapiSchema, 'type'> & { type?: OpenapiSchema['type'] | 'null' };
 
@@ -13,14 +14,14 @@ export const mergeSchemas = (schemas: InferredSchema[]): OpenapiSchema => {
   }
 
   if (nonNullSchemas.length === 0) {
-    return { enum: [null], nullable: true };
+    return { enum: [null], nullable: true, type: 'string' };
   }
 
   if (nonNullSchemas.length === 1) {
     return nullable ? { ...nonNullSchemas[0], nullable: true } : nonNullSchemas[0];
   }
 
-  return { oneOf: nonNullSchemas, ...(nullable && { nullable: true }) };
+  return { oneOf: [...nonNullSchemas, ...(nullable ? [{ enum: [null], nullable: true, type: 'string' as const }] : [])] };
 };
 
 export const mergeSchemaOverrides = (schema: OpenapiSchema, overrides: unknown): OpenapiSchema => {
@@ -52,16 +53,14 @@ export const mergeSchemaOverrides = (schema: OpenapiSchema, overrides: unknown):
 };
 
 export const applyRequiredFields = (schema: OpenapiSchema, path: string, requiredFields: Set<string>): OpenapiSchema => {
-  if (Array.isArray(schema.oneOf)) {
-    return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => applyRequiredFields(nestedSchema, path, requiredFields)) };
+  const result = mapCompositions(schema, (nestedSchema) => applyRequiredFields(nestedSchema, path, requiredFields));
+
+  if (schema.items != null) {
+    result.items = applyRequiredFields(schema.items, path, requiredFields);
   }
 
-  if (schema.type === 'array') {
-    return { ...schema, items: applyRequiredFields(schema.items ?? {}, path, requiredFields) };
-  }
-
-  if (schema.type !== 'object' || !isObject(schema.properties)) {
-    return schema;
+  if (!isObject(schema.properties)) {
+    return result;
   }
 
   const properties = Object.fromEntries(
@@ -71,16 +70,17 @@ export const applyRequiredFields = (schema: OpenapiSchema, path: string, require
       return [key, applyRequiredFields(value, fieldPath, requiredFields)];
     }),
   );
-  const required = Object.keys(properties).filter((key) => {
+  const required = new Set(schema.required);
+
+  Object.keys(properties).forEach((key) => {
     const fieldPath = path === '' ? key : `${path}.${key}`;
 
-    return (path === '' && key === 'id') || requiredFields.has(fieldPath);
+    if ((path === '' && key === 'id') || requiredFields.has(fieldPath)) {
+      required.add(key);
+    }
   });
-  const result = { ...schema, properties };
 
-  delete result.required;
-
-  return required.length === 0 ? result : { ...result, required };
+  return { ...result, properties, ...(required.size > 0 && { required: [...required] }) };
 };
 
 export const inferSchema = (values: JsonValue[]): OpenapiSchema => {
@@ -138,44 +138,40 @@ export const ensureGeneratedIdSchema = (schema: OpenapiSchema): OpenapiSchema =>
 };
 
 export const getSchemasAtPath = (schema: OpenapiSchema, keys: string[]): OpenapiSchema[] => {
-  if (Array.isArray(schema.oneOf)) {
-    return schema.oneOf.flatMap((nestedSchema) => getSchemasAtPath(nestedSchema, keys));
-  }
+  const branches = COMPOSITION_KEYWORDS.flatMap((keyword) => schema[keyword]?.flatMap((nestedSchema) => getSchemasAtPath(nestedSchema, keys)) ?? []);
 
-  if (schema.type === 'array') {
-    return getSchemasAtPath(schema.items ?? {}, keys);
+  if (schema.items != null) {
+    return [...branches, ...getSchemasAtPath(schema.items, keys)];
   }
 
   if (keys.length === 0) {
-    return [schema];
+    return [...branches, schema];
   }
 
-  if (schema.type !== 'object' || !isObject(schema.properties) || !Object.hasOwn(schema.properties, keys[0])) {
-    return [];
+  if (!isObject(schema.properties) || !Object.hasOwn(schema.properties, keys[0])) {
+    return branches;
   }
 
-  return getSchemasAtPath(schema.properties[keys[0]], keys.slice(1));
+  return [...branches, ...getSchemasAtPath(schema.properties[keys[0]], keys.slice(1))];
 };
 
 export const updateSchemasAtPath = (schema: OpenapiSchema, keys: string[], update: (schema: OpenapiSchema) => OpenapiSchema): OpenapiSchema => {
-  if (Array.isArray(schema.oneOf)) {
-    return { ...schema, oneOf: schema.oneOf.map((nestedSchema) => updateSchemasAtPath(nestedSchema, keys, update)) };
-  }
+  const result = mapCompositions(schema, (nestedSchema) => updateSchemasAtPath(nestedSchema, keys, update));
 
-  if (schema.type === 'array') {
-    return { ...schema, items: updateSchemasAtPath(schema.items ?? {}, keys, update) };
+  if (schema.items != null) {
+    return { ...result, items: updateSchemasAtPath(schema.items, keys, update) };
   }
 
   if (keys.length === 0) {
-    return update(schema);
+    return update(result);
   }
 
-  if (schema.type !== 'object' || !isObject(schema.properties) || !Object.hasOwn(schema.properties, keys[0])) {
-    return schema;
+  if (!isObject(schema.properties) || !Object.hasOwn(schema.properties, keys[0])) {
+    return result;
   }
 
   return {
-    ...schema,
+    ...result,
     properties: {
       ...schema.properties,
       [keys[0]]: updateSchemasAtPath(schema.properties[keys[0]], keys.slice(1), update),

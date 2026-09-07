@@ -8,6 +8,29 @@ interface LocalRelation {
   isMany: boolean;
 }
 
+type EmbedTree = Map<string, EmbedTree>;
+
+export const createEmbedTree = (paths: string[][]): EmbedTree => {
+  const tree: EmbedTree = new Map();
+
+  for (const path of paths) {
+    let branch = tree;
+
+    for (const relation of path) {
+      let nested = branch.get(relation);
+
+      if (nested == null) {
+        nested = new Map();
+        branch.set(relation, nested);
+      }
+
+      branch = nested;
+    }
+  }
+
+  return tree;
+};
+
 interface RelationContext {
   forwardIndexes: Map<string, Map<string, DatabaseRecord>>;
   resourceNames: string[];
@@ -83,7 +106,13 @@ const getReverseIndex = (database: DatabaseContainer, targetResource: string, re
 
     collectReferences(item, relationKeys, references);
     references.forEach((id) => {
-      index.set(id, [...(index.get(id) ?? []), item]);
+      const bucket = index.get(id);
+
+      if (bucket == null) {
+        index.set(id, [item]);
+      } else {
+        bucket.push(item);
+      }
     });
   });
   context.reverseIndexes.set(cacheKey, index);
@@ -121,10 +150,15 @@ const findRelatedValue = (
   return getReverseIndex(database, targetResource, reverseRelationKeys, context).get(String(item.id)) ?? [];
 };
 
-const embedPath = (database: DatabaseContainer, item: Record<string, unknown>, sourceResource: string, relations: string[], context: RelationContext): Record<string, unknown> => {
-  const [relation, ...nestedRelations] = relations;
-
-  if (relation == null || !isSafeKey(relation)) {
+const embedRelation = (
+  database: DatabaseContainer,
+  item: Record<string, unknown>,
+  sourceResource: string,
+  relation: string,
+  nestedRelations: EmbedTree,
+  context: RelationContext,
+): Record<string, unknown> => {
+  if (!isSafeKey(relation)) {
     return item;
   }
 
@@ -135,13 +169,13 @@ const embedPath = (database: DatabaseContainer, item: Record<string, unknown>, s
 
   if (localRelation == null) {
     if (Array.isArray(currentValue)) {
-      return nestedRelations.length === 0
+      return nestedRelations.size === 0
         ? item
-        : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedPath(database, value, nestedSourceResource, nestedRelations, context) : value)) };
+        : { ...item, [relation]: currentValue.map((value) => (isObject(value) ? embedTree(database, value, nestedSourceResource, nestedRelations, context) : value)) };
     }
 
     if (isObject(currentValue)) {
-      return nestedRelations.length === 0 ? item : { ...item, [relation]: embedPath(database, currentValue, nestedSourceResource, nestedRelations, context) };
+      return nestedRelations.size === 0 ? item : { ...item, [relation]: embedTree(database, currentValue, nestedSourceResource, nestedRelations, context) };
     }
   }
 
@@ -151,16 +185,26 @@ const embedPath = (database: DatabaseContainer, item: Record<string, unknown>, s
 
   const relatedValue = findRelatedValue(database, item, sourceResource, relation, targetResource, context);
 
-  if (relatedValue == null || nestedRelations.length === 0) {
+  if (relatedValue == null || nestedRelations.size === 0) {
     return relatedValue === undefined ? item : { ...item, [relation]: relatedValue };
   }
 
   return {
     ...item,
     [relation]: Array.isArray(relatedValue)
-      ? relatedValue.map((value) => embedPath(database, value, targetResource, nestedRelations, context))
-      : embedPath(database, relatedValue, targetResource, nestedRelations, context),
+      ? relatedValue.map((value) => embedTree(database, value, targetResource, nestedRelations, context))
+      : embedTree(database, relatedValue, targetResource, nestedRelations, context),
   };
+};
+
+const embedTree = (database: DatabaseContainer, item: Record<string, unknown>, resource: string, tree: EmbedTree, context: RelationContext): Record<string, unknown> => {
+  let result = item;
+
+  for (const [relation, nestedRelations] of tree) {
+    result = embedRelation(database, result, resource, relation, nestedRelations, context);
+  }
+
+  return result;
 };
 
 export const parseEmbedPaths = (embed: unknown): string[][] => {
@@ -219,5 +263,5 @@ export const validateEmbedPaths = (database: DatabaseContainer, resource: string
   });
 };
 
-export const embedItem = (database: DatabaseContainer, item: DatabaseRecord, resource: string, embedPaths: string[][], context = createRelationContext(database)): DatabaseRecord =>
-  embedPaths.reduce((embeddedItem, path) => embedPath(database, embeddedItem, resource, path, context) as DatabaseRecord, item);
+export const embedItem = (database: DatabaseContainer, item: DatabaseRecord, resource: string, tree: EmbedTree, context = createRelationContext(database)): DatabaseRecord =>
+  embedTree(database, item, resource, tree, context) as DatabaseRecord;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -30,6 +30,74 @@ const withDiskServer = async (run) => {
     await rm(rootPath, { force: true, recursive: true });
   }
 };
+
+test('rejects overwriting a directory without moving its files or metadata', async () => {
+  await withDiskServer(async ({ filesPath, metadataPath, server }) => {
+    const upload = await server.inject({
+      headers: { 'content-directory': 'album', 'content-name': 'old.txt', 'content-type': 'text/plain' },
+      method: 'POST',
+      payload: 'original',
+      url: '/_files/storage',
+    });
+
+    assert.equal(upload.statusCode, 201);
+    const metadata = await readFile(metadataPath, 'utf8');
+    const entries = await readdir(filesPath);
+
+    for (const override of ['false', 'true']) {
+      const response = await server.inject({
+        headers: { 'content-name': 'album', 'content-override': override, 'content-type': 'text/plain' },
+        method: 'POST',
+        payload: 'replacement',
+        url: '/_files/storage',
+      });
+
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal((await lstat(join(filesPath, 'album'))).isDirectory(), true);
+      assert.equal(await readFile(join(filesPath, 'album', 'old.txt'), 'utf8'), 'original');
+      assert.equal(await readFile(metadataPath, 'utf8'), metadata);
+      assert.deepEqual(await readdir(filesPath), entries);
+      assert.deepEqual(await readdir(join(filesPath, '.deep-json-server')), []);
+      assert.equal((await server.inject(upload.json().url)).body, 'original');
+      assert.equal((await server.inject(upload.json().metadataUrl)).statusCode, 200);
+    }
+  });
+});
+
+test('rejects registered paths replaced externally with directories', async () => {
+  await withDiskServer(async ({ filesPath, metadataPath, server }) => {
+    const upload = await server.inject({
+      headers: { 'content-name': 'file.txt', 'content-type': 'text/plain' },
+      method: 'POST',
+      payload: 'original',
+      url: '/_files/storage',
+    });
+
+    assert.equal(upload.statusCode, 201);
+    const file = upload.json();
+    const path = join(filesPath, 'file.txt');
+    const metadata = await readFile(metadataPath, 'utf8');
+
+    await rm(path);
+    await mkdir(path);
+    await writeFile(join(path, 'keep.txt'), 'keep');
+
+    for (const request of [
+      { url: file.url },
+      { url: file.metadataUrl },
+      { url: file.downloadUrl },
+      { method: 'PATCH', payload: { name: 'renamed.txt' }, url: file.url },
+      { method: 'DELETE', url: file.url },
+    ]) {
+      const response = await server.inject(request);
+
+      assert.equal(response.statusCode, 400, response.body);
+    }
+
+    assert.equal(await readFile(join(path, 'keep.txt'), 'utf8'), 'keep');
+    assert.equal(await readFile(metadataPath, 'utf8'), metadata);
+  });
+});
 
 test('does not follow symbolic links outside disk storage', async () => {
   await withDiskServer(async ({ filesPath, rootPath, server }) => {

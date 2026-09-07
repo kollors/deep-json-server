@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { JSONFilePreset } from 'lowdb/node';
+import { Low } from 'lowdb';
+import { JSONFile } from 'lowdb/node';
 import type { DatabaseConfig } from './config.js';
 import type { DatabaseData, DatabaseRecord } from './types.js';
 import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
@@ -135,7 +136,7 @@ export const readDatabaseFile = async (databasePath: string): Promise<DatabaseDa
 const createDiskDatabaseStore = async (databasePath: string): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = await readDatabaseFile(resolvedDatabasePath);
-  const database = await JSONFilePreset(resolvedDatabasePath, initialData);
+  const database = new Low(new JSONFile<DatabaseData>(resolvedDatabasePath), initialData);
   const schedule = createSerialQueue();
 
   const read = async () => {
