@@ -99,6 +99,29 @@ test('rejects registered paths replaced externally with directories', async () =
   });
 });
 
+test('rejects unknown file PATCH fields without renaming the file or changing metadata', async () => {
+  await withDiskServer(async ({ filesPath, metadataPath, server }) => {
+    const upload = await server.inject({
+      headers: { 'content-name': 'original.txt', 'content-type': 'text/plain' },
+      method: 'POST',
+      payload: 'original',
+      url: '/_files/storage',
+    });
+
+    assert.equal(upload.statusCode, 201, upload.body);
+    const file = upload.json();
+    const metadata = await readFile(metadataPath, 'utf8');
+    const entries = await readdir(filesPath);
+    const response = await server.inject({ method: 'PATCH', payload: { extra: 'invalid', name: 'renamed.txt' }, url: file.url });
+
+    assert.equal(response.statusCode, 400, response.body);
+    assert.equal((await server.inject(file.url)).body, 'original');
+    assert.deepEqual((await server.inject(file.metadataUrl)).json(), file);
+    assert.equal(await readFile(metadataPath, 'utf8'), metadata);
+    assert.deepEqual(await readdir(filesPath), entries);
+  });
+});
+
 test('does not follow symbolic links outside disk storage', async () => {
   await withDiskServer(async ({ filesPath, rootPath, server }) => {
     const outsidePath = join(rootPath, 'outside');

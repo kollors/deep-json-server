@@ -250,6 +250,8 @@ Both pagination parameters must be positive integers. `_perPage` cannot exceed `
 
 `_sort` accepts comma-separated field paths. Rules are applied from left to right; prefix a field with `-` for descending order. Dot paths can address nested object fields, including fields added by `_embed`, for example `GET /users?_embed=country&_sort=country.name,-id`. Unknown or unsafe sort fields return `400`.
 
+`null` and missing values sort as equal empty values: after other values in ascending order and before them in descending order. The next sort rule breaks ties; records tied on every rule retain their original order.
+
 ## Filters
 
 Pass a JSON object through `_where`:
@@ -497,9 +499,11 @@ Use `name` when a resource needs an explicit schema name instead of the automati
 
 The generated document describes CRUD endpoints, pagination, sorting, nested data filters, `_embed`, and both direct and reverse response relations inferred from `...Id` and `...Ids` fields. When `--files` is present, it also describes raw binary upload, download and deletion endpoints for arbitrary media types. A numeric database ID is described as `integer | string`, because a later `POST` creates a string ID in the same resource. Generation rejects duplicate schema names, operation IDs, and invalid schema overrides before producing a document. The document can be used as input for tools such as RTK Query OpenAPI Codegen. OpenAPI is generated only with `--openapi` or `--openapi-only`; normal server startup does not rewrite the file.
 
-During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed. Invalid bodies return `400`.
+During normal startup, request bodies are validated against the same inferred and configured schemas. `POST` and `PUT` enforce configured required fields; `PATCH` validates only fields that are actually supplied. `formats` and `properties` apply to all three methods. Unlisted additional object fields remain allowed unless the object's schema sets `additionalProperties: false`; in that case, extra fields return `400` without being silently removed. Validation preserves valid fields in `anyOf` and `oneOf` branches regardless of their order. Invalid bodies return `400` without changing stored data.
 
 JSON body types are checked without coercion: a string such as `"1"` does not satisfy an integer schema. Inferred null-only fields use `{ "type": "string", "nullable": true, "enum": [null] }`, which accepts only `null` in OpenAPI 3.0.3. Mixed types include a separate null-only `oneOf` branch when needed.
+
+An explicit `type` in `properties` replaces the inferred null-only restriction unless the override also supplies an `enum`. For example, `{ "type": "string", "nullable": true }` allows strings and `null` even when all initial values are `null`. Inferred nullability remains unless overridden with `nullable: false`; explicit enums are always preserved. This also applies to nested properties and array items.
 
 Explicit nested `properties.required` constraints are preserved and combined with shorthand required paths. Required paths, formats, and relation discovery traverse `oneOf`, `anyOf`, and `allOf`, including their sibling properties. `PATCH` performs a shallow merge: an omitted top-level property is untouched, while a supplied object replaces that property and must satisfy its nested requirements. Defaults may be inserted by validation for `POST` and `PUT`; `PATCH` never inserts defaults, including inside supplied objects or arrays.
 

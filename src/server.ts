@@ -81,6 +81,15 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
   const resourcePath = `/${resource}`;
   const itemPath = `/${resource}/:id`;
   const { createSchemaName, updateSchemaName } = getRequestSchemaNames(document, resource);
+  const updateItem = (id: DatabaseId, update: (item: DatabaseRecord) => JsonObject): Promise<DatabaseRecord> =>
+    store.update((database) => {
+      const { collection, index, item: currentItem } = getCollectionItem(database, resource, id);
+      const item = { ...update(currentItem), id: currentItem.id } as DatabaseRecord;
+
+      collection[index] = item;
+
+      return item;
+    });
 
   fastify.get(resourcePath, async (request) => {
     await store.read();
@@ -131,28 +140,10 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
     return reply.code(201).send(item);
   });
 
-  fastify.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) =>
-    store.update((database) => {
-      const { collection, index, item: currentItem } = getCollectionItem(database, resource, (request.params as ItemParams).id);
-
-      const item = { ...(request.body as JsonObject), id: currentItem.id } as DatabaseRecord;
-
-      collection[index] = item;
-
-      return item;
-    }),
-  );
+  fastify.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) => updateItem((request.params as ItemParams).id, () => request.body as JsonObject));
 
   fastify.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
-    store.update((database) => {
-      const { collection, index, item: currentItem } = getCollectionItem(database, resource, (request.params as ItemParams).id);
-
-      const item = { ...currentItem, ...(request.body as JsonObject), id: currentItem.id } as DatabaseRecord;
-
-      collection[index] = item;
-
-      return item;
-    }),
+    updateItem((request.params as ItemParams).id, (item) => ({ ...item, ...(request.body as JsonObject) })),
   );
 
   fastify.delete(itemPath, async (request) =>
@@ -206,7 +197,7 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
 
     const document = buildDocument();
     const resources = getResourceNames(store.database.data);
-    const fastify = Fastify({ ajv: { customOptions: { coerceTypes: false } }, logger });
+    const fastify = Fastify({ ajv: { customOptions: { coerceTypes: false, removeAdditional: false } }, logger });
     const originalListen = fastify.listen.bind(fastify);
 
     // Calling fastify().listen() without arguments uses config defaults.

@@ -2,13 +2,13 @@ import { createHttpError, isObject, isSafeKey } from '../utils.js';
 
 interface SortRule {
   isDescending: boolean;
-  path: string;
+  keys: string[];
 }
 
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 const compareValues = (left: unknown, right: unknown): number => {
-  if (Object.is(left, right)) {
+  if (Object.is(left, right) || (left == null && right == null)) {
     return 0;
   }
 
@@ -23,8 +23,7 @@ const compareValues = (left: unknown, right: unknown): number => {
   return typeof left === 'number' && typeof right === 'number' ? left - right : collator.compare(String(left), String(right));
 };
 
-const getValueByPath = (value: unknown, path: string): unknown =>
-  path.split('.').reduce<unknown>((currentValue, key) => (isObject(currentValue) && isSafeKey(key) ? currentValue[key] : undefined), value);
+const getValueByPath = (value: unknown, keys: string[]): unknown => keys.reduce<unknown>((currentValue, key) => (isObject(currentValue) && isSafeKey(key) ? currentValue[key] : undefined), value);
 
 const parseSortRules = (sort: unknown, items: unknown[]): SortRule[] => {
   if (sort == null || sort === '') {
@@ -44,7 +43,7 @@ const parseSortRules = (sort: unknown, items: unknown[]): SortRule[] => {
       throw createHttpError(400, `Недопустимое поле сортировки «${path}»`);
     }
 
-    const samples = items.map((item) => getValueByPath(item, path)).filter((value) => value !== undefined);
+    const samples = items.map((item) => getValueByPath(item, keys)).filter((value) => value !== undefined);
 
     if (items.length > 0 && samples.length === 0) {
       throw createHttpError(400, `Неизвестное поле сортировки «${path}»`);
@@ -54,7 +53,7 @@ const parseSortRules = (sort: unknown, items: unknown[]): SortRule[] => {
       throw createHttpError(400, `Поле сортировки «${path}» должно содержать примитивные значения`);
     }
 
-    return { isDescending, path };
+    return { isDescending, keys };
   });
 };
 
@@ -64,8 +63,8 @@ export const sortItems = <T>(items: T[], sort: unknown, validationItems: unknown
   return sortRules.length === 0
     ? [...items]
     : [...items].sort((left, right) => {
-        for (const { isDescending, path } of sortRules) {
-          const comparison = compareValues(getValueByPath(left, path), getValueByPath(right, path));
+        for (const { isDescending, keys } of sortRules) {
+          const comparison = compareValues(getValueByPath(left, keys), getValueByPath(right, keys));
 
           if (comparison !== 0) {
             return isDescending ? -comparison : comparison;

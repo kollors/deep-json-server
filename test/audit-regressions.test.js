@@ -162,6 +162,149 @@ test('validates null and mixed inferred types without coercing JSON values', asy
   }
 });
 
+for (const keyword of ['anyOf', 'oneOf']) {
+  test(`${keyword} preserves valid fields regardless of branch order and rejects extra fields without writing`, async () => {
+    for (const kinds of [
+      ['a', 'b'],
+      ['b', 'a'],
+    ]) {
+      const branches = kinds.map((kind) => ({
+        additionalProperties: false,
+        properties: { [kind]: { type: 'string' }, kind: { enum: [kind], type: 'string' } },
+        required: ['kind'],
+        type: 'object',
+      }));
+      const schema = { $schema: { items: { properties: { value: { [keyword]: branches } } } } };
+
+      await withMemoryServer({ items: [{ id: '1' }] }, schema, async (server) => {
+        for (const method of ['POST', 'PUT', 'PATCH']) {
+          const url = method === 'POST' ? '/items' : '/items/1';
+
+          for (const kind of ['a', 'b']) {
+            const value = { [kind]: 'keep me', kind };
+            const response = await server.inject({ method, payload: { value }, url });
+
+            assert.equal(response.statusCode, method === 'POST' ? 201 : 200, response.body);
+            assert.deepEqual(response.json().value, value);
+            assert.deepEqual((await server.inject(`/items/${response.json().id}`)).json().value, value);
+
+            const before = (await server.inject('/items')).json();
+            const rejected = await server.inject({ method, payload: { value: { ...value, extra: 'invalid' } }, url });
+
+            assert.equal(rejected.statusCode, 400, rejected.body);
+            assert.deepEqual((await server.inject('/items')).json(), before);
+          }
+        }
+      });
+    }
+  });
+}
+
+test('explicit types widen inferred null-only fields, nested properties and array items', async () => {
+  const properties = {
+    count: { nullable: false, type: 'integer' },
+    profile: { properties: { status: { type: 'string' } }, type: 'object' },
+    status: { nullable: true, type: 'string' },
+    values: { items: { type: 'boolean' }, type: 'array' },
+  };
+  const data = { items: [{ count: null, id: '1', profile: { status: null }, status: null, values: [null] }] };
+
+  await withMemoryServer(data, { $schema: { items: { properties } } }, async (server, facade) => {
+    const document = await facade.openapi();
+
+    for (const name of ['Item', 'ItemCreate', 'ItemUpdate']) {
+      const actual = document.components.schemas[name].properties;
+
+      assert.deepEqual(actual.count, { nullable: false, type: 'integer' });
+      assert.deepEqual(actual.status, { nullable: true, type: 'string' });
+      assert.deepEqual(actual.profile.properties.status, { nullable: true, type: 'string' });
+      assert.deepEqual(actual.values.items, { nullable: true, type: 'boolean' });
+    }
+
+    for (const method of ['POST', 'PUT', 'PATCH']) {
+      const url = method === 'POST' ? '/items' : '/items/1';
+
+      for (const payload of [
+        { count: 1, profile: { status: 'active' }, status: 'active', values: [true, false] },
+        { count: 0, profile: { status: null }, status: null, values: [null] },
+      ]) {
+        const response = await server.inject({ method, payload, url });
+
+        assert.equal(response.statusCode, method === 'POST' ? 201 : 200, response.body);
+        assert.deepEqual(response.json(), { ...payload, id: response.json().id });
+        assert.deepEqual((await server.inject(`/items/${response.json().id}`)).json(), response.json());
+      }
+
+      for (const payload of [{ count: null }, { count: '1' }, { status: 1 }, { profile: { status: false } }, { values: ['true'] }]) {
+        const response = await server.inject({ method, payload, url });
+
+        assert.equal(response.statusCode, 400, response.body);
+      }
+    }
+  });
+});
+
+test('retains null-only inference without a type override and honors explicit enums', async () => {
+  const cases = [
+    { invalid: ['active', 1], override: { description: 'Only null inferred' }, valid: [null] },
+    { invalid: ['active', 1], override: { enum: [null], nullable: true, type: 'string' }, valid: [null] },
+    { invalid: ['other', 1], override: { enum: ['active', null], nullable: true, type: 'string' }, valid: ['active', null] },
+  ];
+
+  for (const { invalid, override, valid } of cases) {
+    await withMemoryServer({ items: [{ id: '1', status: null }] }, { $schema: { items: { properties: { status: override } } } }, async (server, facade) => {
+      for (const name of ['Item', 'ItemCreate', 'ItemUpdate']) {
+        assert.deepEqual((await facade.openapi()).components.schemas[name].properties.status.enum, override.enum ?? [null]);
+      }
+
+      for (const method of ['POST', 'PUT', 'PATCH']) {
+        const url = method === 'POST' ? '/items' : '/items/1';
+
+        for (const status of valid) {
+          const response = await server.inject({ method, payload: { status }, url });
+
+          assert.equal(response.statusCode, method === 'POST' ? 201 : 200, response.body);
+          assert.equal(response.json().status, status);
+        }
+
+        for (const status of invalid) {
+          const response = await server.inject({ method, payload: { status }, url });
+
+          assert.equal(response.statusCode, 400, response.body);
+        }
+      }
+    });
+  }
+});
+
+test('sorts null and missing values as equal empties and applies subsequent rules', async () => {
+  const records = [{ id: '3', rank: null }, { id: '1' }, { id: '2', rank: null }, { id: '4', rank: 10 }, { id: '5', rank: 2 }];
+
+  for (const path of ['rank', 'profile.rank']) {
+    const items = path === 'rank' ? records : records.map(({ id, rank }) => (rank === undefined ? { id } : { id, profile: { rank } }));
+
+    for (const seed of [items, [...items].reverse(), [...items.slice(2), ...items.slice(0, 2)]]) {
+      await withMemoryServer({ items: seed }, undefined, async (server) => {
+        for (const [sort, expected] of [
+          [`${path},id`, ['5', '4', '1', '2', '3']],
+          [`-${path},id`, ['1', '2', '3', '4', '5']],
+          [`${path},-id`, ['5', '4', '3', '2', '1']],
+          [`-${path},-id`, ['3', '2', '1', '4', '5']],
+          [path, ['5', '4', ...seed.filter(({ id }) => Number(id) <= 3).map(({ id }) => id)]],
+        ]) {
+          const response = await server.inject(`/items?_sort=${sort}`);
+
+          assert.equal(response.statusCode, 200, response.body);
+          assert.deepEqual(
+            response.json().data.map(({ id }) => id),
+            expected,
+          );
+        }
+      });
+    }
+  }
+});
+
 test('combines nested explicit required with shorthand and enforces replacement objects in PATCH', async () => {
   const schema = {
     $schema: {

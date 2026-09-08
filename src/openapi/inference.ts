@@ -36,8 +36,15 @@ export const mergeSchemaOverrides = (schema: OpenapiSchema, overrides: unknown):
 
   const result: OpenapiSchema = { ...schema, ...overrides };
 
-  if (Object.hasOwn(overrides, 'type') && !Object.hasOwn(overrides, 'oneOf')) {
-    delete result.oneOf;
+  if (Object.hasOwn(overrides, 'type')) {
+    if (!Object.hasOwn(overrides, 'oneOf')) {
+      delete result.oneOf;
+    }
+
+    // An explicit type can widen an inferred null-only field; an explicit enum still wins.
+    if (schema.type === 'string' && schema.nullable === true && schema.enum?.length === 1 && schema.enum[0] === null && !Object.hasOwn(overrides, 'enum')) {
+      delete result.enum;
+    }
   }
 
   if (isObject(schema.properties) || isObject(overrides.properties)) {
