@@ -92,7 +92,7 @@ const normalizeSchema = (schema: unknown, directoryPath: string): DatabaseSchema
   }
 
   if (typeof schema === 'string') {
-    return resolveConfigPath(getString(schema, 'config.database.schema', true), directoryPath);
+    return resolve(directoryPath, getString(schema, 'config.database.schema', true));
   }
 
   return getObject(schema, 'config.database.schema', true) as DatabaseSchema;
@@ -116,7 +116,7 @@ const normalizeDatabase = (value: unknown, directoryPath: string): DatabaseConfi
     return { data: getObject(database.data, 'config.database.data', true) as DatabaseData, schema };
   }
 
-  return { path: resolveConfigPath(getString(database.path, 'config.database.path', true), directoryPath) as string, schema };
+  return { path: resolve(directoryPath, getString(database.path, 'config.database.path', true)), schema };
 };
 
 const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | undefined => {
@@ -144,8 +144,8 @@ const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | un
   }
 
   return {
-    directory: resolveConfigPath(getString(files.directory, 'config.files.directory', true), directoryPath) as string,
-    metadata: resolveConfigPath(getString(files.metadata, 'config.files.metadata', true), directoryPath) as string,
+    directory: resolve(directoryPath, getString(files.directory, 'config.files.directory', true)),
+    metadata: resolve(directoryPath, getString(files.metadata, 'config.files.metadata', true)),
   };
 };
 

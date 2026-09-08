@@ -47,24 +47,23 @@ const CORS_HEADERS = {
 
 const getSchemaName = (reference: string): string => reference.split('/').at(-1) as string;
 
+const getRequestSchemaNames = (document: OpenapiDocument, resource: string): { createSchemaName: string; updateSchemaName: string } => {
+  const createOperation = document.paths[`/${resource}`].post as RequestSchemaOperation;
+  const updateOperation = document.paths[`/${resource}/{id}`].patch as RequestSchemaOperation;
+
+  return {
+    createSchemaName: getSchemaName(createOperation.requestBody.content['application/json'].schema.$ref),
+    updateSchemaName: getSchemaName(updateOperation.requestBody.content['application/json'].schema.$ref),
+  };
+};
+
 const addRequestSchemas = (fastify: FastifyInstance, document: OpenapiDocument, resources: string[]): void => {
-  const requestSchemaNames = new Map(
-    resources.flatMap((resource) => {
-      const resourcePath = document.paths[`/${resource}`] as { post: RequestSchemaOperation };
-      const itemPath = document.paths[`/${resource}/{id}`] as { patch: RequestSchemaOperation };
+  for (const resource of resources) {
+    const { createSchemaName, updateSchemaName } = getRequestSchemaNames(document, resource);
 
-      return [
-        [getSchemaName(resourcePath.post.requestBody.content['application/json'].schema.$ref), false] as const,
-        [getSchemaName(itemPath.patch.requestBody.content['application/json'].schema.$ref), true] as const,
-      ];
-    }),
-  );
-
-  requestSchemaNames.forEach((isPatch, schemaName) => {
-    const schema = structuredClone(document.components.schemas[schemaName]);
-
-    fastify.addSchema({ $id: schemaName, ...(isPatch ? withoutDefaults(schema) : schema) });
-  });
+    fastify.addSchema({ $id: createSchemaName, ...structuredClone(document.components.schemas[createSchemaName]) });
+    fastify.addSchema({ $id: updateSchemaName, ...withoutDefaults(structuredClone(document.components.schemas[updateSchemaName])) });
+  }
 };
 
 const getCollectionItem = (database: DatabaseContainer, resource: string, id: DatabaseId): { collection: DatabaseRecord[]; index: number; item: DatabaseRecord } => {
@@ -81,10 +80,7 @@ const getCollectionItem = (database: DatabaseContainer, resource: string, id: Da
 const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, resource: string, document: OpenapiDocument, maxPageSize: number): void => {
   const resourcePath = `/${resource}`;
   const itemPath = `/${resource}/:id`;
-  const createOperation = document.paths[resourcePath].post as RequestSchemaOperation;
-  const updateOperation = document.paths[`/${resource}/{id}`].patch as RequestSchemaOperation;
-  const createSchemaName = getSchemaName(createOperation.requestBody.content['application/json'].schema.$ref);
-  const updateSchemaName = getSchemaName(updateOperation.requestBody.content['application/json'].schema.$ref);
+  const { createSchemaName, updateSchemaName } = getRequestSchemaNames(document, resource);
 
   fastify.get(resourcePath, async (request) => {
     await store.read();
@@ -141,7 +137,7 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
 
       const item = { ...(request.body as JsonObject), id: currentItem.id } as DatabaseRecord;
 
-      collection.splice(index, 1, item);
+      collection[index] = item;
 
       return item;
     }),
@@ -153,7 +149,7 @@ const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, 
 
       const item = { ...currentItem, ...(request.body as JsonObject), id: currentItem.id } as DatabaseRecord;
 
-      collection.splice(index, 1, item);
+      collection[index] = item;
 
       return item;
     }),

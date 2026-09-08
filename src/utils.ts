@@ -77,7 +77,6 @@ export const resolveDatabasePath = (databasePath: string): string => {
   return resolve(databasePath);
 };
 
-export const isIdEqual = (left: unknown, right: unknown): boolean => left != null && right != null && String(left) === String(right);
 export const singularize = (value: string): string => pluralize.singular(value);
 
 export const toPascalCase = (value: string): string =>

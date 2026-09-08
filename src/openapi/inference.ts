@@ -5,6 +5,7 @@ import { COMPOSITION_KEYWORDS, mapCompositions } from './traversal.js';
 type InferredSchema = Omit<OpenapiSchema, 'type'> & { type?: OpenapiSchema['type'] | 'null' };
 
 export const mergeSchemas = (schemas: InferredSchema[]): OpenapiSchema => {
+  const nullSchema: OpenapiSchema = { enum: [null], nullable: true, type: 'string' };
   const uniqueSchemas = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
   const nullable = uniqueSchemas.some((schema) => schema.type === 'null');
   let nonNullSchemas: OpenapiSchema[] = uniqueSchemas.filter((schema): schema is OpenapiSchema => schema.type !== 'null');
@@ -14,14 +15,18 @@ export const mergeSchemas = (schemas: InferredSchema[]): OpenapiSchema => {
   }
 
   if (nonNullSchemas.length === 0) {
-    return { enum: [null], nullable: true, type: 'string' };
+    return nullSchema;
   }
 
   if (nonNullSchemas.length === 1) {
     return nullable ? { ...nonNullSchemas[0], nullable: true } : nonNullSchemas[0];
   }
 
-  return { oneOf: [...nonNullSchemas, ...(nullable ? [{ enum: [null], nullable: true, type: 'string' as const }] : [])] };
+  if (nullable) {
+    nonNullSchemas.push(nullSchema);
+  }
+
+  return { oneOf: nonNullSchemas };
 };
 
 export const mergeSchemaOverrides = (schema: OpenapiSchema, overrides: unknown): OpenapiSchema => {

@@ -28,18 +28,12 @@ const parseArguments = (args: string[]): CliOptions => {
   args.forEach((argument) => {
     if (argument === '--files') {
       options.files = true;
-    } else if (argument === '--openapi') {
+    } else if (argument === '--openapi' || argument === '--openapi-only') {
       if (options.openapiMode !== 'none') {
         throw new Error('Параметры --openapi и --openapi-only нельзя использовать одновременно');
       }
 
-      options.openapiMode = 'generate';
-    } else if (argument === '--openapi-only') {
-      if (options.openapiMode !== 'none') {
-        throw new Error('Параметры --openapi и --openapi-only нельзя использовать одновременно');
-      }
-
-      options.openapiMode = 'only';
+      options.openapiMode = argument === '--openapi-only' ? 'only' : 'generate';
     } else if (argument.startsWith('-')) {
       throw new Error(`Неизвестный параметр: ${argument}`);
     } else if (configPath == null) {

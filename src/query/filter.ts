@@ -1,12 +1,16 @@
 import type { Query } from '../types.js';
 import { createHttpError, isEqual, isObject, isSafeKey, toArray } from '../utils.js';
 
-type FieldOperator = 'contains' | 'endsWith' | 'eq' | 'every' | 'gt' | 'gte' | 'in' | 'lt' | 'lte' | 'ne' | 'none' | 'not' | 'some' | 'startsWith';
+const FIELD_OPERATOR_NAMES = ['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith'] as const;
+
+type FieldOperator = (typeof FIELD_OPERATOR_NAMES)[number];
 type Where = Record<string, unknown>;
 
-const FIELD_OPERATORS = new Set<FieldOperator>(['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith']);
+const FIELD_OPERATORS = new Set<string>(FIELD_OPERATOR_NAMES);
 const RESERVED_QUERY_KEYS = new Set(['_embed', '_page', '_perPage', '_sort', '_where']);
 const NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+const isFieldOperator = (value: string): value is FieldOperator => FIELD_OPERATORS.has(value);
 
 const isFilterEqual = (left: unknown, right: unknown): boolean => {
   if (isEqual(left, right)) {
@@ -77,8 +81,8 @@ function matchesValue(field: unknown, condition: unknown): boolean {
   }
 
   const conditionEntries = Object.entries(condition);
-  const operatorEntries = conditionEntries.filter((entry): entry is [FieldOperator, unknown] => FIELD_OPERATORS.has(entry[0] as FieldOperator));
-  const nestedEntries = conditionEntries.filter(([key]) => !FIELD_OPERATORS.has(key as FieldOperator));
+  const operatorEntries = conditionEntries.filter((entry): entry is [FieldOperator, unknown] => isFieldOperator(entry[0]));
+  const nestedEntries = conditionEntries.filter(([key]) => !isFieldOperator(key));
 
   if (!operatorEntries.every(([operator, expectedValue]) => matchesOperator(field, operator, expectedValue))) {
     return false;
@@ -136,11 +140,11 @@ const parseFilterKey = (key: string): { operator: FieldOperator; path: string } 
     const path = key.slice(0, colonIndex);
     const operator = key.slice(colonIndex + 1);
 
-    if (!FIELD_OPERATORS.has(operator as FieldOperator)) {
+    if (!isFieldOperator(operator)) {
       throw createHttpError(400, `Неизвестный оператор «${operator}» в фильтре «${key}»`);
     }
 
-    return { operator: operator as FieldOperator, path };
+    return { operator, path };
   }
 
   return { operator: 'eq', path: key };
@@ -235,10 +239,8 @@ const validateCondition = (condition: unknown, samples: unknown[], path: string)
       return;
     }
 
-    if (FIELD_OPERATORS.has(key as FieldOperator)) {
-      const operator = key as FieldOperator;
-
-      validateExpectedValue(operator, value, samples, path);
+    if (isFieldOperator(key)) {
+      validateExpectedValue(key, value, samples, path);
 
       if (['every', 'none', 'some'].includes(key)) {
         if (samples.length > 0 && !samples.some(Array.isArray)) {
