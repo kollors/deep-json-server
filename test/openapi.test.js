@@ -1,255 +1,271 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { buildSchema, validateSchema } from 'graphql';
 import { parse } from 'yaml';
 import { createServer } from '../dist/index.js';
-import { buildOpenapiDocument } from '../dist/src/openapi/document.js';
+import { loadModel } from '../dist/src/model.js';
+import { createOpenapi } from '../dist/src/openapi/index.js';
 
-const database = {
-  countries: [{ id: '1', name: 'Russia' }],
-  genres: [
-    { id: '1', name: 'Crime', parentIds: [] },
-    { id: '2', name: 'Drama', parentIds: ['1'] },
-  ],
-  movies: [
-    { actors: [{ genreIds: ['2'], id: 'actor-1', userId: '1' }], coverSrc: 'https://example.com/cover.jpg', description: 'Description', id: '1', publisherIds: ['1'], title: 'Movie' },
-    { actors: [], coverSrc: 'https://example.com/cover-2.jpg', id: '2', publisherIds: [], title: 'Movie 2' },
-  ],
-  publishers: [{ id: '1', name: 'Publisher' }],
-  resources: [{ id: '1', name: 'Resource' }],
-  users: [{ avatarSrc: 'https://example.com/avatar.jpg', bornAt: '1989-01-25', countryId: '1', fullName: 'Actor', id: '1' }],
-};
-const schemaConfig = {
-  $info: { title: 'Test API', version: '1.0.0' },
-  $schema: {
-    movies: { formats: { coverSrc: 'uri' }, required: ['actors', 'actors.genreIds', 'actors.userId', 'publisherIds', 'title'] },
-    resources: { name: 'Asset', required: ['name'] },
-    users: { formats: { avatarSrc: 'uri', bornAt: 'date' }, required: ['bornAt', 'fullName'] },
-  },
-};
-const createDocument = (data, schema, options = {}) => buildOpenapiDocument({ database: data, files: options.files, maxPageSize: options.server?.maxPageSize, schema });
+const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
+const definition = (fields) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
+const facadeFor = (model, extra = {}) => createServer({ database: { data: {}, schema: model }, server: { logger: false }, ...extra });
+function checkReferences(document) {
+  const walk = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (value.$ref) {
+      assert.ok(value.$ref.startsWith('#/components/'));
+      const [, , category, name] = value.$ref.split('/');
+      assert.ok(document.components[category][name], value.$ref);
+    }
+    Object.values(value).forEach(walk);
+  };
+  walk(document);
+}
 
-const withFiles = async (run) => {
-  const directory = await mkdtemp(join(tmpdir(), 'deep-json-server-openapi-'));
-  const databasePath = join(directory, 'database.json');
-  const schemaPath = join(directory, 'database-schema.json');
-  const outputPath = join(directory, 'openapi-schema.yaml');
-  const filesDirectoryPath = join(directory, 'files');
-  const filesMetadataPath = join(filesDirectoryPath, '_database.json');
-
-  await writeFile(databasePath, JSON.stringify(database));
-  await writeFile(schemaPath, JSON.stringify(schemaConfig));
-
-  try {
-    await run({ databasePath, filesDirectoryPath, filesMetadataPath, outputPath, schemaPath });
-  } finally {
-    await rm(directory, { force: true, recursive: true });
-  }
-};
-
-test('generates CRUD schemas, formats and direct and reverse relations', async () => {
-  await withFiles(async ({ databasePath, filesDirectoryPath, filesMetadataPath, outputPath, schemaPath }) => {
-    const server = await createServer(
-      {
-        database: { path: databasePath, schema: schemaPath },
-        files: { directory: filesDirectoryPath, metadata: filesMetadataPath },
-        openapi: { path: outputPath },
-      },
-      { files: true },
-    );
-
-    await server.openapi();
-
-    const yaml = await readFile(outputPath, 'utf8');
-    const document = parse(yaml);
-    const movie = document.components.schemas.Movie;
-    const actor = movie.properties.actors.items;
-
-    assert.equal(document.openapi, '3.0.3');
-    assert.doesNotMatch(yaml, /[&*]a\d/);
-    assert.equal(movie.properties.coverSrc.format, 'uri');
-    assert.deepEqual(movie.required, ['id', 'actors', 'publisherIds', 'title']);
-    assert.deepEqual(actor.required, ['genreIds', 'userId']);
-    assert.deepEqual(document.components.schemas.Country.required, ['id']);
-    assert.deepEqual(document.components.schemas.MovieCreate.required, ['actors', 'publisherIds', 'title']);
-    assert.equal(document.info.title, 'Test API');
-    assert.equal(document.servers[0].url, 'http://127.0.0.1:4001');
-    assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
-    assert.equal(movie.properties.publishers.items.$ref, '#/components/schemas/Publisher');
-    assert.equal(actor.properties.user.$ref, '#/components/schemas/User');
-    assert.equal(actor.properties.genres.items.$ref, '#/components/schemas/Genre');
-    assert.equal(document.components.schemas.Genre.properties.parents.items.$ref, '#/components/schemas/Genre');
-    assert.equal(document.components.schemas.Genre.properties.children.items.$ref, '#/components/schemas/Genre');
-    assert.equal(document.components.schemas.Country.properties.users.items.$ref, '#/components/schemas/User');
-    assert.equal(document.components.schemas.User.properties.movies.items.$ref, '#/components/schemas/Movie');
-    assert.equal(document.components.schemas.Asset.properties.name.type, 'string');
-    assert.equal(document.components.parameters.PerPage.schema.default, 10);
-    assert.equal(document.components.parameters.PerPage.schema.maximum, 1000);
-    assert.equal(document.components.parameters.PerPage.name, '_perPage');
-    assert.deepEqual(document.components.schemas.MoviePage.properties.total, { minimum: 0, type: 'integer' });
-    assert.deepEqual(document.components.schemas.MoviePage.required, ['data', 'total']);
-    assert.equal(document.paths['/movies'].get.responses[200].content['application/json'].schema.$ref, '#/components/schemas/MoviePage');
-    assert.equal(document.paths['/movies'].get.operationId, 'getMovies');
-    assert.equal(document.paths['/movies'].post.operationId, 'postMovies');
-    assert.equal(document.paths['/movies/{id}'].get.operationId, 'getMoviesById');
-    assert.equal(document.paths['/movies/{id}'].patch.operationId, 'patchMoviesById');
-    assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
-    assert.equal(document.paths['/_files/storage'].post.requestBody.content['*/*'].schema.format, 'binary');
-    assert.equal(document.paths['/_files/storage/{path}'].get.operationId, 'getFileContent');
-    assert.equal(document.paths['/_files/storage/{path}'].get.responses[200].content['*/*'].schema.format, 'binary');
-    assert.equal(document.paths['/_files/storage/{path}'].patch.operationId, 'updateFile');
-    assert.equal(document.paths['/_files/storage/{path}'].delete.responses[204].description, 'Deleted');
-    assert.equal(document.paths['/_files/metadata/{path}'].get.operationId, 'getFileMetadata');
-    assert.equal(document.paths['/_files/download/{path}'].get.operationId, 'downloadFile');
-    assert.deepEqual(document.components.schemas.FileMetadata.required, ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url']);
-    assert.deepEqual(document.components.schemas.FileUpdate.anyOf, [{ required: ['directory'] }, { required: ['name'] }]);
-    assert.equal(document.components.parameters.ContentDirectory.name, 'Content-Directory');
-    assert.equal(document.components.parameters.ContentName.name, 'Content-Name');
-    assert.equal(document.components.parameters.ContentOverride.name, 'Content-Override');
-    assert.deepEqual(document.components.parameters.ContentOverride.schema, { default: 'false', enum: ['false', 'true'], type: 'string' });
-    assert.equal(document.components.parameters.FilePath.allowReserved, undefined);
-  });
+test('exports catalog without data or runtime server and resolves every reference', async () => {
+  const facade = await facadeFor(schema);
+  const document = await facade.openapi();
+  assert.equal(document.openapi, '3.0.3');
+  assert.equal(document.paths['/users'].get.operationId, 'userList');
+  assert.equal(document.paths['/users/{id}'].get.operationId, 'user');
+  assert.equal(document.components.schemas.Movie.properties.actors.$ref, '#/components/schemas/Movie_actorsPage');
+  assert.equal(document.components.schemas.Movie_actors.properties.genres.$ref, '#/components/schemas/GenrePage');
+  assert.equal(document.components.schemas.UserCreate.properties.id, undefined);
+  assert.equal(document.components.schemas.UserCreate.properties.countryId.type, 'string');
+  assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
+  assert.equal(document.components.schemas.UserUpdate.required, undefined);
+  assert.equal(document.components.schemas.Pager.properties.pageSize.maximum, 100);
+  const parameter = document.paths['/users'].get.parameters.find((p) => p.name === 'where');
+  assert.ok(parameter.content['application/json']);
+  assert.equal(parameter.schema, undefined);
+  assert.ok(document.components.schemas.UserNested.properties['movies.actors.genres']);
+  checkReferences(document);
+  const sdl = await facade.graphql();
+  assert.deepEqual(validateSchema(buildSchema(sdl)), []);
+  assert.match(sdl, /userList/);
+  assert.doesNotMatch(sdl, /ById/);
+  document.components.schemas.User.properties.fullName.type = 'number';
+  assert.equal((await facade.openapi()).components.schemas.User.properties.fullName.type, 'string');
 });
 
-test('returns OpenAPI in memory and validates file configuration', async () => {
-  await withFiles(async ({ databasePath, filesDirectoryPath, outputPath }) => {
-    const server = await createServer({ database: { path: databasePath } });
-    const document = await server.openapi();
-
-    assert.equal(document.openapi, '3.0.3');
-    await assert.rejects(() => createServer({ database: { path: databasePath }, files: { directory: filesDirectoryPath }, openapi: { path: outputPath } }), /config\.files\.metadata/);
-  });
-});
-
-test('describes empty resources through explicit properties', () => {
-  const document = createDocument(
-    { items: [] },
-    { $schema: { items: { formats: { createdAt: 'date-time' }, properties: { createdAt: { type: 'string' }, name: { type: 'string' } }, required: ['name'] } } },
-  );
-
-  assert.deepEqual(document.components.schemas.Item.required, ['id', 'name']);
-  assert.equal(document.components.schemas.Item.properties.id.type, 'string');
-  assert.equal(document.components.schemas.Item.properties.createdAt.format, 'date-time');
-  assert.deepEqual(document.components.schemas.ItemCreate.required, ['name']);
-});
-
-test('accepts supported OpenAPI property constraints', () => {
-  const document = createDocument(
-    { items: [] },
-    {
-      $schema: {
-        items: {
-          properties: {
-            details: { additionalProperties: false, properties: { active: { type: 'boolean' } }, type: 'object' },
-            labels: { items: { minLength: 1, type: 'string' }, minItems: 1, type: 'array', uniqueItems: true },
-            rating: { maximum: 5, minimum: 1, type: 'number' },
-            title: { enum: ['One', 'Two'], maxLength: 20, minLength: 1, nullable: true, pattern: '^[A-Z]', type: 'string' },
-            value: { oneOf: [{ type: 'string' }, { type: 'number' }] },
-          },
-        },
+test('manual primary key, formats, nullable arrays, read/write fields and annotations', async () => {
+  const model = {
+    LocalUser: {
+      collection: 'localUsers',
+      fields: {
+        username: { type: 'string', primary: true },
+        password: { type: 'string', writeOnly: true, required: true },
+        tags: { type: 'string[]', nullable: true, minLength: 1 },
+        profile: { type: 'object', nullable: true },
+        'profile.name': { type: 'string', description: 'Name', example: 'Alice' },
+        rows: { type: 'object[]', nullable: true },
+        'rows.flag': { type: 'boolean' },
+        created: { type: 'string', readOnly: true, default: 'server' },
+        email: { type: 'string', format: 'email' },
+        uuid: { type: 'string', format: 'uuid' },
+        stamp: { type: 'string', format: 'date-time' },
+        level: { type: 'number', enum: [1, 2] },
+        note: { type: 'string', description: 'A note', default: 'x', example: 'y' },
       },
     },
-  );
-
-  assert.equal(document.components.schemas.Item.properties.rating.maximum, 5);
-  assert.equal(document.components.schemas.Item.properties.labels.items.minLength, 1);
-  assert.equal(document.components.schemas.Item.properties.details.additionalProperties, false);
+  };
+  const facade = await facadeFor(model);
+  const doc = await facade.openapi();
+  checkReferences(doc);
+  assert.ok(doc.paths['/localUsers/{username}']);
+  assert.equal(doc.components.schemas.LocalUser.properties.password, undefined);
+  assert.equal(doc.components.schemas.LocalUserCreate.properties.password.type, 'string');
+  assert.equal(doc.components.schemas.LocalUserCreate.properties.created, undefined);
+  assert.equal(doc.components.schemas.LocalUser.properties.created.readOnly, true);
+  assert.equal(doc.components.schemas.LocalUser.properties.tags.nullable, true);
+  assert.equal(doc.components.schemas.LocalUser.properties.tags.items.minLength, 1);
+  assert.equal(doc.components.schemas.LocalUser.properties.note.description, 'A note');
+  assert.equal(doc.components.schemas.LocalUser.properties.note.example, 'y');
+  assert.equal(doc.components.schemas.LocalUserReplace.properties.username, undefined);
+  assert.ok(doc.components.schemas.LocalUserCreate.required.includes('username'));
+  const sdl = await facade.graphql();
+  assert.match(sdl, /VALUE_0/);
+  assert.match(sdl, /LocalUser_profile/);
+  assert.deepEqual(validateSchema(buildSchema(sdl)), []);
 });
 
-test('widens numeric ID schemas because POST creates string IDs', () => {
-  const document = createDocument({ items: [{ id: 1, name: 'One' }] });
-  const idSchemas = document.components.schemas.Item.properties.id.oneOf;
-
-  assert.deepEqual(
-    idSchemas.map(({ type }) => type),
-    ['integer', 'string'],
-  );
-  assert.equal(document.components.parameters.Id.schema.type, 'string');
-});
-
-test('infers arrays, objects, primitives and nullable values independently', () => {
-  const document = createDocument({
-    items: [
-      { id: '1', value: ['one'] },
-      { id: '2', value: 'two' },
-      { id: '3', value: null },
-    ],
+test('writes YAML and SDL to nested output paths with independent API settings', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'deep-alpha-export-'));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const model = definition({ name: { type: 'string' } });
+  const openapiPath = join(directory, 'out', 'api.yaml');
+  const graphqlPath = join(directory, 'out', 'api.graphql');
+  const facade = await facadeFor(model, {
+    openapi: { path: openapiPath, info: { title: 'Example', version: 'alpha', description: 'Shared schema' } },
+    graphql: { path: graphqlPath },
+    server: { host: '::1', port: 9000, logger: false },
   });
-  const valueSchema = document.components.schemas.Item.properties.value;
-
-  assert.equal(valueSchema.oneOf.find(({ type }) => type === 'array').items.type, 'string');
-  assert.equal(
-    valueSchema.oneOf.some(({ type }) => type === 'string'),
-    true,
-  );
-  assert.equal(valueSchema.nullable, undefined);
-  assert.deepEqual(
-    valueSchema.oneOf.find(({ nullable }) => nullable),
-    { enum: [null], nullable: true, type: 'string' },
-  );
-
-  const nullSchema = createDocument({ items: [{ id: '1', value: null }] }).components.schemas.Item.properties.value;
-
-  assert.deepEqual(nullSchema.enum, [null]);
-  assert.equal(nullSchema.nullable, true);
-  assert.equal(nullSchema.type, 'string');
+  await facade.openapi();
+  await facade.graphql();
+  const doc = parse(await readFile(openapiPath, 'utf8'));
+  assert.equal(doc.info.title, 'Example');
+  assert.equal(doc.servers[0].url, 'http://[::1]:9000');
+  assert.match(await readFile(graphqlPath, 'utf8'), /itemList/);
+  for (const bad of [{ host: '' }, { port: 0 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
+  model.Item.api = ['openapi'];
+  const only = await facadeFor(model);
+  assert.ok((await only.openapi()).paths['/items']);
+  await assert.rejects(() => only.graphql(), /No models/);
+  model.Item.api = [];
+  const internal = await facadeFor(model);
+  assert.deepEqual((await internal.openapi()).paths, {});
+  const server = internal.fastify();
+  assert.equal((await server.inject('/items')).statusCode, 200);
+  await server.close();
 });
 
-test('normalizes overlapping numeric schemas', () => {
-  const document = createDocument({
-    items: [
-      { id: '1', value: 1 },
-      { id: '2', value: 1.5 },
-    ],
+test('rejects disabled API targets, operation/type collisions, and sort enum collisions', async () => {
+  const models = { A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B' } } }, B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true } } } };
+  let facade = await facadeFor(models);
+  await assert.rejects(() => facade.openapi(), /does not enable/);
+  await assert.rejects(() => facade.graphql(), /does not enable/);
+  for (const name of ['Error', 'Pager', 'ItemPage', 'ItemCreate']) {
+    const model = definition({});
+    model[name] = { collection: `other${name}`, fields: { id: { type: 'string', primary: true } } };
+    facade = await facadeFor(model);
+    await assert.rejects(() => facade.openapi(), /collision/);
+  }
+  facade = await facadeFor({ ...definition({}), Query: { collection: 'queries', fields: { id: { type: 'string', primary: true } } } });
+  await assert.rejects(() => facade.graphql(), /collision/);
+  facade = await facadeFor({ ...definition({}), ItemList: { collection: 'lists', fields: { id: { type: 'string', primary: true } } } });
+  await assert.rejects(() => facade.graphql(), /collision/);
+  await assert.rejects(() => facade.openapi(), /collision/);
+  facade = await facadeFor(definition({ a_b: { type: 'string' }, a: { type: 'object' }, 'a.b': { type: 'string' } }));
+  await assert.rejects(() => facade.graphql(), /collision/);
+  for (const key of ['and', 'or', 'not']) {
+    facade = await facadeFor(definition({ [key]: { type: 'string' } }));
+    await assert.rejects(() => facade.graphql(), /Reserved/);
+    await assert.rejects(() => facade.openapi(), /Reserved/);
+  }
+});
+
+test('schema validation rejects malformed declarations and removed syntax', async () => {
+  for (const input of [null, [], {}, { $schema: {} }, { $info: {} }]) await assert.rejects(() => loadModel(input));
+  const invalidFields = [
+    { type: 'integer' },
+    { type: 'string[][]' },
+    { type: 'string', items: {} },
+    { type: 'string', required: 'yes' },
+    { type: 'string', nullable: 'yes' },
+    { type: 'string', description: 1 },
+    { type: 'string', example: 1 },
+    { type: 'string', default: 1 },
+    { type: 'string', minLength: '1' },
+    { type: 'string', maxLength: -1 },
+    { type: 'string', minLength: 2, maxLength: 1 },
+    { type: 'number', minimum: 2, maximum: 1 },
+    { type: 'number', minimum: Infinity },
+    { type: 'string', readOnly: true, writeOnly: true },
+    { type: 'string', enum: [] },
+    { type: 'string', generated: 'random' },
+    { type: 'string', generated: 'uuid', default: 'x' },
+    { type: 'number', generated: 'uuid' },
+    { type: 'string', primary: true, nullable: true },
+    { type: 'string', primary: true, writeOnly: true },
+    { type: 'string', primary: true, required: false },
+    { type: 'string', onDelete: 'remove' },
+    { type: 'string', source: 'id' },
+    { type: 'string', format: 'unknown' },
+    { type: 'number', format: 'email' },
+    { type: 'string', minimum: 0 },
+    { type: 'string', pattern: '[' },
+    { type: 'string', minItems: 1 },
+    { type: 'string', multipleOf: 1 },
+    { type: 'string', pattern: 1 },
+  ];
+  for (const field of invalidFields) await assert.rejects(() => loadModel(definition({ value: field })), undefined, JSON.stringify(field));
+  for (const model of [
+    { Bad: { collection: 'bad', fields: {} } },
+    { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true }, other: { type: 'number', primary: true } } } },
+    { Bad: { collection: 'bad', fields: { 'nested.id': { type: 'string', primary: true } } } },
+    { Bad: { collection: 'bad', api: ['bad'], fields: {} } },
+    { Bad: { collection: 'bad', api: ['graphql', 'graphql'], fields: {} } },
+    { Bad: { collection: 'bad', fields: [] } },
+    { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true } }, extra: 1 } },
+    { Bad: { collection: '../bad', fields: {} } },
+    { string: { collection: 'bad', fields: {} } },
+  ])
+    await assert.rejects(() => loadModel(model));
+  await assert.rejects(() => loadModel({ ...definition({}), Other: { collection: 'items', fields: { id: { type: 'string', primary: true } } } }), /Duplicate/);
+  await assert.rejects(() => loadModel(definition({ 'bad..path': { type: 'string' } })), /path/);
+  await assert.rejects(() => loadModel(definition({ a: { type: 'string' }, 'a.b': { type: 'string' } })), /contain/);
+  await assert.rejects(() => loadModel(definition({ 'nested.value': { type: 'string', generated: 'uuid' } })), /root/);
+});
+
+test('validates explicit keys, implicit fields, primary defaults and nullable references', async () => {
+  const model = {
+    A: { collection: 'a', fields: { code: { type: 'number', primary: true }, b: { type: 'B', source: 'bCode', nullable: true } } },
+    B: { collection: 'b', fields: { code: { type: 'number', primary: true } } },
+  };
+  const compiled = await loadModel(model);
+  assert.equal(compiled.byName.get('A').fields.bCode.type, 'number');
+  assert.equal(compiled.byName.get('A').fields.bCode.nullable, true);
+  await createServer({ database: { data: { a: [{ code: 1, bCode: null }], b: [] }, schema: model }, server: { logger: false } });
+  const both = structuredClone(model);
+  delete both.A.fields.b.source;
+  const loaded = await loadModel(both);
+  assert.equal(loaded.byName.get('A').fields.b.source, 'code');
+  assert.equal(loaded.byName.get('A').fields.b.target, 'code');
+  model.A.fields.b.target = 'unknown';
+  await assert.rejects(() => loadModel(model), /ambiguous/);
+  model.A.fields.b.target = 'code';
+  model.A.fields.bCode = { type: 'string' };
+  await assert.rejects(() => loadModel(model), /Incompatible/);
+  delete model.A.fields.bCode;
+  model.A.fields.b.default = {};
+  await assert.rejects(() => loadModel(model), /relation options/);
+});
+
+test('initial database validates unknown fields, dangling references and required relations', async () => {
+  const model = definition({ name: { type: 'string', required: true } });
+  for (const data of [{ items: [{ id: '1' }] }, { items: [{ id: '1', name: 1 }] }, { items: [{ id: '1', name: 'x', extra: 1 }] }, { other: [] }])
+    await assert.rejects(() => createServer({ database: { data, schema: model } }));
+  const links = { ...definition({ link: { type: 'Other', source: 'otherId', required: true } }), Other: { collection: 'other', fields: { id: { type: 'string', primary: true } } } };
+  for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => createServer({ database: { data: { items: [row], other: [] }, schema: links } }));
+  const singular = {
+    ...definition({ link: { type: 'Other', source: 'code', target: 'code' }, code: { type: 'string' } }),
+    Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' } } },
+  };
+  await assert.rejects(
+    () =>
+      createServer({
+        database: {
+          schema: singular,
+          data: {
+            items: [{ id: '1', code: 'x' }],
+            other: [
+              { id: 'a', code: 'x' },
+              { id: 'b', code: 'x' },
+            ],
+          },
+        },
+      }),
+    /Multiple targets/,
+  );
+});
+
+test('OpenAPI 3.0 nullable references and enum constraints accept actual null responses', async () => {
+  const { Ajv } = await import('ajv');
+  const model = definition({
+    state: { type: 'string', nullable: true, enum: ['on', 'off'] },
+    parent: { type: 'Item', source: 'parentId' },
+    profile: { type: 'object', nullable: true },
+    'profile.name': { type: 'string' },
   });
-
-  assert.deepEqual(document.components.schemas.Item.properties.value, { type: 'number' });
-});
-
-test('validates database contents and schema configuration', () => {
-  assert.throws(() => createDocument({ $schema: [] }), /имя ресурса/);
-  assert.throws(() => createDocument({ items: [null] }), /JSON-объект/);
-  assert.throws(() => createDocument({ items: [{ name: 'Missing ID' }] }), /id/);
-  assert.throws(() => createDocument({ items: [{ id: 1 }, { id: '1' }] }), /повторяющийся id/);
-  assert.throws(() => createDocument({ 'bad/name': [] }), /имя ресурса/);
-  assert.throws(() => createDocument({ items: [] }, { $info: {} }), /title и version/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: [] }), /\$schema/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { missing: {} } }), /неизвестный ресурс/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: ' ' } } }), /name/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { name: 'Bad/Name' } } }), /шаблону/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: [] } } }), /properties/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { require: ['name'] } } }), /require/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { properties: { value: { type: 'invalid' } } } } }), /поддерживаемый тип/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { minimum: 'bad' } } } } }), /minimum/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { unknown: true } } } } }), /Неизвестный ключ/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 1 }] }, { $schema: { items: { properties: { value: { minimum: 1, type: 'string' } } } } }), /несовместим/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { minLength: -1 } } } } }), /minLength/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { nullable: 'true' } } } } }), /nullable/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { enum: [] } } } } }), /enum/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { oneOf: [] } } } } }), /oneOf/);
-  assert.throws(() => createDocument({ items: [{ id: '1', value: 'one' }] }, { $schema: { items: { properties: { value: { items: 'invalid' } } } } }), /JSON-объект/);
-  assert.throws(() => createDocument({ items: [] }, { unknown: true }), /schema\.unknown/);
-  assert.throws(() => createDocument({ items: [] }, { $schema: { items: { required: ['missing'] } } }), /отсутствует/);
-  assert.throws(() => createDocument({ items: [{ id: '1', total: 1 }] }, { $schema: { items: { formats: { total: 'date' } } } }), /строковому полю/);
-  assert.throws(() => buildOpenapiDocument({ database: { items: [] }, files: 'true' }), /Ключ files/);
-});
-
-test('rejects colliding component names and operation IDs', () => {
-  assert.throws(() => createDocument({ people: [], persons: [] }), /имя OpenAPI-схемы/i);
-  assert.throws(() => createDocument({ 'blog-posts': [], blog_posts: [] }, { $schema: { 'blog-posts': { name: 'BlogPostDash' }, blog_posts: { name: 'BlogPostUnderscore' } } }), /operationId/);
-  assert.throws(() => createDocument({ files: [] }, { $schema: { files: { name: 'FileMetadata' } } }, { files: true }), /имя OpenAPI-схемы/i);
-  assert.throws(() => createDocument({ 'file-content': [] }, undefined, { files: true }), /operationId.*getFileContent/);
-
-  const document = createDocument({ files: [] }, { $schema: { files: { name: 'StoredFile' } } }, { files: true });
-
-  assert.equal(document.tags.filter(({ name }) => name === 'files').length, 1);
-});
-
-test('keeps runtime server address outside an in-memory document', () => {
-  const document = createDocument({ items: [{ id: '1' }] }, undefined, { server: { maxPageSize: 25 } });
-
-  assert.equal(document.servers, undefined);
-  assert.equal(document.components.parameters.PerPage.schema.maximum, 25);
+  const facade = await facadeFor(model);
+  const document = await facade.openapi();
+  const validator = new Ajv({ strict: false });
+  validator.addSchema({ $id: 'contract', components: document.components });
+  const validate = validator.compile({ $ref: 'contract#/components/schemas/Item' });
+  assert.equal(validate({ id: '1', state: null, parent: null, profile: null }), true, JSON.stringify(validate.errors));
+  assert.equal(validate({ id: '1', state: 'invalid', parent: null, profile: null }), false);
+  assert.equal(document.components.schemas.ItemCreate.properties.state.nullable, true);
 });

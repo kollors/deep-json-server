@@ -1,202 +1,61 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyListenOptions } from 'fastify';
+import { type GraphQLSchema, printSchema } from 'graphql';
+import mercurius from 'mercurius';
 import { type DeepJsonServerConfig, normalizeServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_PAGE_SIZE, DEFAULT_PORT } from './constants.js';
-import type { DatabaseContainer, DatabaseStore } from './database.js';
-import { createDatabaseStore, createId, findItemIndex, getCollection } from './database.js';
+import { createDatabaseStore } from './database.js';
+import { Engine, makeContext } from './engine.js';
 import { FILE_HEADERS } from './files/contract.js';
 import { createFileStore, registerFileRoutes } from './files/index.js';
-import { resolveSchemaConfig } from './openapi/config.js';
+import { buildGraphql } from './graphql.js';
+import { assertApi, inferModel, loadModel } from './model.js';
 import { buildOpenapiDocument } from './openapi/document.js';
 import { createOpenapi, writeOpenapi } from './openapi/index.js';
-import { withoutDefaults } from './openapi/traversal.js';
-import { matchesWhere, paginateItems, parsePagination, parseWhere, sortItems, validateWhere } from './query/index.js';
-import { createEmbedTree, createRelationContext, embedItem, parseEmbedPaths, validateEmbedPaths } from './relations.js';
-import type { DatabaseId, DatabaseRecord, JsonObject, OpenapiDocument, Query } from './types.js';
-import { createHttpError, getResourceNames, isObject } from './utils.js';
-
+import { parseRestOptions } from './query/options.js';
+import type { OpenapiDocument } from './types.js';
+import { createHttpError, isObject } from './utils.js';
 export interface ServerFacade {
   fastify(): FastifyInstance;
   openapi(): Promise<OpenapiDocument>;
+  graphql(): Promise<string>;
 }
-
-interface ServerFeatures {
+export interface ServerFeatures {
   files?: boolean;
+  graphql?: boolean;
 }
-
-interface ItemParams {
-  id: string;
-}
-
 type ListenCallback = (error: Error | null, address: string) => void;
-
-interface RequestSchemaOperation {
-  requestBody: {
-    content: {
-      'application/json': {
-        schema: { $ref: string };
-      };
-    };
-  };
-}
-
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', '),
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
   'Access-Control-Allow-Origin': '*',
 };
-
-const getSchemaName = (reference: string): string => reference.split('/').at(-1) as string;
-
-const getRequestSchemaNames = (document: OpenapiDocument, resource: string): { createSchemaName: string; updateSchemaName: string } => {
-  const createOperation = document.paths[`/${resource}`].post as RequestSchemaOperation;
-  const updateOperation = document.paths[`/${resource}/{id}`].patch as RequestSchemaOperation;
-
-  return {
-    createSchemaName: getSchemaName(createOperation.requestBody.content['application/json'].schema.$ref),
-    updateSchemaName: getSchemaName(updateOperation.requestBody.content['application/json'].schema.$ref),
-  };
-};
-
-const addRequestSchemas = (fastify: FastifyInstance, document: OpenapiDocument, resources: string[]): void => {
-  for (const resource of resources) {
-    const { createSchemaName, updateSchemaName } = getRequestSchemaNames(document, resource);
-
-    fastify.addSchema({ $id: createSchemaName, ...structuredClone(document.components.schemas[createSchemaName]) });
-    fastify.addSchema({ $id: updateSchemaName, ...withoutDefaults(structuredClone(document.components.schemas[updateSchemaName])) });
-  }
-};
-
-const getCollectionItem = (database: DatabaseContainer, resource: string, id: DatabaseId): { collection: DatabaseRecord[]; index: number; item: DatabaseRecord } => {
-  const collection = getCollection(database, resource);
-  const index = findItemIndex(collection, id);
-
-  if (index === -1) {
-    throw createHttpError(404, 'Запись не найдена');
-  }
-
-  return { collection, index, item: collection[index] };
-};
-
-const registerResourceRoutes = (fastify: FastifyInstance, store: DatabaseStore, resource: string, document: OpenapiDocument, maxPageSize: number): void => {
-  const resourcePath = `/${resource}`;
-  const itemPath = `/${resource}/:id`;
-  const { createSchemaName, updateSchemaName } = getRequestSchemaNames(document, resource);
-  const updateItem = (id: DatabaseId, update: (item: DatabaseRecord) => JsonObject): Promise<DatabaseRecord> =>
-    store.update((database) => {
-      const { collection, index, item: currentItem } = getCollectionItem(database, resource, id);
-      const item = { ...update(currentItem), id: currentItem.id } as DatabaseRecord;
-
-      collection[index] = item;
-
-      return item;
-    });
-
-  fastify.get(resourcePath, async (request) => {
-    await store.read();
-
-    const collection = getCollection(store.database, resource);
-    const query = request.query as Query;
-    const where = parseWhere(query);
-    const embedPaths = parseEmbedPaths(query._embed);
-    const pagination = parsePagination(query, maxPageSize);
-
-    validateEmbedPaths(store.database, resource, collection, embedPaths);
-
-    const relationContext = createRelationContext(store.database);
-    const embedTree = createEmbedTree(embedPaths);
-    const embeddedItems = collection.map((item) => embedItem(store.database, item, resource, embedTree, relationContext));
-
-    validateWhere(where, embeddedItems);
-
-    const filteredItems = embeddedItems.filter((item) => matchesWhere(item, where));
-    const sortedItems = sortItems(filteredItems, query._sort, embeddedItems);
-
-    return paginateItems(sortedItems, pagination.page, pagination.pageSize);
-  });
-
-  fastify.get(itemPath, async (request) => {
-    await store.read();
-
-    const params = request.params as ItemParams;
-    const query = request.query as Query;
-    const { collection, item } = getCollectionItem(store.database, resource, params.id);
-    const embedPaths = parseEmbedPaths(query._embed);
-
-    validateEmbedPaths(store.database, resource, collection, embedPaths);
-
-    return embedItem(store.database, item, resource, createEmbedTree(embedPaths));
-  });
-
-  fastify.post(resourcePath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request, reply) => {
-    const item = await store.update((database) => {
-      const collection = getCollection(database, resource);
-      const createdItem = { ...(request.body as JsonObject), id: createId(collection) } as DatabaseRecord;
-
-      collection.push(createdItem);
-
-      return createdItem;
-    });
-
-    return reply.code(201).send(item);
-  });
-
-  fastify.put(itemPath, { schema: { body: { $ref: `${createSchemaName}#` } } }, async (request) => updateItem((request.params as ItemParams).id, () => request.body as JsonObject));
-
-  fastify.patch(itemPath, { schema: { body: { $ref: `${updateSchemaName}#` } } }, async (request) =>
-    updateItem((request.params as ItemParams).id, (item) => ({ ...item, ...(request.body as JsonObject) })),
-  );
-
-  fastify.delete(itemPath, async (request) =>
-    store.update((database) => {
-      const { collection, index, item } = getCollectionItem(database, resource, (request.params as ItemParams).id);
-
-      collection.splice(index, 1);
-
-      return item;
-    }),
-  );
-};
-
-/** Creates lazy Fastify and OpenAPI accessors from one configuration. */
+/** Creates REST, GraphQL and independent schema exporters from a shared model. */
 export async function createServer(config: DeepJsonServerConfig, features: ServerFeatures = {}): Promise<ServerFacade> {
-  if (!isObject(features) || Object.keys(features).some((key) => key !== 'files') || (features.files != null && typeof features.files !== 'boolean')) {
-    throw new Error('Параметр features должен содержать только необязательный boolean-ключ files');
-  }
-
+  if (!isObject(features) || Object.entries(features).some(([key, value]) => !['files', 'graphql'].includes(key) || typeof value !== 'boolean'))
+    throw new Error('features supports boolean files and graphql keys');
   const normalizedConfig = normalizeServerConfig(config);
-  const filesEnabled = features.files ?? normalizedConfig.files != null;
+  const explicitModel = await loadModel(normalizedConfig.database.schema);
+  const keys = explicitModel ? new Map(explicitModel.entities.map((e) => [e.collection, e.primary])) : undefined;
+  const store = await createDatabaseStore(normalizedConfig.database, keys);
+  const model = explicitModel ?? inferModel(store.database.data);
   const { cors = true, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = DEFAULT_MAX_PAGE_SIZE } = normalizedConfig.server;
-  const store = await createDatabaseStore(normalizedConfig.database);
-  const schema = await resolveSchemaConfig(normalizedConfig.database.schema);
+  const pageSize = normalizedConfig.server.pageSize ?? Math.min(10, maxPageSize);
+  const engine = new Engine(store, model, pageSize, maxPageSize);
+  engine.validateData(store.database.data);
+  const filesEnabled = features.files === undefined ? normalizedConfig.files != null : features.files === true;
+  const graphqlEnabled = features.graphql ?? normalizedConfig.graphql.enabled ?? false;
+  if (filesEnabled && !normalizedConfig.files) throw new Error('Для файловых маршрутов укажите секцию config.files');
   let fileStorePromise: ReturnType<typeof createFileStore> | undefined;
-  let fastifyInstance: FastifyInstance | undefined;
-  let cachedDocument: OpenapiDocument | undefined;
-
-  if (filesEnabled && normalizedConfig.files == null) {
-    throw new Error('Для файловых маршрутов укажите секцию config.files');
-  }
-
   const getFileStore = () => (fileStorePromise ??= createFileStore(normalizedConfig.files as NonNullable<typeof normalizedConfig.files>));
-
-  if (filesEnabled && normalizedConfig.files?.data != null) {
-    await getFileStore();
-  }
-
-  const buildDocument = () =>
-    (cachedDocument ??= buildOpenapiDocument({
-      database: store.database.data,
-      files: filesEnabled,
-      maxPageSize,
-      schema,
-    }));
-
+  if (filesEnabled && normalizedConfig.files?.data) await getFileStore();
+  let fastifyInstance: FastifyInstance | undefined;
+  let graphqlSchema: GraphQLSchema | undefined;
+  const getGraphql = () => (graphqlSchema ??= buildGraphql(model, engine));
+  if (graphqlEnabled) getGraphql();
   const getFastify = (): FastifyInstance => {
-    if (fastifyInstance != null) {
-      return fastifyInstance;
-    }
-
-    const document = buildDocument();
-    const resources = getResourceNames(store.database.data);
+    if (fastifyInstance) return fastifyInstance;
     const fastify = Fastify({ ajv: { customOptions: { coerceTypes: false, removeAdditional: false } }, logger });
     const originalListen = fastify.listen.bind(fastify);
 
@@ -220,57 +79,94 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
 
     fastify.listen = listenWithDefaults as FastifyInstance['listen'];
 
-    addRequestSchemas(fastify, document, resources);
-
     if (cors) {
       fastify.addHook('onRequest', async (_request, reply) => {
-        Object.entries(CORS_HEADERS).forEach(([header, value]) => {
-          reply.header(header, value);
-        });
+        for (const [header, value] of Object.entries(CORS_HEADERS)) reply.header(header, value);
       });
-
       fastify.options('/', async (_request, reply) => reply.code(204).send());
       fastify.options('/*', async (_request, reply) => reply.code(204).send());
     }
+    const resources = model.entities.map((e) => e.collection);
     fastify.get('/', async () => ({ resources }));
-
-    resources.forEach((resource) => {
-      registerResourceRoutes(fastify, store, resource, document, maxPageSize);
-    });
-
-    if (filesEnabled) {
-      registerFileRoutes(fastify, { getStore: getFileStore, maxFileSize });
-    }
-
-    fastify.setErrorHandler((error, request, reply) => {
-      const candidateStatusCode = typeof error === 'object' && error != null && 'statusCode' in error ? error.statusCode : undefined;
-      const statusCode = typeof candidateStatusCode === 'number' && Number.isInteger(candidateStatusCode) && candidateStatusCode >= 400 && candidateStatusCode <= 599 ? candidateStatusCode : 500;
-
-      if (statusCode === 500) {
-        request.log.error(error);
+    for (const initialEntity of model.entities) {
+      const collection = initialEntity.collection;
+      const path = `/${collection}`;
+      const itemPath = `${path}/:${initialEntity.primary}`;
+      if (graphqlEnabled && path === (normalizedConfig.graphql.endpoint ?? '/graphql')) throw new Error('GraphQL endpoint conflicts with collection');
+      fastify.get(path, async (request) => {
+        const context = await engine.context();
+        const entity = engine.entity(collection);
+        const options = parseRestOptions(request.query, true);
+        engine.validateRest(entity, options);
+        const page = engine.list(engine.records(context, entity), entity.root, options);
+        return { data: page.data.map((ref) => engine.project(ref, options.scope, options.nested)), total: page.total };
+      });
+      fastify.get(itemPath, async (request) => {
+        const context = await engine.context();
+        const entity = engine.entity(collection);
+        const options = parseRestOptions(request.query, false);
+        engine.validateRest(entity, options);
+        const ref = engine.find(context, entity, (request.params as Record<string, string>)[entity.primary]);
+        if (!ref) throw createHttpError(404, 'Record not found');
+        return engine.project(ref, options.scope, options.nested);
+      });
+      for (const [method, mode] of [
+        ['POST', 'create'],
+        ['PUT', 'replace'],
+        ['PATCH', 'update'],
+        ['DELETE', 'delete'],
+      ] as const) {
+        fastify.route({
+          method,
+          url: mode === 'create' ? path : itemPath,
+          handler: async (request, reply) => {
+            const entity = engine.entity(collection);
+            const options = parseRestOptions(request.query, false);
+            engine.validateRest(entity, options);
+            const ref = await engine.mutate(entity, mode, (request.params as Record<string, string>)[entity.primary], request.body);
+            // Re-infer schemaless response fields after successful writes.
+            if (!model.explicit) {
+              const refreshed = inferModel(ref.context.data);
+              ref.context = makeContext(ref.context.data, refreshed);
+              ref.entity = refreshed.byCollection.get(collection) as typeof entity;
+              ref.node = ref.entity.root;
+            }
+            return reply.code(mode === 'create' ? 201 : 200).send(engine.project(ref, options.scope, options.nested));
+          },
+        });
       }
-
-      return reply.code(statusCode).send({ error: statusCode === 500 ? 'Внутренняя ошибка сервера' : error instanceof Error ? error.message : String(error) });
-    });
-
-    fastifyInstance = fastify;
-
-    return fastifyInstance;
-  };
-
-  const openapi = async () => {
-    const document = createOpenapi({
-      document: buildDocument(),
-      host: normalizedConfig.server.host,
-      port: normalizedConfig.server.port,
-    });
-
-    if (normalizedConfig.openapi.path != null) {
-      await writeOpenapi(document, normalizedConfig.openapi.path);
     }
-
-    return document;
+    if (graphqlEnabled)
+      fastify.register(mercurius, { schema: getGraphql(), path: normalizedConfig.graphql.endpoint ?? '/graphql', queryDepth: 32, context: async () => ({ snapshot: await engine.context() }) });
+    if (filesEnabled) registerFileRoutes(fastify, { getStore: getFileStore, maxFileSize });
+    fastify.setErrorHandler((error, request, reply) => {
+      const candidate = isObject(error) ? error.statusCode : undefined;
+      const status = typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599 ? candidate : 500;
+      if (status === 500) request.log.error(error);
+      return reply.code(status).send({ error: status === 500 ? 'Внутренняя ошибка сервера' : error instanceof Error ? error.message : String(error) });
+    });
+    fastifyInstance = fastify;
+    return fastify;
   };
-
-  return { fastify: getFastify, openapi };
+  return {
+    fastify: getFastify,
+    openapi: async () => {
+      assertApi(explicitModel, 'openapi');
+      const document = createOpenapi({
+        document: buildOpenapiDocument({ model: explicitModel, files: filesEnabled, pageSize, maxPageSize, info: normalizedConfig.openapi.info }),
+        host: normalizedConfig.server.host,
+        port: normalizedConfig.server.port,
+      });
+      if (normalizedConfig.openapi.path) await writeOpenapi(document, normalizedConfig.openapi.path);
+      return document;
+    },
+    graphql: async () => {
+      const sdl = printSchema(getGraphql());
+      if (normalizedConfig.graphql.path) {
+        await mkdir(dirname(normalizedConfig.graphql.path), { recursive: true });
+        await writeFile(normalizedConfig.graphql.path, `${sdl}\n`, 'utf8');
+      }
+      return sdl;
+    },
+  };
 }

@@ -278,7 +278,7 @@ test('does not initialize disk file storage when only OpenAPI is generated', asy
   const filesPath = join(rootPath, 'files');
   const facade = await createServer(
     {
-      database: { data: { items: [] } },
+      database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } },
       files: { directory: filesPath, metadata: join(rootPath, 'metadata.json') },
     },
     { files: true },

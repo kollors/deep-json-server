@@ -1,0 +1,151 @@
+{
+  "Country": {
+    "collection": "countries",
+    "api": ["openapi", "graphql"],
+    "fields": {
+      "id": {
+        "type": "string",
+        "primary": true,
+        "generated": "uuid"
+      },
+      "isArchived": {
+        "type": "boolean"
+      },
+      "name": {
+        "type": "string"
+      },
+      "users": {
+        "type": "User[]",
+        "target": "countryId"
+      }
+    }
+  },
+  "Genre": {
+    "collection": "genres",
+    "api": ["openapi", "graphql"],
+    "fields": {
+      "id": {
+        "type": "string",
+        "primary": true,
+        "generated": "uuid"
+      },
+      "isArchived": {
+        "type": "boolean"
+      },
+      "name": {
+        "type": "string"
+      },
+      "parents": {
+        "type": "Genre[]",
+        "source": "parentIds"
+      },
+      "children": {
+        "type": "Genre[]",
+        "target": "parentIds"
+      }
+    }
+  },
+  "Movie": {
+    "collection": "movies",
+    "api": ["openapi", "graphql"],
+    "fields": {
+      "id": {
+        "type": "string",
+        "primary": true,
+        "generated": "uuid"
+      },
+      "coverSrc": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": {
+        "type": "string"
+      },
+      "isArchived": {
+        "type": "boolean"
+      },
+      "title": {
+        "type": "string",
+        "required": true
+      },
+      "publishers": {
+        "type": "Publisher[]",
+        "source": "publisherIds",
+        "required": true
+      },
+      "actors": {
+        "type": "object[]",
+        "required": true
+      },
+      "actors.id": {
+        "type": "string"
+      },
+      "actors.user": {
+        "type": "User",
+        "source": "actors.userId",
+        "required": true
+      },
+      "actors.genres": {
+        "type": "Genre[]",
+        "source": "actors.genreIds",
+        "required": true
+      }
+    }
+  },
+  "Publisher": {
+    "collection": "publishers",
+    "api": ["openapi", "graphql"],
+    "fields": {
+      "id": {
+        "type": "string",
+        "primary": true,
+        "generated": "uuid"
+      },
+      "isArchived": {
+        "type": "boolean"
+      },
+      "name": {
+        "type": "string"
+      },
+      "movies": {
+        "type": "Movie[]",
+        "target": "publisherIds"
+      }
+    }
+  },
+  "User": {
+    "collection": "users",
+    "api": ["openapi", "graphql"],
+    "fields": {
+      "id": {
+        "type": "string",
+        "primary": true,
+        "generated": "uuid"
+      },
+      "bornAt": {
+        "type": "string",
+        "format": "date",
+        "required": true
+      },
+      "fullName": {
+        "type": "string",
+        "required": true
+      },
+      "isArchived": {
+        "type": "boolean"
+      },
+      "avatarSrc": {
+        "type": "string",
+        "format": "uri"
+      },
+      "country": {
+        "type": "Country",
+        "source": "countryId"
+      },
+      "movies": {
+        "type": "Movie[]",
+        "target": "actors.userId"
+      }
+    }
+  }
+}

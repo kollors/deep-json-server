@@ -3,7 +3,7 @@ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
 export type DatabaseId = number | string;
-export type DatabaseRecord = JsonObject & { id: DatabaseId };
+export type DatabaseRecord = JsonObject;
 export type DatabaseData = Record<string, DatabaseRecord[]>;
 
 export type OpenapiType = 'array' | 'boolean' | 'integer' | 'number' | 'object' | 'string';

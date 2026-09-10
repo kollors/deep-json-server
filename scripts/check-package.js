@@ -25,7 +25,20 @@ try {
     [
       '--input-type=module',
       '--eval',
-      "import { createServer } from '@kollors/deep-json-server'; const server = await createServer({ database: { data: { items: [{ id: '1' }] } } }); await server.fastify().close();",
+      `import assert from 'node:assert/strict';
+      import { createServer } from '@kollors/deep-json-server';
+      const facade = await createServer({
+        database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } },
+        graphql: { enabled: true }, server: { logger: false },
+      });
+      assert.match(await facade.graphql(), /itemCreate/);
+      assert.equal((await facade.openapi()).openapi, '3.0.3');
+      const server = facade.fastify();
+      const created = await server.inject({ method: 'POST', url: '/items', payload: { name: 'packed' } });
+      assert.equal(created.statusCode, 201, created.body);
+      const queried = await server.inject({ method: 'POST', url: '/graphql', payload: { query: '{ itemList { total data { name } } }' } });
+      assert.equal(queried.json().data.itemList.data[0].name, 'packed');
+      await server.close();`,
     ],
     {
       cwd: temporaryDirectory,

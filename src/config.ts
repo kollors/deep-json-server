@@ -1,17 +1,19 @@
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyServerOptions } from 'fastify';
-import type { DatabaseData, JsonObject } from './types.js';
+import type { ModelSchema } from './model.js';
+import type { DatabaseData } from './types.js';
 import { assertKnownKeys, isObject } from './utils.js';
 
-const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'server']);
+const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server']);
 const DATABASE_KEYS = new Set(['data', 'path', 'schema']);
 const FILES_KEYS = new Set(['data', 'directory', 'metadata']);
-const OPENAPI_KEYS = new Set(['path']);
-const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'port']);
+const OPENAPI_KEYS = new Set(['path', 'info']);
+const GRAPHQL_KEYS = new Set(['path', 'enabled', 'endpoint']);
+const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
 let configImportIndex = 0;
 
-export type DatabaseSchema = JsonObject;
+export type DatabaseSchema = ModelSchema;
 export type DatabaseConfig = { data: DatabaseData; path?: never; schema?: DatabaseSchema | string } | { data?: never; path: string; schema?: DatabaseSchema | string };
 export interface MemoryFile {
   content: Uint8Array;
@@ -22,6 +24,12 @@ export interface MemoryFile {
 export type FilesConfig = { data: MemoryFile[]; directory?: never; metadata?: never } | { data?: never; directory: string; metadata: string };
 export interface OpenapiConfig {
   path?: string;
+  info?: { title: string; version: string; description?: string };
+}
+export interface GraphqlConfig {
+  path?: string;
+  enabled?: boolean;
+  endpoint?: string;
 }
 export interface ServerConfig {
   cors?: boolean;
@@ -29,18 +37,21 @@ export interface ServerConfig {
   logger?: FastifyServerOptions['logger'];
   maxFileSize?: number;
   maxPageSize?: number;
+  pageSize?: number;
   port?: number;
 }
 export interface DeepJsonServerConfig {
   database: DatabaseConfig;
   files?: FilesConfig;
   openapi?: OpenapiConfig;
+  graphql?: GraphqlConfig;
   server?: ServerConfig;
 }
 export interface NormalizedServerConfig {
   database: DatabaseConfig;
   files?: FilesConfig;
   openapi: OpenapiConfig;
+  graphql: GraphqlConfig;
   server: ServerConfig;
 }
 
@@ -159,9 +170,16 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   const database = normalizeDatabase(config.database, directoryPath);
   const files = normalizeFiles(config.files, directoryPath);
   const openapi = getObject(config.openapi, 'config.openapi') ?? {};
+  const graphql = getObject(config.graphql, 'config.graphql') ?? {};
   const server = getObject(config.server, 'config.server') ?? {};
 
   assertKnownKeys(openapi, OPENAPI_KEYS, 'config.openapi');
+  assertKnownKeys(graphql, GRAPHQL_KEYS, 'config.graphql');
+  if (graphql.enabled !== undefined && typeof graphql.enabled !== 'boolean') throw new Error('config.graphql.enabled must be boolean');
+  const endpoint = getString(graphql.endpoint, 'config.graphql.endpoint');
+  if (endpoint && (!/^\/[A-Za-z][A-Za-z0-9_/-]*$/.test(endpoint) || endpoint === '/')) throw new Error('Invalid GraphQL endpoint');
+  const info = getObject(openapi.info, 'config.openapi.info');
+  if (info && (typeof info.title !== 'string' || typeof info.version !== 'string')) throw new Error('OpenAPI info requires title and version');
   assertKnownKeys(server, SERVER_KEYS, 'config.server');
 
   const openapiPath = getString(openapi.path, 'config.openapi.path');
@@ -170,6 +188,8 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   const logger = server.logger;
   const maxFileSize = getPositiveInteger(server.maxFileSize, 'config.server.maxFileSize');
   const maxPageSize = getPositiveInteger(server.maxPageSize, 'config.server.maxPageSize');
+  const pageSize = getPositiveInteger(server.pageSize, 'config.server.pageSize');
+  if (pageSize !== undefined && pageSize > (maxPageSize ?? 100)) throw new Error('pageSize exceeds maxPageSize');
   const port = server.port;
 
   if (port != null && (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65_535)) {
@@ -187,13 +207,15 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   return {
     database,
     files,
-    openapi: { path: resolveConfigPath(openapiPath, directoryPath) },
+    openapi: { path: resolveConfigPath(openapiPath, directoryPath), ...(info && { info: info as OpenapiConfig['info'] }) },
+    graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphql.enabled as boolean | undefined, endpoint },
     server: {
       cors: cors as boolean | undefined,
       host,
       logger: logger as ServerConfig['logger'],
       maxFileSize,
       maxPageSize,
+      pageSize,
       port: port as number | undefined,
     },
   };

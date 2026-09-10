@@ -22,7 +22,7 @@ const createFixture = async () => {
   };
 
   await writeFile(databasePath, JSON.stringify({ items: [{ id: '1', name: 'One' }] }));
-  await writeFile(schemaPath, JSON.stringify({ $info: { title: 'Test API', version: '1.0.0' } }));
+  await writeFile(schemaPath, JSON.stringify({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true }, name: { type: 'string' } } } }));
   await writeFile(configPath, `export default ${JSON.stringify(config)};`);
 
   return { config, configPath, databasePath, directoryPath, filesDirectoryPath, filesMetadataPath, openapiPath, schemaPath };
@@ -45,6 +45,10 @@ const createServices = (calls) => ({
           log: { info: () => undefined },
         };
       },
+      graphql: async () => {
+        call.graphqlCalls = (call.graphqlCalls ?? 0) + 1;
+        return 'type Query { item: String }';
+      },
       openapi: async () => {
         call.openapiCalls += 1;
         return {};
@@ -65,10 +69,13 @@ test('starts from config and enables files only with --files', async () => {
     assert.equal(calls.length, 2);
     assert.deepEqual(
       calls.map(({ features }) => features),
-      [{ files: false }, { files: true }],
+      [
+        { files: false, graphql: false },
+        { files: true, graphql: false },
+      ],
     );
     assert.deepEqual(calls[0].config.database, { path: fixture.databasePath, schema: fixture.schemaPath });
-    assert.deepEqual(calls[0].config.server, fixture.config.server);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0].config.server)), fixture.config.server);
     assert.equal(calls[0].fastifyCalls, 1);
     assert.equal(calls[0].listenOptions, undefined);
     assert.equal(calls[1].config.files.directory, fixture.filesDirectoryPath);
@@ -105,7 +112,7 @@ test('generates OpenAPI from config and includes files only with --files', async
     const document = parse(await readFile(fixture.openapiPath, 'utf8'));
 
     assert.equal(document.openapi, '3.0.3');
-    assert.equal(document.components.parameters.PerPage.schema.maximum, 250);
+    assert.equal(document.components.schemas.Pager.properties.pageSize.maximum, 250);
     assert.equal(document.servers[0].url, 'http://localhost:5000');
     assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
 
@@ -127,7 +134,7 @@ test('loads computed values, environment variables and in-memory data from confi
   try {
     await writeFile(
       fixture.configPath,
-      `export default { database: { data: { items: [{ id: '1' }] }, schema: { $info: { title: 'Memory API', version: '1.0.0' } } }, server: { host: process.env.DEEP_JSON_SERVER_TEST_HOST, port: 2_000 + 1 } };`,
+      `export default { database: { data: { items: [{ id: '1' }] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } }, server: { host: process.env.DEEP_JSON_SERVER_TEST_HOST, port: 2_000 + 1 } };`,
     );
     process.env.DEEP_JSON_SERVER_TEST_HOST = '0.0.0.0';
 
@@ -196,4 +203,50 @@ test('validates CLI arguments and conditional config keys', async () => {
   } finally {
     await rm(fixture.directoryPath, { force: true, recursive: true });
   }
+});
+
+test('exports GraphQL independently and together with OpenAPI', async () => {
+  const fixture = await createFixture();
+  const calls = [];
+  const services = createServices(calls);
+  try {
+    fixture.config.graphql = { path: 'schema.graphql' };
+    await writeFile(fixture.configPath, `export default ${JSON.stringify(fixture.config)};`);
+    await runCli(['--graphql-schema', '--graphql', fixture.configPath], services);
+    assert.equal(calls[0].graphqlCalls, 1);
+    assert.equal(calls[0].features.graphql, true);
+    assert.equal(calls[0].fastifyCalls, 1);
+    await runCli(['--graphql-only', '--openapi-only', fixture.configPath], services);
+    assert.equal(calls[1].graphqlCalls, 1);
+    assert.equal(calls[1].openapiCalls, 1);
+    assert.equal(calls[1].fastifyCalls, 0);
+    await runCli(['--graphql-only', fixture.configPath]);
+    assert.match(await readFile(join(fixture.directoryPath, 'schema.graphql'), 'utf8'), /itemList/);
+    await assert.rejects(() => runCli(['--graphql-only', '--graphql-schema', fixture.configPath], services), /одновременно/);
+    delete fixture.config.graphql;
+    await writeFile(fixture.configPath, `export default ${JSON.stringify(fixture.config)};`);
+    await assert.rejects(() => runCli(['--graphql-only', fixture.configPath], services), /config.graphql.path/);
+    await runCli(['--help'], services);
+  } finally {
+    await rm(fixture.directoryPath, { force: true, recursive: true });
+  }
+});
+
+test('publication channels never send prereleases to latest', async () => {
+  const { publicationTag } = await import('../scripts/publish-package.js');
+  assert.equal(publicationTag('1.0.0-alpha.1'), 'alpha');
+  assert.equal(publicationTag('1.0.0-beta.2'), 'beta');
+  assert.equal(publicationTag('1.0.0-rc.1'), 'rc');
+  assert.equal(publicationTag('1.0.0'), 'latest');
+  assert.throws(() => publicationTag('1.0.0-preview.1'));
+});
+
+test('automatic alpha publication requires main and an unused version tag', async () => {
+  const { releasePlan } = await import('../scripts/prepare-release.js');
+  assert.deepEqual(releasePlan('1.0.0-alpha.1', 'branch', 'main'), { publish: true, createTag: true, tag: 'v1.0.0-alpha.1' });
+  assert.equal(releasePlan('1.0.0-alpha.1', 'branch', 'main', true).publish, false);
+  assert.equal(releasePlan('1.0.0-alpha.1', 'branch', 'feature').publish, false);
+  assert.equal(releasePlan('1.0.0', 'branch', 'main').publish, false);
+  assert.deepEqual(releasePlan('1.0.0', 'tag', 'v1.0.0'), { publish: true, createTag: false, tag: 'v1.0.0' });
+  assert.throws(() => releasePlan('1.0.0', 'tag', 'v0.9.0'));
 });

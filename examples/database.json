@@ -1,0 +1,99 @@
+{
+  "countries": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Ардения"
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Велория"
+    }
+  ],
+  "genres": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Криминал",
+      "parentIds": []
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Гангстер",
+      "parentIds": ["1"]
+    },
+    {
+      "id": "3",
+      "isArchived": false,
+      "name": "Драма",
+      "parentIds": []
+    },
+    {
+      "id": "4",
+      "isArchived": false,
+      "name": "Комедия",
+      "parentIds": []
+    }
+  ],
+  "movies": [
+    {
+      "actors": [
+        {
+          "genreIds": ["2", "3"],
+          "id": "movie-1-actor-1",
+          "userId": "1"
+        },
+        {
+          "genreIds": ["3"],
+          "id": "movie-1-actor-2",
+          "userId": "2"
+        }
+      ],
+      "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
+      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
+      "id": "1",
+      "isArchived": false,
+      "publisherIds": ["2"],
+      "title": "Тени Ардении"
+    },
+    {
+      "actors": [],
+      "coverSrc": "https://example.com/covers/northern-star.jpg",
+      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
+      "id": "2",
+      "isArchived": false,
+      "publisherIds": ["1"],
+      "title": "Полночь в «Северной звезде»"
+    }
+  ],
+  "publishers": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Northlight Studio"
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Aurora Pictures"
+    }
+  ],
+  "users": [
+    {
+      "bornAt": "1988-03-14",
+      "countryId": "1",
+      "fullName": "Мира Волкова",
+      "id": "1",
+      "isArchived": false
+    },
+    {
+      "bornAt": "1991-11-02",
+      "countryId": "2",
+      "fullName": "Леон Ветров",
+      "id": "2",
+      "isArchived": false
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "0.9.0",
-  "description": "JSON mock server with nested data filtering and relation embedding",
+  "version": "1.0.0-alpha.1",
+  "description": "JSON mock server with schema-driven REST, GraphQL, nested queries and OpenAPI generation",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,8 +36,12 @@
     "node": ">=22"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "fastify": "^5.12.3",
+    "graphql": "^16.14.2",
     "lowdb": "^7.0.1",
+    "mercurius": "^16.10.0",
     "pluralize": "^8.0.0",
     "yaml": "^2.8.1"
   },
@@ -55,14 +59,15 @@
     "deep-filter",
     "file-upload",
     "json",
-    "json-server",
     "mock",
     "mock-api",
     "mock-server",
     "openapi",
     "relations",
     "rest",
-    "rest-api"
+    "rest-api",
+    "graphql",
+    "openapi-generator"
   ],
   "author": "kollors",
   "license": "MIT",

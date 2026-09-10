@@ -8,6 +8,7 @@ import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey
 
 export interface DatabaseContainer {
   data: DatabaseData;
+  counters?: Record<string, number>;
 }
 export interface DatabaseStore {
   database: DatabaseContainer;
@@ -64,7 +65,7 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
   ancestors.delete(value);
 };
 
-export const validateDatabase = (data: unknown): DatabaseData => {
+export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>): DatabaseData => {
   if (!isObject(data)) {
     throw new Error('База данных должна содержать JSON-объект');
   }
@@ -80,6 +81,7 @@ export const validateDatabase = (data: unknown): DatabaseData => {
       throw new Error(`Ресурс «${resource}» должен содержать JSON-массив`);
     }
 
+    const primary = primaryKeys?.get(resource) ?? 'id';
     const ids = new Set();
 
     records.forEach((record, index) => {
@@ -87,15 +89,15 @@ export const validateDatabase = (data: unknown): DatabaseData => {
         throw new Error(`Запись ${index} ресурса «${resource}» должна содержать JSON-объект`);
       }
 
-      if (typeof record.id !== 'string' && !(typeof record.id === 'number' && Number.isFinite(record.id))) {
+      if (typeof record[primary] !== 'string' && !(typeof record[primary] === 'number' && Number.isFinite(record[primary]))) {
         throw new Error(`Запись ${index} ресурса «${resource}» должна содержать строковый или числовой id`);
       }
 
-      if (String(record.id) === '') {
+      if (String(record[primary]) === '') {
         throw new Error(`Запись ${index} ресурса «${resource}» должна содержать непустой id`);
       }
 
-      const id = String(record.id);
+      const id = String(record[primary]);
 
       if (ids.has(id)) {
         throw new Error(`Ресурс «${resource}» содержит повторяющийся id «${id}»`);
@@ -131,16 +133,18 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
   return value;
 };
 
-export const readDatabaseFile = async (databasePath: string): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'));
+export const readDatabaseFile = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'), keys);
 
-const createDiskDatabaseStore = async (databasePath: string): Promise<DatabaseStore> => {
+const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const initialData = await readDatabaseFile(resolvedDatabasePath);
+  const initialData = await readDatabaseFile(resolvedDatabasePath, keys);
   const database = new Low(new JSONFile<DatabaseData>(resolvedDatabasePath), initialData);
   const schedule = createSerialQueue();
+  const counterStore = new Low(new JSONFile<Record<string, number>>(`${resolvedDatabasePath}.counters.json`), {});
+  await counterStore.read();
 
   const read = async () => {
-    database.data = await readDatabaseFile(resolvedDatabasePath);
+    database.data = await readDatabaseFile(resolvedDatabasePath, keys);
 
     return database.data;
   };
@@ -149,10 +153,17 @@ const createDiskDatabaseStore = async (databasePath: string): Promise<DatabaseSt
     schedule(async () => {
       await read();
 
-      const result = operation(database);
-
-      validateDatabase(database.data);
-      await database.write();
+      await counterStore.read();
+      const draft = { data: structuredClone(database.data), counters: structuredClone(counterStore.data) };
+      const result = operation(draft);
+      validateDatabase(draft.data, keys);
+      // Reserve generated numbers first: failed data writes may leave gaps, never reused IDs.
+      if (JSON.stringify(draft.counters) !== JSON.stringify(counterStore.data)) {
+        counterStore.data = draft.counters;
+        await counterStore.write();
+      }
+      await database.adapter.write(draft.data);
+      database.data = draft.data;
 
       return result;
     });
@@ -160,20 +171,21 @@ const createDiskDatabaseStore = async (databasePath: string): Promise<DatabaseSt
   return { database, path: resolvedDatabasePath, read, update };
 };
 
-const createMemoryDatabaseStore = (sourceData: DatabaseData): DatabaseStore => {
-  validateDatabase(sourceData);
+const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, string>): DatabaseStore => {
+  validateDatabase(sourceData, keys);
 
-  const database = { data: structuredClone(sourceData) };
+  const database = { data: structuredClone(sourceData), counters: {} as Record<string, number> };
   const schedule = createSerialQueue();
 
   const read = async () => database.data;
   const update = <T>(operation: (database: DatabaseContainer) => T): Promise<T> =>
     schedule(() => {
-      const draft = { data: structuredClone(database.data) };
+      const draft = structuredClone(database);
       const result = operation(draft);
 
-      validateDatabase(draft.data);
+      validateDatabase(draft.data, keys);
       database.data = draft.data;
+      database.counters = draft.counters;
 
       return result;
     });
@@ -182,7 +194,8 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData): DatabaseStore => {
 };
 
 /** Creates a disk- or memory-backed database with serialized updates. */
-export const createDatabaseStore = async (config: DatabaseConfig): Promise<DatabaseStore> => (config.data != null ? createMemoryDatabaseStore(config.data) : createDiskDatabaseStore(config.path));
+export const createDatabaseStore = async (config: DatabaseConfig, keys?: Map<string, string>): Promise<DatabaseStore> =>
+  config.data != null ? createMemoryDatabaseStore(config.data, keys) : createDiskDatabaseStore(config.path, keys);
 
 export const getCollection = (database: DatabaseContainer, resource: string): DatabaseRecord[] => {
   const collection = isSafeKey(resource) ? database.data[resource] : undefined;
