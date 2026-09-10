@@ -8,6 +8,9 @@ on:
       - main
     paths:
       - package.json
+      - .github/workflows/publish.yml
+      - scripts/prepare-release.js
+      - scripts/publish-package.js
 
 permissions:
   contents: read
@@ -47,5 +50,5 @@ jobs:
       - name: Publish to the version channel
         if: steps.release.outputs.publish == 'true'
         env:
-          GITHUB_REF_NAME: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: node scripts/publish-package.js

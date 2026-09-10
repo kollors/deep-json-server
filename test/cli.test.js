@@ -245,6 +245,7 @@ test('automatic alpha publication requires main and an unused version tag', asyn
   const { releasePlan } = await import('../scripts/prepare-release.js');
   assert.deepEqual(releasePlan('1.0.0-alpha.1', 'branch', 'main'), { publish: true, createTag: true, tag: 'v1.0.0-alpha.1' });
   assert.equal(releasePlan('1.0.0-alpha.1', 'branch', 'main', true).publish, false);
+  assert.deepEqual(releasePlan('1.0.0-alpha.1', 'branch', 'main', true, false), { publish: true, createTag: false, tag: 'v1.0.0-alpha.1' });
   assert.equal(releasePlan('1.0.0-alpha.1', 'branch', 'feature').publish, false);
   assert.equal(releasePlan('1.0.0', 'branch', 'main').publish, false);
   assert.deepEqual(releasePlan('1.0.0', 'tag', 'v1.0.0'), { publish: true, createTag: false, tag: 'v1.0.0' });
