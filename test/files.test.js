@@ -5,6 +5,19 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createServer } from '../dist/index.js';
+
+const startServer = async (config) => {
+  const facade = await createServer(config);
+  const server = facade.fastify();
+  try {
+    await server.ready();
+    return facade;
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
+};
+
 import { createMemoryFileStore } from '../dist/src/files/memory-store.js';
 
 const withDiskServer = async (run) => {
@@ -255,7 +268,7 @@ test('supports update and delete in memory and validates stored MIME types', asy
     await server.close();
   }
 
-  await assert.rejects(() => createServer({ database: { data: { items: [] } }, files: { data: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }), /mimeType.*MIME-тип/);
+  await assert.rejects(() => startServer({ database: { data: { items: [] } }, files: { data: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }), /mimeType.*MIME-тип/);
 });
 
 test('rejects file names that are not portable across supported platforms', async () => {

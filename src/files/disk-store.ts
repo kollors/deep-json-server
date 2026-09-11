@@ -249,30 +249,32 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     return file;
   };
 
-  const metadata = async (path: string): Promise<FileRecord> => {
-    const file = findFile(path);
-    const filePath = await resolveExistingPath(path);
+  const metadata = (path: string): Promise<FileRecord> =>
+    schedule(async () => {
+      const file = findFile(path);
+      const filePath = await resolveExistingPath(path);
 
-    return { ...file, size: await getFileSize(filePath) };
-  };
+      return { ...file, size: await getFileSize(filePath) };
+    });
 
-  const get = async (path: string): ReturnType<FileStore['get']> => {
-    const file = findFile(path);
-    const filePath = await resolveExistingPath(path);
-    const handle = await open(filePath, 'r');
+  const get = (path: string): ReturnType<FileStore['get']> =>
+    schedule(async () => {
+      const file = findFile(path);
+      const filePath = await resolveExistingPath(path);
+      const handle = await open(filePath, 'r');
 
-    try {
-      const stats = await handle.stat();
+      try {
+        const stats = await handle.stat();
 
-      assertRegularFile(stats);
-      const size = stats.size;
+        assertRegularFile(stats);
+        const size = stats.size;
 
-      return { file: { ...file, size }, stream: handle.createReadStream() };
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-  };
+        return { file: { ...file, size }, stream: handle.createReadStream() };
+      } catch (error) {
+        await handle.close();
+        throw error;
+      }
+    });
 
   const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }: FileUpload): ReturnType<FileStore['upload']> => {
     const storedFile = { directory, mimeType, name };

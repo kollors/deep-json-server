@@ -18,10 +18,12 @@ import {
 } from 'graphql';
 import type { Context, Engine, Ref } from './engine.js';
 import { resolveField } from './engine.js';
-import { assertApi, type Entity, type InputMode, type Model, type Node, nodeName, operationName } from './model.js';
+import { preflight } from './graphql/preflight.js';
+import { assertApi, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from './model.js';
+import { operatorsFor } from './query/contract.js';
 import { type ListOptions, sortableFields } from './query/options.js';
 
-export function buildGraphql(model: Model, engine: Engine): GraphQLSchema {
+export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
   assertApi(model, 'graphql');
   const names = new Set(['String', 'Float', 'Int', 'Boolean', 'ID', 'Query', 'Mutation', 'Pager', 'OrderDirection']);
   const reserve = (name: string): string => {
@@ -74,10 +76,11 @@ export function buildGraphql(model: Model, engine: Engine): GraphQLSchema {
                 {
                   type: childType,
                   description: child.description,
+                  extensions: object && child.many ? { listNode: child } : undefined,
                   args: object && child.many ? listArgs(entity, child) : undefined,
                   resolve: (ref: Ref, args: ListOptions) => {
                     const value = resolveField(ref, child);
-                    return object && child.many && value != null ? engine.list(value as Ref[], child, args) : value;
+                    return object && child.many && value != null ? engine!.list(value as Ref[], child, args) : value;
                   },
                 },
               ];
@@ -107,7 +110,7 @@ export function buildGraphql(model: Model, engine: Engine): GraphQLSchema {
       fields: () => {
         const fields: GraphQLInputFieldConfigMap = {};
         for (const [key, child] of Object.entries(node.children)) {
-          if (child.relation || child.generated || child.readOnly || (child.primary && mode !== 'create')) continue;
+          if (!writable(child, mode)) continue;
           let childType: GraphQLInputType = child.base === 'object' ? input(entity, child, mode) : scalar(entity, child);
           if (child.many) childType = new GraphQLList(new GraphQLNonNull(childType));
           if (child.required && !child.nullable && !(root && mode === 'update') && child.default === undefined) childType = new GraphQLNonNull(childType);
@@ -149,22 +152,13 @@ export function buildGraphql(model: Model, engine: Engine): GraphQLSchema {
     type = new GraphQLInputObjectType({
       name: reserve(`${nodeName(entity, node)}Filter`),
       fields: () => {
-        const fields: GraphQLInputFieldConfigMap = { not: { type: type as GraphQLInputObjectType } };
-        const object = node.relation || node.base === 'object';
-        if (node.many) {
-          const element = object ? where(entity, node) : filter(entity, { ...node, many: false, path: `${node.path}_element` });
-          for (const key of ['some', 'every', 'none']) fields[key] = { type: element };
-          if (!object) {
-            const value = scalar(entity, node);
-            fields.contains = { type: value };
-            fields.in = { type: new GraphQLList(value) };
-          }
-        } else {
+        const fields: GraphQLInputFieldConfigMap = {};
+        const element = node.many ? (node.relation || node.base === 'object' ? where(entity, node) : filter(entity, { ...node, many: false, path: `${node.path}_element` })) : undefined;
+        for (const [key, operand] of Object.entries(operatorsFor(node))) {
           const value = scalar(entity, node);
-          for (const key of ['eq', 'ne']) fields[key] = { type: value };
-          fields.in = { type: new GraphQLList(value) };
-          if (node.base !== 'boolean') for (const key of ['gt', 'gte', 'lt', 'lte']) fields[key] = { type: scalar(entity, node, false) };
-          if (node.base === 'string') for (const key of ['contains', 'startsWith', 'endsWith']) fields[key] = { type: GraphQLString };
+          if (operand === 'condition') fields[key] = { type: type as GraphQLInputObjectType };
+          else if (operand === 'element') fields[key] = { type: element! };
+          else fields[key] = { type: operand === 'values' ? new GraphQLList(value) : operand === 'comparison' ? scalar(entity, node, false) : operand === 'text' ? GraphQLString : value };
         }
         return fields;
       },
@@ -189,26 +183,40 @@ export function buildGraphql(model: Model, engine: Engine): GraphQLSchema {
     const ordering = order(entity, node);
     return { where: { type: where(entity, node) }, pager: { type: pager }, ...(ordering ? { order: { type: new GraphQLList(new GraphQLNonNull(ordering)) } } : {}) };
   }
-  const queries: GraphQLFieldConfigMap<unknown, { snapshot: Context }> = {};
-  const mutations: GraphQLFieldConfigMap<unknown, { snapshot: Context }> = {};
+  const queries: GraphQLFieldConfigMap<unknown, { snapshot: () => Promise<Context> }> = {};
+  const mutations: GraphQLFieldConfigMap<unknown, { snapshot: () => Promise<Context> }> = {};
   for (const entity of model.entities.filter((e) => e.api.includes('graphql'))) {
     const name = operationName(entity);
     for (const operation of [name, `${name}List`]) if (queries[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
     const keyArg = { [entity.primary]: { type: new GraphQLNonNull(scalar(entity, entity.fields[entity.primary], false)) } };
-    queries[name] = { type: output(entity, entity.root), args: keyArg, resolve: (_root, args, ctx) => engine.find(ctx.snapshot, entity, args[entity.primary]) ?? null };
+    queries[name] = {
+      type: output(entity, entity.root),
+      args: keyArg,
+      resolve: async (_root, args, ctx, info) => {
+        preflight(info, engine!);
+        return engine!.find(await ctx.snapshot(), entity, args[entity.primary]) ?? null;
+      },
+    };
     queries[`${name}List`] = {
       type: new GraphQLNonNull(page(entity, entity.root)),
       args: listArgs(entity, entity.root),
-      resolve: (_root, args, ctx) => engine.list(engine.records(ctx.snapshot, entity), entity.root, args),
+      extensions: { listNode: entity.root },
+      resolve: async (_root, args, ctx, info) => {
+        preflight(info, engine!);
+        return engine!.list(engine!.records(await ctx.snapshot(), entity), entity.root, args);
+      },
     };
     for (const mode of ['create', 'replace', 'update', 'delete'] as const) {
       const operation = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
       if (mutations[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-      const fields = Object.values(entity.root.children).filter((child) => !child.relation && !child.generated && !child.readOnly && (!child.primary || mode === 'create'));
+      const fields = Object.values(entity.root.children).filter((child) => writable(child, mode === 'delete' ? 'update' : mode));
       mutations[operation] = {
         type: output(entity, entity.root),
         args: { ...(mode !== 'create' ? keyArg : {}), ...(mode !== 'delete' && fields.length ? { data: { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) } } : {}) },
-        resolve: (_root, args) => engine.mutate(entity, mode, args[entity.primary], args.data ?? {}),
+        resolve: (_root, args, _ctx, info) => {
+          preflight(info, engine!);
+          return engine!.mutate(entity, mode, args[entity.primary], args.data ?? {});
+        },
       };
     }
   }

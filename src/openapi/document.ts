@@ -1,6 +1,8 @@
+import { VERSION } from '../constants.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/contract.js';
 import { createFilePaths } from '../files/openapi.js';
 import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, type ValidationSchema, valueSchema } from '../model.js';
+import { operatorsFor } from '../query/contract.js';
 import { childrenOf, sortableFields } from '../query/options.js';
 import type { OpenapiDocument, OpenapiSchema } from '../types.js';
 import { isObject } from '../utils.js';
@@ -24,7 +26,7 @@ export function buildOpenapiDocument({
   files = false,
   pageSize = 10,
   maxPageSize = 100,
-  info = { title: 'Deep JSON Server API', version: '1.0.0-alpha.1' },
+  info = { title: 'Deep JSON Server API', version: VERSION },
 }: {
   model: Model;
   files?: boolean;
@@ -112,21 +114,20 @@ export function buildOpenapiDocument({
   function filter(entity: Entity, node: Node): OpenapiSchema {
     const name = `${nodeName(entity, node)}Filter`;
     if (!reserve(name, node)) return ref(name);
-    const properties: Record<string, OpenapiSchema> = { not: ref(name) };
-    const object = node.relation || node.base === 'object';
-    const scalar: OpenapiSchema = { type: node.base as 'string' | 'number' | 'boolean', nullable: true, ...(node.enum ? { enum: node.enum } : {}) };
-    if (node.many) {
-      const element = object ? where(entity, node) : filter(entity, { ...node, many: false, path: `${node.path}_element` });
-      for (const key of ['some', 'every', 'none']) properties[key] = element;
-      if (!object) {
-        properties.contains = scalar;
-        properties.in = { type: 'array', items: scalar };
-      }
-    } else {
-      for (const key of ['eq', 'ne']) properties[key] = scalar;
-      properties.in = { type: 'array', items: scalar };
-      if (node.base !== 'boolean') for (const key of ['gt', 'gte', 'lt', 'lte']) properties[key] = { type: node.base as 'string' | 'number' };
-      if (node.base === 'string') for (const key of ['contains', 'startsWith', 'endsWith']) properties[key] = { type: 'string' };
+    const properties: Record<string, OpenapiSchema> = {};
+    const element = node.many ? (node.relation || node.base === 'object' ? where(entity, node) : filter(entity, { ...node, many: false, path: `${node.path}_element` })) : undefined;
+    for (const [key, operand] of Object.entries(operatorsFor(node))) {
+      const nullable = ['eq', 'ne', 'in'].includes(key);
+      const scalar: OpenapiSchema = {
+        type: node.base as 'string' | 'number' | 'boolean',
+        ...(nullable ? { nullable: true } : {}),
+        ...(node.enum ? { enum: [...node.enum, ...(nullable && !node.enum.includes(null) ? [null] : [])] } : {}),
+      };
+      if (operand === 'condition') properties[key] = ref(name);
+      else if (operand === 'element') properties[key] = element!;
+      else
+        properties[key] =
+          operand === 'values' ? { type: 'array', items: scalar } : operand === 'text' ? { type: 'string' } : operand === 'comparison' ? { type: node.base as 'string' | 'number' } : scalar;
     }
     schemas[name] = { type: 'object', additionalProperties: false, properties };
     return ref(name);
@@ -227,6 +228,12 @@ export function buildOpenapiDocument({
     });
     for (const [path, item] of Object.entries(createFilePaths())) {
       if (paths[path]) throw new Error(`File path collision: ${path}`);
+      for (const operation of Object.values(item)) {
+        if (isObject(operation) && typeof operation.operationId === 'string') {
+          if (operations.has(operation.operationId)) throw new Error(`OpenAPI operation collision: ${operation.operationId}`);
+          operations.add(operation.operationId);
+        }
+      }
       paths[path] = item;
     }
   }

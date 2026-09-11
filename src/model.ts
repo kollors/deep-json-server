@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
+import { domainError } from './errors.js';
 import { getRelationMetadata } from './relation-metadata.js';
 import type { DatabaseData, JsonValue } from './types.js';
-import { assertKnownKeys, createHttpError, isObject, isSafeKey, singularize, toPascalCase } from './utils.js';
+import { assertKnownKeys, isObject, isSafeKey, singularize, toPascalCase } from './utils.js';
 
 export interface Field {
   type: string;
@@ -56,8 +57,12 @@ export interface Model {
   explicit: boolean;
 }
 export type ValidationSchema = Record<string, unknown>;
-export const ajv = new Ajv({ allErrors: true, coerceTypes: false, removeAdditional: false, strict: true, ownProperties: true });
-addFormats.default(ajv);
+const createValidator = () => {
+  const ajv = new Ajv({ allErrors: true, coerceTypes: false, removeAdditional: false, strict: true, ownProperties: true });
+  addFormats.default(ajv);
+  return ajv;
+};
+const entityValidators = new WeakMap<Entity, Ajv>();
 const PRIMITIVES = new Set(['string', 'number', 'boolean', 'object']);
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const FIELD_KEYS = new Set([
@@ -84,7 +89,7 @@ const FIELD_KEYS = new Set([
 ]);
 export const pathParts = (path: string): string[] => {
   const parts = path.split('.');
-  if (parts.some((p) => !NAME.test(p) || !isSafeKey(p))) throw createHttpError(400, `Invalid field path: ${path}`);
+  if (parts.some((p) => !NAME.test(p) || !isSafeKey(p))) throw domainError('INVALID_INPUT', `Invalid field path: ${path}`);
   return parts;
 };
 export const readPath = (value: unknown, path: string | string[]): unknown[] => {
@@ -145,7 +150,8 @@ function checkField(path: string, field: unknown): asserts field is Field {
 }
 export async function loadModel(source: unknown): Promise<Model | undefined> {
   if (source === undefined) return undefined;
-  const schema: unknown = typeof source === 'string' ? JSON.parse(await readFile(source, 'utf8')) : source;
+  const schema: unknown = typeof source === 'string' ? JSON.parse(await readFile(source, 'utf8')) : structuredClone(source);
+  const ajv = createValidator();
   if (!isObject(schema) || !Object.keys(schema).length) throw new Error('Model schema must be a nonempty object');
   if ('$schema' in schema || '$info' in schema) throw new Error('Legacy $schema/$info format is no longer supported');
   const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: true };
@@ -168,6 +174,7 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
       }
     }
     if (!entity.primary) throw new Error(`${name}: primary key is required`);
+    entityValidators.set(entity, ajv);
     model.entities.push(entity);
     model.byName.set(name, entity);
     model.byCollection.set(entity.collection, entity);
@@ -218,11 +225,24 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
         if (sourceField.relation || targetField.relation || !['string', 'number'].includes(sourceField.base) || sourceField.base !== targetField.base)
           throw new Error(`Incompatible relation keys: ${entity.name}.${node.path}`);
       } else {
-        const validate = ajv.compile(valueSchema(node));
+        const schema = valueSchema(node);
+        const validate = ajv.compile(schema);
         for (const key of ['default', 'example'] as const) if (node[key] !== undefined && !validate(structuredClone(node[key]))) throw new Error(`Invalid ${key}: ${entity.name}.${node.path}`);
+        ajv.removeSchema(schema);
       }
     }
+  for (const entity of model.entities) {
+    const check = (node: Node, inArray = false, protectedParent = false): void => {
+      if (inArray && node.readOnly && !protectedParent) throw new Error(`Read-only fields inside arrays require a readOnly parent: ${entity.name}.${node.path}`);
+      for (const child of Object.values(node.children)) check(child, inArray || node.many, protectedParent || !!node.readOnly);
+    };
+    check(entity.root);
+  }
   return model;
+}
+export function writable(node: Node, mode: InputMode): boolean {
+  if (node.relation || node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
+  return node.base !== 'object' || Object.values(node.children).some((child) => writable(child, mode));
 }
 export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
@@ -242,7 +262,7 @@ export function objectSchema(node: Node, mode: InputMode, root = false): Validat
   const properties: Record<string, ValidationSchema> = {};
   const required: string[] = [];
   for (const [key, child] of Object.entries(node.children)) {
-    if (child.relation || (mode !== 'stored' && (child.generated || child.readOnly || (child.primary && mode !== 'create')))) continue;
+    if (child.relation || (mode !== 'stored' && !writable(child, mode))) continue;
     properties[key] =
       child.base === 'object'
         ? (() => {
@@ -255,8 +275,9 @@ export function objectSchema(node: Node, mode: InputMode, root = false): Validat
   }
   return { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) };
 }
-export const validators = new WeakMap<Entity, Map<InputMode, ValidateFunction>>();
+const validators = new WeakMap<Entity, Map<InputMode, ValidateFunction>>();
 export function validateRecord(entity: Entity, value: unknown, mode: InputMode): void {
+  const ajv = entityValidators.get(entity) as Ajv;
   let cache = validators.get(entity);
   if (!cache) {
     cache = new Map();
@@ -267,7 +288,7 @@ export function validateRecord(entity: Entity, value: unknown, mode: InputMode):
     validate = ajv.compile(objectSchema(entity.root, mode, true));
     cache.set(mode, validate);
   }
-  if (!validate(value)) throw createHttpError(400, `${entity.name}: ${ajv.errorsText(validate.errors)}`);
+  if (!validate(value)) throw domainError('INVALID_INPUT', `${entity.name}: ${ajv.errorsText(validate.errors)}`);
 }
 export function inferModel(database: DatabaseData): Model {
   const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: false };
@@ -276,6 +297,7 @@ export function inferModel(database: DatabaseData): Model {
     const entity: Entity = { name, collection, api: [], primary: 'id', fields: Object.create(null), root: newNode('', { type: 'object' }) };
     const scan = (record: Record<string, unknown>, prefix = '') => {
       for (const [key, value] of Object.entries(record)) {
+        if (!NAME.test(key) || !isSafeKey(key)) continue;
         const path = prefix + key;
         const sample = Array.isArray(value) ? value.find((v) => v !== null) : value;
         const base = isObject(sample) ? 'object' : ['string', 'number', 'boolean'].includes(typeof sample) ? typeof sample : 'string';

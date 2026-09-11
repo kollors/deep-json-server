@@ -5,7 +5,20 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { buildSchema, validateSchema } from 'graphql';
 import { parse } from 'yaml';
-import { createServer } from '../dist/index.js';
+import { createServer, writeGraphql, writeOpenapi } from '../dist/index.js';
+
+const startServer = async (config) => {
+  const facade = await createServer(config);
+  const server = facade.fastify();
+  try {
+    await server.ready();
+    return facade;
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
+};
+
 import { loadModel } from '../dist/src/model.js';
 import { createOpenapi } from '../dist/src/openapi/index.js';
 
@@ -103,8 +116,8 @@ test('writes YAML and SDL to nested output paths with independent API settings',
     graphql: { path: graphqlPath },
     server: { host: '::1', port: 9000, logger: false },
   });
-  await facade.openapi();
-  await facade.graphql();
+  await writeOpenapi(await facade.openapi(), openapiPath);
+  await writeGraphql(await facade.graphql(), graphqlPath);
   const doc = parse(await readFile(openapiPath, 'utf8'));
   assert.equal(doc.info.title, 'Example');
   assert.equal(doc.servers[0].url, 'http://[::1]:9000');
@@ -227,16 +240,16 @@ test('validates explicit keys, implicit fields, primary defaults and nullable re
 test('initial database validates unknown fields, dangling references and required relations', async () => {
   const model = definition({ name: { type: 'string', required: true } });
   for (const data of [{ items: [{ id: '1' }] }, { items: [{ id: '1', name: 1 }] }, { items: [{ id: '1', name: 'x', extra: 1 }] }, { other: [] }])
-    await assert.rejects(() => createServer({ database: { data, schema: model } }));
+    await assert.rejects(() => startServer({ database: { data, schema: model } }));
   const links = { ...definition({ link: { type: 'Other', source: 'otherId', required: true } }), Other: { collection: 'other', fields: { id: { type: 'string', primary: true } } } };
-  for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => createServer({ database: { data: { items: [row], other: [] }, schema: links } }));
+  for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => startServer({ database: { data: { items: [row], other: [] }, schema: links } }));
   const singular = {
     ...definition({ link: { type: 'Other', source: 'code', target: 'code' }, code: { type: 'string' } }),
     Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' } } },
   };
   await assert.rejects(
     () =>
-      createServer({
+      startServer({
         database: {
           schema: singular,
           data: {

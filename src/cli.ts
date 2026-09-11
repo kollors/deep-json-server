@@ -1,58 +1,96 @@
 import process from 'node:process';
-import { readServerConfig } from './config.js';
-import { DEFAULT_HOST, DEFAULT_PORT } from './constants.js';
+import { normalizeServerConfig, readServerConfig } from './config.js';
+import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from './constants.js';
+import { resolveFeatures, type ServerFeatures } from './features.js';
+import { generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from './schema.js';
 import { createServer } from './server.js';
 
 const HELP_TEXT = `Deep JSON Server
 
 Usage:
-  deep-json-server [--files] [--graphql] [--openapi | --openapi-only] [--graphql-schema | --graphql-only] <server.config.js>
+  deep-json-server [options] <server.config.js>
+  deep-json-server generate <openapi|graphql|openapi,graphql> <server.config.js>
 
-  --files           Enable binary file routes
-  --graphql         Enable the GraphQL endpoint
-  --openapi         Export OpenAPI and start the server
-  --openapi-only    Export OpenAPI without starting the server
-  --graphql-schema Export GraphQL SDL and start the server
-  --graphql-only   Export GraphQL SDL without starting the server
-  --help            Show help
+  --files         Enable file routes
+  --graphql       Enable the GraphQL endpoint
+  --openapi       Enable the OpenAPI endpoint
+  --host <host>   Server address
+  --port <port>   Server port
+  --help, -h      Show help
+  --version, -v   Show version
 
-Both exporters can be combined; any --*-only flag prevents server startup.`;
+Files are enabled when configured. Generate writes schemas to the configured paths.`;
 export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createServer } = { createServer }): Promise<void> {
-  if (args.includes('--help')) {
+  if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`${HELP_TEXT}\n`);
     return;
   }
-  const flags = new Set<string>();
-  let configPath: string | undefined;
-  for (const arg of args) {
-    if (arg.startsWith('-')) {
-      if (!['--files', '--graphql', '--openapi', '--openapi-only', '--graphql-schema', '--graphql-only'].includes(arg) || flags.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
-      flags.add(arg);
-    } else if (configPath === undefined) configPath = arg;
-    else throw new Error('Можно указать только один файл конфигурации');
+  if (args.includes('--version') || args.includes('-v')) {
+    process.stdout.write(`${VERSION}\n`);
+    return;
   }
+  const positional: string[] = [];
+  const seen = new Set<string>();
+  const features: ServerFeatures = {};
+  let host: string | undefined;
+  let port: number | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (!arg.startsWith('-')) {
+      positional.push(arg);
+      continue;
+    }
+    if (!['--files', '--graphql', '--openapi', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
+    seen.add(arg);
+    if (arg === '--host' || arg === '--port') {
+      const value = args[++index];
+      if (!value || value.startsWith('-')) throw new Error(`Укажите значение ${arg}`);
+      if (arg === '--host') host = value;
+      else {
+        if (!/^\d+$/.test(value)) throw new Error('Invalid --port');
+        port = Number(value);
+      }
+    } else features[arg.slice(2) as keyof ServerFeatures] = true;
+  }
+  const generate = positional[0] === 'generate';
+  const configPath = positional[generate ? 2 : 0];
   if (!configPath) throw new Error('Укажите путь к файлу конфигурации');
-  if ((flags.has('--openapi') && flags.has('--openapi-only')) || (flags.has('--graphql-schema') && flags.has('--graphql-only')))
-    throw new Error('Режимы одного экспортера нельзя использовать одновременно');
-  const config = await readServerConfig(configPath);
-  const openapi = flags.has('--openapi') || flags.has('--openapi-only');
-  const graphql = flags.has('--graphql-schema') || flags.has('--graphql-only');
-  if (openapi && !config.openapi.path) throw new Error('Укажите config.openapi.path');
-  if (graphql && !config.graphql.path) throw new Error('Укажите config.graphql.path');
-  if (flags.has('--files') && !config.files) throw new Error('Укажите config.files');
-  const runtimeConfig = { ...config, server: { ...config.server, host: config.server.host ?? process.env.HOST ?? DEFAULT_HOST, port: config.server.port ?? Number(process.env.PORT ?? DEFAULT_PORT) } };
-  const only = flags.has('--openapi-only') || flags.has('--graphql-only');
-  const facade = await services.createServer(runtimeConfig, { files: flags.has('--files'), graphql: only ? false : flags.has('--graphql') || config.graphql.enabled === true });
-  if (openapi) {
-    await facade.openapi();
-    process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);
+  if (positional.length !== (generate ? 3 : 1)) throw new Error('Можно указать только один файл конфигурации');
+  const formats = generate ? positional[1].split(',') : [];
+  if (generate && (formats.some((format) => !['openapi', 'graphql'].includes(format)) || new Set(formats).size !== formats.length)) throw new Error('Invalid generation format');
+  if (generate && (features.graphql || features.openapi)) throw new Error('Endpoint flags are only available when starting the server');
+  const source = await readServerConfig(configPath);
+  const config = normalizeServerConfig({
+    ...source,
+    server: { ...source.server, host: host ?? source.server.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? source.server.port ?? Number(process.env.PORT ?? DEFAULT_PORT) },
+  });
+  const enabled = resolveFeatures(config, features);
+  if (generate) {
+    if (!config.database.schema) throw new Error('Generation requires an explicit model schema');
+    // Validate all destinations before writing either document.
+    for (const format of formats) if (!config[format as 'openapi' | 'graphql'].path) throw new Error(`Укажите config.${format}.path`);
+    const openapi = formats.includes('openapi')
+      ? await generateOpenapi(config.database.schema, {
+          files: enabled.files,
+          host: config.server.host,
+          port: config.server.port,
+          pageSize: config.server.pageSize ?? Math.min(10, config.server.maxPageSize ?? 100),
+          maxPageSize: config.server.maxPageSize,
+          info: config.openapi.info,
+        })
+      : undefined;
+    const graphql = formats.includes('graphql') ? await generateGraphql(config.database.schema) : undefined;
+    if (openapi) {
+      await writeOpenapi(openapi, config.openapi.path!);
+      process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);
+    }
+    if (graphql) {
+      await writeGraphql(graphql, config.graphql.path!);
+      process.stdout.write(`GraphQL: ${config.graphql.path}\n`);
+    }
+    return;
   }
-  if (graphql) {
-    await facade.graphql();
-    process.stdout.write(`GraphQL: ${config.graphql.path}\n`);
-  }
-  if (only) return;
-  const server = facade.fastify();
+  const server = (await services.createServer(config, enabled)).fastify();
   await server.listen();
   server.log.info('Deep JSON Server started');
 }

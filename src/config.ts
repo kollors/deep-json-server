@@ -8,10 +8,17 @@ import { assertKnownKeys, isObject } from './utils.js';
 const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server']);
 const DATABASE_KEYS = new Set(['data', 'path', 'schema']);
 const FILES_KEYS = new Set(['data', 'directory', 'metadata']);
-const OPENAPI_KEYS = new Set(['path', 'info']);
+const OPENAPI_KEYS = new Set(['path', 'info', 'enabled', 'endpoint']);
 const GRAPHQL_KEYS = new Set(['path', 'enabled', 'endpoint']);
 const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
 let configImportIndex = 0;
+const copyInput = <T>(value: T): T => {
+  try {
+    return structuredClone(value);
+  } catch (error) {
+    throw new Error('Input must contain JSON data or binary file content', { cause: error });
+  }
+};
 
 export type DatabaseSchema = ModelSchema;
 export type DatabaseConfig = { data: DatabaseData; path?: never; schema?: DatabaseSchema | string } | { data?: never; path: string; schema?: DatabaseSchema | string };
@@ -23,6 +30,8 @@ export interface MemoryFile {
 }
 export type FilesConfig = { data: MemoryFile[]; directory?: never; metadata?: never } | { data?: never; directory: string; metadata: string };
 export interface OpenapiConfig {
+  enabled?: boolean;
+  endpoint?: string;
   path?: string;
   info?: { title: string; version: string; description?: string };
 }
@@ -124,7 +133,7 @@ const normalizeDatabase = (value: unknown, directoryPath: string): DatabaseConfi
   const schema = normalizeSchema(database.schema, directoryPath);
 
   if (hasData) {
-    return { data: getObject(database.data, 'config.database.data', true) as DatabaseData, schema };
+    return { data: copyInput(getObject(database.data, 'config.database.data', true)) as DatabaseData, schema };
   }
 
   return { path: resolve(directoryPath, getString(database.path, 'config.database.path', true)), schema };
@@ -151,7 +160,7 @@ const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | un
       throw new Error('Ключ config.files.data должен содержать массив');
     }
 
-    return { data: files.data as MemoryFile[] };
+    return { data: copyInput(files.data) as MemoryFile[] };
   }
 
   return {
@@ -175,6 +184,9 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
 
   assertKnownKeys(openapi, OPENAPI_KEYS, 'config.openapi');
   assertKnownKeys(graphql, GRAPHQL_KEYS, 'config.graphql');
+  if (openapi.enabled !== undefined && typeof openapi.enabled !== 'boolean') throw new Error('config.openapi.enabled must be boolean');
+  const openapiEndpoint = getString(openapi.endpoint, 'config.openapi.endpoint');
+  if (openapiEndpoint && !/^\/[A-Za-z][A-Za-z0-9_./-]*$/.test(openapiEndpoint)) throw new Error('Invalid OpenAPI endpoint');
   if (graphql.enabled !== undefined && typeof graphql.enabled !== 'boolean') throw new Error('config.graphql.enabled must be boolean');
   const endpoint = getString(graphql.endpoint, 'config.graphql.endpoint');
   if (endpoint && (!/^\/[A-Za-z][A-Za-z0-9_/-]*$/.test(endpoint) || endpoint === '/')) throw new Error('Invalid GraphQL endpoint');
@@ -207,7 +219,7 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   return {
     database,
     files,
-    openapi: { path: resolveConfigPath(openapiPath, directoryPath), ...(info && { info: info as OpenapiConfig['info'] }) },
+    openapi: { enabled: openapi.enabled as boolean | undefined, endpoint: openapiEndpoint, path: resolveConfigPath(openapiPath, directoryPath), ...(info && { info: info as OpenapiConfig['info'] }) },
     graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphql.enabled as boolean | undefined, endpoint },
     server: {
       cors: cors as boolean | undefined,

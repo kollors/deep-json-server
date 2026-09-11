@@ -1,103 +1,76 @@
-import { isEqual, isObject, isSafeKey, toArray } from '../utils.js';
+import type { Node } from '../model.js';
+import { isEqual, isObject } from '../utils.js';
+import { operatorsFor } from './contract.js';
+import { badQuery, childrenOf } from './options.js';
 
-const FIELD_OPERATOR_NAMES = ['contains', 'endsWith', 'eq', 'every', 'gt', 'gte', 'in', 'lt', 'lte', 'ne', 'none', 'not', 'some', 'startsWith'] as const;
-
-type FieldOperator = (typeof FIELD_OPERATOR_NAMES)[number];
-
-const FIELD_OPERATORS = new Set<string>(FIELD_OPERATOR_NAMES);
-const NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
-
-const isFieldOperator = (value: string): value is FieldOperator => FIELD_OPERATORS.has(value);
-
-const isFilterEqual = (left: unknown, right: unknown): boolean => {
-  if (isEqual(left, right)) {
-    return true;
-  }
-
-  if (typeof left === 'number' && typeof right === 'string' && NUMBER_PATTERN.test(right)) {
-    // Query parameters are strings, so numeric strings must match stored numbers.
-    return left === Number(right);
-  }
-
-  return typeof right === 'number' && typeof left === 'string' && NUMBER_PATTERN.test(left) && right === Number(left);
-};
-
-const isComparable = (value: unknown): value is number | string => typeof value === 'number' || typeof value === 'string';
-
-const matchesOperator = (field: unknown, operator: FieldOperator, expectedValue: unknown): boolean => {
-  switch (operator) {
-    case 'contains':
-      return typeof field === 'string' ? field.toLowerCase().includes(String(expectedValue).toLowerCase()) : Array.isArray(field) && field.some((value) => isFilterEqual(value, expectedValue));
-    case 'endsWith':
-      return typeof field === 'string' && field.toLowerCase().endsWith(String(expectedValue).toLowerCase());
-    case 'eq':
-      return isFilterEqual(field, expectedValue);
-    case 'every':
-      return Array.isArray(field) && field.every((value) => matchesValue(value, expectedValue));
-    case 'gt':
-      return isComparable(field) && isComparable(expectedValue) && field > expectedValue;
-    case 'gte':
-      return isComparable(field) && isComparable(expectedValue) && field >= expectedValue;
-    case 'in': {
-      const expectedValues = toArray(expectedValue);
-
-      return Array.isArray(field)
-        ? field.some((value) => expectedValues.some((expectedItem) => isFilterEqual(value, expectedItem)))
-        : expectedValues.some((expectedItem) => isFilterEqual(field, expectedItem));
+type Predicate = (value: unknown) => boolean;
+const comparable = (value: unknown): value is string | number => typeof value === 'string' || typeof value === 'number';
+const equal = (left: unknown, right: unknown) => isEqual(left, right);
+function condition(node: Node, input: unknown, depth: number): Predicate {
+  if (!isObject(input) || depth > 32) badQuery('Field filter must contain operators with depth at most 32');
+  if (!node.many && (node.relation || node.base === 'object')) return compileWhere(node, input, depth);
+  const operators = operatorsFor(node);
+  const predicates = Object.entries(input).map(([operator, value]): Predicate => {
+    const operand = operators[operator];
+    if (!Object.hasOwn(operators, operator)) badQuery(`Invalid operator ${operator} for ${node.type}`);
+    if (operand === 'condition') {
+      const nested = condition(node, value, depth + 1);
+      return (field) => !nested(field);
     }
-    case 'lt':
-      return isComparable(field) && isComparable(expectedValue) && field < expectedValue;
-    case 'lte':
-      return isComparable(field) && isComparable(expectedValue) && field <= expectedValue;
-    case 'ne':
-      return !isFilterEqual(field, expectedValue);
-    case 'none':
-      return Array.isArray(field) && !field.some((value) => matchesValue(value, expectedValue));
-    case 'not':
-      return !matchesValue(field, expectedValue);
-    case 'some':
-      return Array.isArray(field) && field.some((value) => matchesValue(value, expectedValue));
-    case 'startsWith':
-      return typeof field === 'string' && field.toLowerCase().startsWith(String(expectedValue).toLowerCase());
-    default:
-      return false;
-  }
-};
-
-function matchesValue(field: unknown, condition: unknown): boolean {
-  if (!isObject(condition)) {
-    return isFilterEqual(field, condition);
-  }
-
-  const conditionEntries = Object.entries(condition);
-  const operatorEntries = conditionEntries.filter((entry): entry is [FieldOperator, unknown] => isFieldOperator(entry[0]));
-  const nestedEntries = conditionEntries.filter(([key]) => !isFieldOperator(key));
-
-  if (!operatorEntries.every(([operator, expectedValue]) => matchesOperator(field, operator, expectedValue))) {
-    return false;
-  }
-
-  return nestedEntries.length === 0 || (isObject(field) && matchesWhere(field, Object.fromEntries(nestedEntries)));
-}
-
-export function matchesWhere(value: unknown, where: unknown): boolean {
-  if (!isObject(value) || !isObject(where)) {
-    return false;
-  }
-
-  return Object.entries(where).every(([key, condition]) => {
-    if (key === 'and') {
-      return Array.isArray(condition) && condition.every((nestedWhere) => matchesWhere(value, nestedWhere));
+    if (operand === 'element') {
+      const nested = condition({ ...node, many: false }, value, depth + 1);
+      return (field) => Array.isArray(field) && (operator === 'every' ? field.every(nested) : operator === 'none' ? !field.some(nested) : field.some(nested));
     }
-
-    if (key === 'or') {
-      return Array.isArray(condition) && condition.length > 0 && condition.some((nestedWhere) => matchesWhere(value, nestedWhere));
+    const values = operand === 'values' ? value : [value];
+    if (!Array.isArray(values)) badQuery(`Invalid value for ${operator}`);
+    const nullable = ['eq', 'ne', 'in'].includes(operator);
+    for (const candidate of values) {
+      if (candidate === null && nullable) continue;
+      const base = operand === 'text' ? 'string' : node.base;
+      if (typeof candidate !== base || (typeof candidate === 'number' && !Number.isFinite(candidate))) badQuery(`Invalid value for ${operator}`);
+      if ((operand === 'value' || operand === 'values') && node.enum && !node.enum.some((v) => equal(v, candidate))) badQuery(`Invalid enum value for ${operator}`);
     }
-
-    if (key === 'not') {
-      return isObject(condition) && !matchesWhere(value, condition);
+    switch (operator) {
+      case 'eq':
+        return (field) => equal(field, value);
+      case 'ne':
+        return (field) => !equal(field, value);
+      case 'in':
+        return (field) => (Array.isArray(field) ? field : [field]).some((item) => values.some((v) => equal(item, v)));
+      case 'contains':
+        return (field) => (typeof field === 'string' ? field.toLowerCase().includes(String(value).toLowerCase()) : Array.isArray(field) && field.some((v) => equal(v, value)));
+      case 'startsWith':
+        return (field) => typeof field === 'string' && field.toLowerCase().startsWith(String(value).toLowerCase());
+      case 'endsWith':
+        return (field) => typeof field === 'string' && field.toLowerCase().endsWith(String(value).toLowerCase());
+      case 'gt':
+        return (field) => comparable(field) && comparable(value) && field > value;
+      case 'gte':
+        return (field) => comparable(field) && comparable(value) && field >= value;
+      case 'lt':
+        return (field) => comparable(field) && comparable(value) && field < value;
+      default:
+        return (field) => comparable(field) && comparable(value) && field <= value;
     }
-
-    return isSafeKey(key) && matchesValue(value[key], condition);
   });
+  return (value) => predicates.every((predicate) => predicate(value));
+}
+export function compileWhere(node: Node, input: unknown, depth = 0): Predicate {
+  if (!isObject(input) || depth > 32) badQuery('where must be an object with depth at most 32');
+  const predicates = Object.entries(input).map(([key, value]): Predicate => {
+    if (key === 'and' || key === 'or') {
+      if (!Array.isArray(value) || (key === 'or' && !value.length)) badQuery(`Invalid ${key}`);
+      const nested = value.map((item) => compileWhere(node, item, depth + 1));
+      return (field) => (key === 'and' ? nested.every((p) => p(field)) : nested.some((p) => p(field)));
+    }
+    if (key === 'not') {
+      const nested = compileWhere(node, value, depth + 1);
+      return (field) => !nested(field);
+    }
+    const child = childrenOf(node)[key];
+    if (!Object.hasOwn(childrenOf(node), key) || child.writeOnly) badQuery(`Unknown or inaccessible filter field ${key}`);
+    const nested = condition(child, value, depth + 1);
+    return (field) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined);
+  });
+  return (value) => isObject(value) && predicates.every((predicate) => predicate(value));
 }

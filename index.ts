@@ -1,6 +1,9 @@
 export type { DatabaseConfig, DeepJsonServerConfig, FilesConfig, GraphqlConfig, MemoryFile, OpenapiConfig, ServerConfig } from './src/config.js';
+export type { ServerFeatures } from './src/features.js';
 export type { FileMetadata, FileUpdate } from './src/files/contract.js';
 export type { EntityDefinition, Field, ModelSchema } from './src/model.js';
+export type { OpenapiOptions } from './src/schema.js';
+export { generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from './src/schema.js';
 export type { ServerFacade } from './src/server.js';
 export { createServer } from './src/server.js';
 export type { OpenapiDocument } from './src/types.js';

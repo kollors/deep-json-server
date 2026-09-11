@@ -4,7 +4,7 @@
 
 A JSON-backed mock server with REST, GraphQL, nested queries, binary files and schema exports. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.1 is a breaking prerelease.** The old `$schema`/`$info` model format and `_where`, `_sort`, `_embed`, `_page`, `_perPage` query parameters are no longer supported.
+**1.0.0-alpha.2 is a prerelease.** When upgrading from 0.x, update your model schema and query parameters using the examples below.
 
 ## Installation
 
@@ -12,29 +12,35 @@ A JSON-backed mock server with REST, GraphQL, nested queries, binary files and s
 npm install @kollors/deep-json-server@alpha
 ```
 
-The `alpha` npm channel is separate from `latest`. Install an exact version with `@1.0.0-alpha.1`.
+To install a specific version, use `@1.0.0-alpha.2`.
 
 ## Quick start
+
+Create two files in the same directory.
+
+`database.json`:
+
+```json
+{
+  "users": [
+    { "id": "1", "fullName": "Мира Волкова" }
+  ]
+}
+```
 
 `server.config.js`:
 
 ```js
 export default {
-  database: { path: './database.json', schema: './schema.json' },
-  graphql: { enabled: true, path: './generated/schema.graphql' },
-  openapi: { path: './generated/openapi.yaml' },
-  server: { host: '127.0.0.1', port: 4001, pageSize: 10, maxPageSize: 100 },
+  database: { path: './database.json' },
 };
 ```
 
 ```sh
 npx deep-json-server server.config.js
-npx deep-json-server --openapi-only --graphql-only server.config.js
 ```
 
-The second command exports both schemas without listening on a port. Starting the server alone does not write schema files.
-
-Complete catalog examples: [database](examples/database.json), [model schema](examples/schema.json), [configuration](examples/server.config.js).
+The user list is available at `http://127.0.0.1:4001/users`.
 
 ## Configuration
 
@@ -42,6 +48,8 @@ Complete catalog examples: [database](examples/database.json), [model schema](ex
 |---|---|
 | `database.path` / `database.data` | Exactly one: JSON file or in-memory collection object |
 | `database.schema` | Model object or JSON schema-file path; optional for REST |
+| `openapi.enabled` | Enable the specification endpoint; default `false` |
+| `openapi.endpoint` | Specification path; default `/openapi.json` |
 | `openapi.path` | YAML export destination |
 | `openapi.info` | Optional `title`, `version`, `description` |
 | `graphql.enabled` | Enable GraphQL HTTP endpoint; default `false` |
@@ -54,23 +62,33 @@ Complete catalog examples: [database](examples/database.json), [model schema](ex
 | `files.data` | In-memory binary files |
 | `files.directory`, `files.metadata` | Disk storage directory and metadata JSON file; both required |
 
-Configuration-file paths resolve relative to that file. Direct `createServer()` paths resolve relative to the working directory. In-memory input is copied.
+Relative paths resolve from the configuration file's directory. When passing a configuration object to `createServer()`, paths resolve from the working directory. The server works with a copy of in-memory input.
 
-CLI flags:
-
-| Flag | Action |
+| CLI flag | Action |
 |---|---|
-| `--files` | Enable binary-file routes |
-| `--graphql` | Enable GraphQL endpoint |
-| `--openapi` | Export OpenAPI and start |
-| `--openapi-only` | Export OpenAPI without starting |
-| `--graphql-schema` | Export GraphQL SDL and start |
-| `--graphql-only` | Export GraphQL SDL without starting |
-| `--help` | Show usage |
+| `--files` | Enable file routes |
+| `--graphql` | Enable the GraphQL API |
+| `--openapi` | Enable the OpenAPI endpoint |
+| `--host <host>` | Server address |
+| `--port <port>` | Server port |
+| `--help`, `-h` | Show help |
+| `--version`, `-v` | Show package version |
 
-Both exporters can be combined. Any `--*-only` flag prevents startup. CLI file routes require `--files`; programmatic use enables them when `files` is configured unless overridden through the second `createServer()` argument.
+Setting priority: CLI → configuration → `HOST`/`PORT` → defaults. File routes are enabled when `files` is configured.
+
+To generate schemas, specify the format and configuration file:
+
+```sh
+npx deep-json-server generate openapi server.config.js
+npx deep-json-server generate graphql server.config.js
+npx deep-json-server generate openapi,graphql server.config.js
+```
+
+The command reads `database.schema` and writes schemas to `openapi.path` and `graphql.path`. Generation requires no database contents or file store.
 
 ## Model schema
+
+Examples: [database](examples/database.json), [model schema](examples/schema.json), [configuration](examples/server.config.js).
 
 ```json
 {
@@ -104,11 +122,11 @@ Both exporters can be combined. Any `--*-only` flag prevents startup. CLI file r
 | OpenAPI 3.0.3 export | Available | Error when requested |
 | GraphQL SDL / API | Available | Error when requested |
 
-Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Schemas can be exported for empty collections or an empty database object. REST without a schema retains the standard generated `id` behavior.
+Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions. Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope=*`.
 
 ### Fields
 
-Types: `string`, `number`, `boolean`, `object`, or a model name. Append `[]` for an array. No `integer`, `relation`, `items`, or multidimensional type strings. Nested fields use full dotted paths, for example `actors.fullName`. Objects inside arrays may contain their own arrays.
+The `type` property accepts `string`, `number`, `boolean`, `object`, or a model name. Append `[]` for an array: `string[]`, `object[]`, `Genre[]`. Use dotted paths for nested fields, such as `actors.fullName`.
 
 | Properties | Meaning |
 |---|---|
@@ -125,11 +143,11 @@ Types: `string`, `number`, `boolean`, `object`, or a model name. Append `[]` for
 | `minimum`, `maximum` | Inclusive numeric bounds |
 | `source`, `target`, `onDelete` | Relation metadata |
 
-String/numeric constraints on `string[]`/`number[]` apply to every element. `required`/`nullable` apply to the entire array, and `default`/`example` contain a complete array. Array elements are non-null. There are no item-count or uniqueness constraints. A required ordinary array may be empty.
+String and numeric constraints on `string[]`/`number[]` apply to every element. `required` and `nullable` apply to the entire array; `default` and `example` contain a complete array. Elements must match the array's type and be non-null. `required` requires the field to be present; an ordinary array may still be empty.
 
-Primary keys can be named `username`, `code`, etc.; exactly one root string/number primary key is required. Without `generated`, the client supplies it during creation. Generated fields are root fields, absent from create/replace/update input; they cannot have `default`. Replace preserves generated and read-only root values.
+Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
 
-For example, a `LocalUser` with primary `username` and `password: {"type":"string","required":true,"writeOnly":true}` has `localUser(username: ...)` and `/localUsers/{username}`. `writeOnly` excludes passwords from responses, scope, filters and ordering. It does not implement hashing or authentication.
+For example, a `LocalUser` with primary key `username` and `password: {"type":"string","required":true,"writeOnly":true}` has `localUser(username: ...)` and `/localUsers/{username}`. A `writeOnly` field accepts input and is excluded from responses, `scope`, filters and ordering.
 
 ### Relations
 
@@ -141,20 +159,20 @@ For example, a `LocalUser` with primary `username` and `password: {"type":"strin
 }
 ```
 
-`Genre` produces an object; `Genre[]` produces a list. `source` defaults to the current model's primary key, `target` to the target model's primary key. Both paths are rooted at their respective records. Within `actors`, `actors.genreIds` reads the current actor's IDs. An omitted `source` still means the root model key, not `actors.id`.
+`Genre` returns an object; `Genre[]` returns a list. `source` defaults to the current model's primary key, `target` to the target model's primary key. These defaults also apply to nested relations. Paths start at the root of their respective records: in this example, `actors.genreIds` contains the current actor's genre keys.
 
-Storage keys remain in the database and are included among own fields. Their types can be inferred from the target key. For an undeclared source pointing to a target primary key, a list relation implies an array of keys; a single relation implies a scalar key. Declare storage fields explicitly when the mapping is ambiguous. Generation never guesses from the first database record.
+Relation keys are stored in the database and included among the record's own fields. Their types are inferred from the matched keys. A `source` field pointing to a target primary key can be omitted from the field declarations: the schema infers an array of keys for a list relation or a scalar key for a single relation. Declare the storage field explicitly when the mapping is ambiguous.
 
 Reverse example: `User.movies = {"type":"Movie[]","target":"actors.userId"}`. A movie is returned once even if several actors match. A single relation resolving to multiple targets is invalid.
 
-Every supplied direct reference must resolve. `required: true` on a relation requires at least one target before response filtering/pagination. Reverse views with a primary source may be empty unless required. Missing single relations return `null`.
+Every supplied direct relation key must point to an existing record. `required: true` on a relation requires at least one target before response filtering/pagination. Reverse relations using the primary key as `source` may be empty unless required. Missing single relations return `null`.
 
 `onDelete` describes what happens **when a target record is deleted**:
 
 - `restrict` (default): refuse deletion while a surviving owner refers to the target.
 - `cascade`: delete the referring owner. For `User.country`, deleting the country deletes its users. For `Movie.actors.user`, deleting the user removes matching actor elements and retains the movie.
 
-Deletion computes the cascade closure, handles cycles, checks restrictions and validates remaining data before committing. A failure cancels the complete operation. Policies also apply to explicitly declared reverse relation views; configure both directions deliberately when both are present.
+Cascading deletion runs as one operation, including cyclic relations. A validation failure cancels the entire operation. `onDelete` rules also apply to explicitly declared reverse relations; account for both rules when defining both directions.
 
 ## Queries and responses
 
@@ -164,9 +182,11 @@ Collections and lists of objects, including embedded `object[]` fields, return:
 { "data": [], "total": 0 }
 ```
 
-Primitive arrays remain plain arrays. Every object list accepts optional `where`, `order`, `pager`. Processing order is filter → sort → pagination. `total` is the filtered count before pagination. Page numbers start at 1; default pagination applies even when omitted. Exceeding `maxPageSize`, fractional values and nonpositive values are errors. Out-of-range pages return empty `data` with the correct `total`.
+Primitive arrays are returned as plain arrays. Every object list accepts optional `where`, `order` and `pager`. Processing order is filter → sort → pagination. `total` is the filtered record count before pagination.
 
-`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Logical composition uses `and`, `or`, `not`. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`. String matching is case-insensitive. Field filters use operator objects, not shorthand scalar values.
+Use `page` and `pageSize` in `pager`. The default is the first page with the size from `server.pageSize`. Both values must be positive integers; `pageSize` is limited by `server.maxPageSize`. Out-of-range pages return empty `data` with the total matching record count in `total`.
+
+`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Combine conditions with `and`, `or`, `not`. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`. String matching is case-insensitive. A field condition is an object containing an operator, such as `{ "id": { "eq": "1" } }`.
 
 ```json
 {
@@ -182,9 +202,9 @@ Primitive arrays remain plain arrays. Every object list accepts optional `where`
 }
 ```
 
-Root filters choose parents. Filters inside a selected relation only trim that relation; they do not remove the parent. Each parent's child list is processed independently. Filtering does not require a relation to be included in the response.
+Root `where` selects records from the main collection. `where` inside a relation filters its elements while retaining the parent record. Each nested list is processed independently. Filtering by a relation works independently of its inclusion in the response.
 
-`order` is an array of `{ "field": "fullName", "direction": "ASC" }` rules. Earlier rules have priority; complete ties retain storage order. Null and missing values compare equally. REST uses dotted field paths; GraphQL uses generated enums (`profile_name` for `profile.name`). Ambiguous enum names cause a generation error. Sorting parents by a relation or an array is unsupported; sorting inside the relation is supported.
+`order` is an array of `{ "field": "fullName", "direction": "ASC" }` rules. Earlier rules have priority; equal values retain storage order. Null and missing values compare equally. REST uses dotted field paths; GraphQL uses generated enums (`profile_name` for `profile.name`). Ambiguous enum names cause a generation error. Sorting supports scalar fields of the current object, including nested fields. Related lists accept their own `order`.
 
 ### REST
 
@@ -197,7 +217,7 @@ Root filters choose parents. Filters inside a selected relation only trim that r
 | PATCH | `/users/{id}` | `userUpdate` |
 | DELETE | `/users/{id}` | `userDelete` |
 
-The path key name follows the primary key. POST/PUT/PATCH receive raw record objects. PUT replaces the record while retaining its key and server-owned root values. PATCH shallowly merges supplied fields; supplied nested objects are full replacements. Create/replace enforce required fields. Update validates supplied values and the final record. Missing targets return 404; conflicts return 409. DELETE returns the deleted record.
+The path parameter name follows the primary key. POST, PUT and PATCH accept a JSON record object. PUT replaces the record while retaining its key and server-managed fields. PATCH merges fields at the top level; supplied nested objects are replaced while preserving their read-only fields. Creation and replacement require all mandatory fields. Updates validate supplied values and the final record. Missing records return `404`; conflicts return `409`. DELETE returns the deleted record.
 
 Query parameters `where`, `order`, `pager`, `nested` contain JSON. `scope` is a selection string. Example shown before URL encoding:
 
@@ -215,7 +235,7 @@ const params = new URLSearchParams({
 const response = await fetch(`/users?${params}`);
 ```
 
-`scope=*,actors(user(id,fullName),genres(*))` selects own fields and explicit relations. `*` selects only own fields of the current object, including inferred storage keys and excluding `writeOnly`. It never recursively expands relations. Without scope, own fields are selected. Wrappers `data`/`total` remain present.
+`scope=*,actors(user(id,fullName),genres(*))` selects own fields and the specified relations. `*` includes the current object's own fields and stored keys, except `writeOnly` fields. Relations are listed explicitly. The default selection is own fields. Lists retain the `{ data, total }` response structure.
 
 `nested` maps full response paths to list options:
 
@@ -229,7 +249,7 @@ const response = await fetch(`/users?${params}`);
 }
 ```
 
-A nested path must be selected by scope and must address an object list. Single-record routes and mutations accept `scope` and `nested`; root list parameters only apply to collection GET. Invalid names and unsafe paths return 400.
+A path in `nested` must be selected by `scope` and point to an object list. Single-record routes and mutations accept `scope` and `nested`; root `where`, `order` and `pager` apply to collection GET. Invalid names and unsafe paths return `400`.
 
 ### GraphQL
 
@@ -252,10 +272,9 @@ query {
 }
 ```
 
-Single queries are `user(id: ...)`, with no `ById`; missing records yield null. Mutation names are `userCreate(data: ...)`, `userReplace(id: ..., data: ...)`, `userUpdate(id: ..., data: ...)`, `userDelete(id: ...)`. A generated-only model creates records without a `data` argument. Mutations use the same validation and storage operations as REST. Selecting relations in mutation results shapes the response only.
+The query `user(id: ...)` returns one record or `null` if it is missing. Mutations are `userCreate(data: ...)`, `userReplace(id: ..., data: ...)`, `userUpdate(id: ..., data: ...)`, `userDelete(id: ...)`. For models containing only generated fields, the create mutation takes no `data` argument. Writes and validation follow the same rules as REST. Relations selected in a mutation result determine the response contents.
 
-String primary keys use GraphQL `ID`; ordinary strings use `String`, numbers use `Float`, pagination uses `Int`. Schema enums preserve valid string labels; other values receive `VALUE_0`, `VALUE_1`, etc. Schema constraints such as string length and formats are enforced by the shared runtime validator; SDL alone cannot express all constraints. Introspection and ordinary query/mutation execution are supported; this release does not add subscriptions or bulk mutations.
-
+String primary keys use GraphQL `ID`; ordinary strings use `String`, numbers use `Float`, and pagination parameters use `Int`. Schema enums preserve valid string labels; other values receive `VALUE_0`, `VALUE_1`, etc. String lengths, formats and other model constraints are validated by the server during request execution. Introspection is available for exploring the schema. Selected list arguments are validated before executing mutations. Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`, `CONFLICT` or `INTERNAL_ERROR`.
 
 ## Example database
 
@@ -363,10 +382,10 @@ String primary keys use GraphQL `ID`; ordinary strings use `String`, numbers use
 
 ## Files
 
-Add `files.directory` and `files.metadata` to the server config, then pass `--files` to enable raw binary uploads:
+Add `files.directory` and `files.metadata` to the configuration and start the server:
 
 ```bash
-deep-json-server --files server.config.js
+deep-json-server server.config.js
 ```
 
 For temporary tests, use `files.data` instead. Each initial record contains `name`, `mimeType`, binary `content` as a `Uint8Array`, and an optional `directory`. Uploaded files then remain in memory until the process exits.
@@ -422,9 +441,9 @@ Content-Type: application/json
 
 `PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the server origin.
 
-In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Use a disk-backed database and file storage from only one server process at a time, and do not edit stored files or metadata until that process stops. Paths below `files.directory` may not contain symbolic links, and file names are restricted to values that are portable across supported operating systems. The metadata file may be absent initially and is created on the first upload. Metadata created by versions before this path-based API is not compatible with the new format.
+In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Use a disk-backed database and file storage from only one server process at a time, and do not edit stored files or metadata until that process stops. Paths below `files.directory` may not contain symbolic links, and file names are restricted to values that are portable across supported operating systems. The metadata file may be absent initially and is created on the first upload.
 
-The upload is raw binary rather than `multipart/form-data`, so `XMLHttpRequest.upload.onprogress` can report progress while the browser sends a `File` directly with `xhr.send(file)`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
+Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
 ## Programmatic API
 
@@ -440,19 +459,34 @@ await server.listen();
 // await server.close();
 ```
 
-Accessors are lazy; exporting schemas does not listen or initialize disk file storage. Override runtime features with `createServer(config, { files: false, graphql: true })`.
+The `openapi()` and `graphql()` methods return schemas. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup. Override server features with `createServer(config, { files: false, graphql: true, openapi: true })`.
+
+Generators can also be used independently:
+
+```js
+import { generateOpenapi, generateGraphql, writeOpenapi, writeGraphql } from '@kollors/deep-json-server';
+
+const document = await generateOpenapi('./schema.json', { files: true });
+const sdl = await generateGraphql('./schema.json');
+await writeOpenapi(document, './generated/openapi.yaml');
+await writeGraphql(sdl, './generated/schema.graphql');
+```
+
+`generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model.
 
 ## Storage and development
 
-Updates are serialized within one server instance and validated on a draft before persistence. Use one writer per database file. Increment counters are stored next to the database in `<database path>.counters.json`; keep that file with the database. Numbers are reserved before the data write, so a failed write can leave gaps but cannot reuse a reserved number. UUID generation uses Node's built-in crypto API.
+Updates run sequentially within one server instance and are validated on a copy of the data before saving. Use one server process per database file. `increment` counters are stored next to the database in `<database path>.counters.json`; keep that file with the database. Numbers are reserved before the data write, so a failed write can leave gaps but cannot reuse a reserved number.
 
-This is a mock server; there is no authentication or password hashing. File routes keep their independent storage and validation.
+The server is intended for mocking APIs. Implement authentication and password hashing in your application if needed.
 
 ```sh
 npm ci
 npm run verify
 ```
 
-Verification runs type checking, lint, coverage gates and installation checks against the packed package. A new alpha version in `package.json` pushed to `main` creates its version tag and publishes through GitHub Actions trusted publishing to npm `alpha`. An existing tag skips automatic publication. Explicit version-tag pushes also publish; stable versions use `latest`. The publishing script rejects mismatched Git tags.
+The command checks types, code style, test coverage and installation from the package archive.
+
+To publish a new alpha, update the version in `package.json` and push to `main`. GitHub Actions creates the version tag and publishes to npm `alpha` through trusted publishing. Already published versions are skipped. If the tag exists but publication failed, a retry uses that tag and verifies that the package files match it. Pushing a version tag also triggers publication; stable versions publish to `latest`.
 
 License: MIT.

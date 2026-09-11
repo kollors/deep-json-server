@@ -57,7 +57,7 @@ const createServices = (calls) => ({
   },
 });
 
-test('starts from config and enables files only with --files', async () => {
+test('starts from config with consistent feature defaults', async () => {
   const fixture = await createFixture();
   const calls = [];
   const services = createServices(calls);
@@ -70,8 +70,8 @@ test('starts from config and enables files only with --files', async () => {
     assert.deepEqual(
       calls.map(({ features }) => features),
       [
-        { files: false, graphql: false },
-        { files: true, graphql: false },
+        { files: true, graphql: false, openapi: false },
+        { files: true, graphql: false, openapi: false },
       ],
     );
     assert.deepEqual(calls[0].config.database, { path: fixture.databasePath, schema: fixture.schemaPath });
@@ -85,42 +85,25 @@ test('starts from config and enables files only with --files', async () => {
   }
 });
 
-test('supports generate-and-run and generate-only OpenAPI modes', async () => {
+test('endpoint flags start the server and generation writes files independently', async () => {
   const fixture = await createFixture();
   const calls = [];
-  const services = createServices(calls);
-
   try {
-    await runCli(['--openapi', fixture.configPath], services);
-    await runCli(['--openapi-only', fixture.configPath], services);
-
-    assert.equal(calls[0].openapiCalls, 1);
-    assert.equal(calls[0].fastifyCalls, 1);
-    assert.equal(calls[1].openapiCalls, 1);
-    assert.equal(calls[1].fastifyCalls, 0);
-  } finally {
-    await rm(fixture.directoryPath, { force: true, recursive: true });
-  }
-});
-
-test('generates OpenAPI from config and includes files only with --files', async () => {
-  const fixture = await createFixture();
-
-  try {
-    await runCli(['--openapi-only', '--files', fixture.configPath]);
-
+    await runCli(['--openapi', '--graphql', '--host', '127.0.0.2', '--port', '4010', fixture.configPath], createServices(calls));
+    assert.deepEqual(calls[0].features, { files: true, graphql: true, openapi: true });
+    assert.equal(calls[0].openapiCalls, 0);
+    assert.equal(calls[0].config.server.host, '127.0.0.2');
+    assert.equal(calls[0].config.server.port, 4010);
+    await rm(fixture.databasePath);
+    await runCli(['generate', 'openapi', fixture.configPath]);
     const document = parse(await readFile(fixture.openapiPath, 'utf8'));
-
-    assert.equal(document.openapi, '3.0.3');
     assert.equal(document.components.schemas.Pager.properties.pageSize.maximum, 250);
     assert.equal(document.servers[0].url, 'http://localhost:5000');
     assert.equal(document.paths['/_files/storage'].post.operationId, 'uploadFile');
-
-    await runCli(['--openapi-only', fixture.configPath]);
-
-    const documentWithoutFiles = parse(await readFile(fixture.openapiPath, 'utf8'));
-
-    assert.equal(documentWithoutFiles.paths['/_files/storage'], undefined);
+    delete fixture.config.files;
+    await writeFile(fixture.configPath, `export default ${JSON.stringify(fixture.config)};`);
+    await runCli(['generate', 'openapi', fixture.configPath]);
+    assert.equal(parse(await readFile(fixture.openapiPath, 'utf8')).paths['/_files/storage'], undefined);
   } finally {
     await rm(fixture.directoryPath, { force: true, recursive: true });
   }
@@ -158,14 +141,14 @@ test('validates CLI arguments and conditional config keys', async () => {
     await assert.rejects(() => runCli([], services), /файлу конфигурации/);
     await assert.rejects(() => runCli(['--unknown', fixture.configPath], services), /Неизвестный параметр/);
     await assert.rejects(() => runCli([fixture.configPath, 'other.js'], services), /только один/);
-    await assert.rejects(() => runCli(['--openapi', '--openapi-only', fixture.configPath], services), /нельзя использовать одновременно/);
+    await assert.rejects(() => runCli(['--openapi', '--openapi-only', fixture.configPath], services), /Неизвестный параметр/);
 
     await writeConfig({});
     await assert.rejects(() => runCli([fixture.configPath], services), /config\.database/);
 
-    await writeConfig({ database: { path: 'database.json' } });
-    await assert.rejects(() => runCli(['--openapi', fixture.configPath], services), /config\.openapi\.path/);
-    await assert.rejects(() => runCli(['--openapi-only', fixture.configPath], services), /config\.openapi\.path/);
+    await writeConfig({ database: { path: 'database.json', schema: 'database-schema.json' } });
+    await assert.rejects(() => runCli(['generate', 'openapi', fixture.configPath], services), /config\.openapi\.path/);
+    await assert.rejects(() => runCli(['generate', 'graphql', fixture.configPath], services), /config\.graphql\.path/);
     await assert.rejects(() => runCli(['--files', fixture.configPath], services), /config\.files/);
 
     await writeConfig({ database: { data: {}, path: 'database.json' } });
@@ -205,28 +188,31 @@ test('validates CLI arguments and conditional config keys', async () => {
   }
 });
 
-test('exports GraphQL independently and together with OpenAPI', async () => {
+test('exports GraphQL separately or together and validates command arguments', async () => {
   const fixture = await createFixture();
-  const calls = [];
-  const services = createServices(calls);
   try {
     fixture.config.graphql = { path: 'schema.graphql' };
     await writeFile(fixture.configPath, `export default ${JSON.stringify(fixture.config)};`);
-    await runCli(['--graphql-schema', '--graphql', fixture.configPath], services);
-    assert.equal(calls[0].graphqlCalls, 1);
-    assert.equal(calls[0].features.graphql, true);
-    assert.equal(calls[0].fastifyCalls, 1);
-    await runCli(['--graphql-only', '--openapi-only', fixture.configPath], services);
-    assert.equal(calls[1].graphqlCalls, 1);
-    assert.equal(calls[1].openapiCalls, 1);
-    assert.equal(calls[1].fastifyCalls, 0);
-    await runCli(['--graphql-only', fixture.configPath]);
+    await runCli(['generate', 'graphql', fixture.configPath]);
     assert.match(await readFile(join(fixture.directoryPath, 'schema.graphql'), 'utf8'), /itemList/);
-    await assert.rejects(() => runCli(['--graphql-only', '--graphql-schema', fixture.configPath], services), /одновременно/);
-    delete fixture.config.graphql;
+    await runCli(['generate', 'openapi,graphql', fixture.configPath]);
+    for (const args of [
+      ['generate', 'xml', fixture.configPath],
+      ['generate', 'openapi,openapi', fixture.configPath],
+      ['generate', 'openapi', '--graphql', fixture.configPath],
+      ['--port', 'bad', fixture.configPath],
+      ['--host'],
+      ['--port', '70000', fixture.configPath],
+      ['--graphql', '--graphql', fixture.configPath],
+    ])
+      await assert.rejects(() => runCli(args));
+    delete fixture.config.database.schema;
     await writeFile(fixture.configPath, `export default ${JSON.stringify(fixture.config)};`);
-    await assert.rejects(() => runCli(['--graphql-only', fixture.configPath], services), /config.graphql.path/);
-    await runCli(['--help'], services);
+    await assert.rejects(() => runCli(['generate', 'openapi', fixture.configPath]), /explicit/);
+    await runCli(['--help']);
+    await runCli(['-h']);
+    await runCli(['--version']);
+    await runCli(['-v']);
   } finally {
     await rm(fixture.directoryPath, { force: true, recursive: true });
   }
