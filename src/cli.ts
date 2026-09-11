@@ -1,9 +1,11 @@
 import process from 'node:process';
-import { normalizeServerConfig, readServerConfig } from './config.js';
+import { configure, configureGeneration, readConfigModule } from './config.js';
 import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from './constants.js';
 import { resolveFeatures, type ServerFeatures } from './features.js';
+import { inputPaths, validateExportPaths } from './paths.js';
 import { generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from './schema.js';
-import { createServer } from './server.js';
+import { createConfiguredServer } from './server.js';
+import { isObject } from './utils.js';
 
 const HELP_TEXT = `Deep JSON Server
 
@@ -20,7 +22,7 @@ Usage:
   --version, -v   Show version
 
 Files are enabled when configured. Generate writes schemas to the configured paths.`;
-export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createServer } = { createServer }): Promise<void> {
+export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createConfiguredServer } = { createServer: createConfiguredServer }): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`${HELP_TEXT}\n`);
     return;
@@ -59,22 +61,27 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   const formats = generate ? positional[1].split(',') : [];
   if (generate && (formats.some((format) => !['openapi', 'graphql'].includes(format)) || new Set(formats).size !== formats.length)) throw new Error('Invalid generation format');
   if (generate && (features.graphql || features.openapi)) throw new Error('Endpoint flags are only available when starting the server');
-  const source = await readServerConfig(configPath);
-  const config = normalizeServerConfig({
-    ...source,
-    server: { ...source.server, host: host ?? source.server.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? source.server.port ?? Number(process.env.PORT ?? DEFAULT_PORT) },
-  });
-  const enabled = resolveFeatures(config, features);
+  const source = await readConfigModule(configPath);
+  const serverOptions = generate && !formats.includes('openapi') ? {} : (source.config.server ?? {});
+  if (!isObject(serverOptions)) throw new Error('config.server must be an object');
+  const overrides = { host: host ?? serverOptions.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? serverOptions.port ?? Number(process.env.PORT ?? DEFAULT_PORT) };
+  const config = generate
+    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files } as { host: string; port: number; files?: boolean })
+    : configure({ ...source.config, server: { ...serverOptions, ...overrides } }, source.directory, source.path);
   if (generate) {
     if (!config.database.schema) throw new Error('Generation requires an explicit model schema');
-    // Validate all destinations before writing either document.
-    for (const format of formats) if (!config[format as 'openapi' | 'graphql'].path) throw new Error(`Укажите config.${format}.path`);
+    const destinations = formats.map((format) => {
+      const path = config[format as 'openapi' | 'graphql'].path;
+      if (!path) throw new Error(`Укажите config.${format}.path`);
+      return path;
+    });
+    await validateExportPaths(destinations, inputPaths(source.config, source.directory, source.path));
     const openapi = formats.includes('openapi')
       ? await generateOpenapi(config.database.schema, {
-          files: enabled.files,
+          files: config.files != null,
           host: config.server.host,
           port: config.server.port,
-          pageSize: config.server.pageSize ?? Math.min(10, config.server.maxPageSize ?? 100),
+          pageSize: config.server.pageSize,
           maxPageSize: config.server.maxPageSize,
           info: config.openapi.info,
         })
@@ -90,7 +97,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
     }
     return;
   }
-  const server = (await services.createServer(config, enabled)).fastify();
+  const server = (await services.createServer(config, resolveFeatures(config, features))).fastify();
   await server.listen();
   server.log.info('Deep JSON Server started');
 }

@@ -4,7 +4,7 @@
 
 A JSON-backed mock server with REST, GraphQL, nested queries, binary files and schema exports. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.2 is a prerelease.** When upgrading from 0.x, update your model schema and query parameters using the examples below.
+**1.0.0-alpha.3 is a prerelease.** When upgrading from 0.x, update your model schema and query parameters using the examples below.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON-backed mock server with REST, GraphQL, nested queries, binary files and s
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.2`.
+To install a specific version, use `@1.0.0-alpha.3`.
 
 ## Quick start
 
@@ -51,7 +51,7 @@ The user list is available at `http://127.0.0.1:4001/users`.
 | `openapi.enabled` | Enable the specification endpoint; default `false` |
 | `openapi.endpoint` | Specification path; default `/openapi.json` |
 | `openapi.path` | YAML export destination |
-| `openapi.info` | Optional `title`, `version`, `description` |
+| `openapi.info` | Optional metadata object: required `title` and `version`, optional `description` |
 | `graphql.enabled` | Enable GraphQL HTTP endpoint; default `false` |
 | `graphql.endpoint` | Endpoint path; default `/graphql` |
 | `graphql.path` | GraphQL SDL export destination |
@@ -62,7 +62,9 @@ The user list is available at `http://127.0.0.1:4001/users`.
 | `files.data` | In-memory binary files |
 | `files.directory`, `files.metadata` | Disk storage directory and metadata JSON file; both required |
 
-Relative paths resolve from the configuration file's directory. When passing a configuration object to `createServer()`, paths resolve from the working directory. The server works with a copy of in-memory input.
+Relative paths resolve from the configuration file's directory. When passing a configuration object to `createServer()`, paths resolve from the working directory. The server works with a copy of in-memory input and metadata.
+
+Set `server.port` to `0` to let the operating system choose an available port. The OpenAPI endpoint uses a relative server URL.
 
 | CLI flag | Action |
 |---|---|
@@ -84,7 +86,17 @@ npx deep-json-server generate graphql server.config.js
 npx deep-json-server generate openapi,graphql server.config.js
 ```
 
-The command reads `database.schema` and writes schemas to `openapi.path` and `graphql.path`. Generation requires no database contents or file store.
+The command reads `database.schema` and writes schemas to `openapi.path` and `graphql.path`. A configuration for generation only can contain:
+
+```js
+export default {
+  database: { schema: './schema.json' },
+  openapi: { path: './generated/openapi.yaml' },
+  graphql: { path: './generated/schema.graphql' },
+};
+```
+
+Each format needs its own output file. The command rejects destinations that would overwrite the configuration, database, schema or file metadata.
 
 ## Model schema
 
@@ -122,7 +134,9 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 | OpenAPI 3.0.3 export | Available | Error when requested |
 | GraphQL SDL / API | Available | Error when requested |
 
-Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions. Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope=*`.
+Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions.
+
+Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope=*`. Fields with mixed value types can be read, but using them in `where`, `order` or `nested` requires an explicit schema.
 
 ### Fields
 
@@ -134,7 +148,7 @@ The `type` property accepts `string`, `number`, `boolean`, `object`, or a model 
 | `description`, `example` | Documentation and example value |
 | `required`, `nullable` | Defaults `false`; presence and explicit null are separate |
 | `default` | Value when omitted on create/replace; PATCH does not insert defaults |
-| `enum` | Allowed values; for arrays, allowed element values |
+| `enum` | Allowed strings, numbers or booleans; for arrays, allowed element values |
 | `primary` | Root primary key; mandatory, unique, non-null and immutable |
 | `generated` | `uuid` for strings, `increment` for numbers; server supplies the value |
 | `readOnly`, `writeOnly` | Output-only or input-only; mutually exclusive |
@@ -148,6 +162,8 @@ String and numeric constraints on `string[]`/`number[]` apply to every element. 
 Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
 
 For example, a `LocalUser` with primary key `username` and `password: {"type":"string","required":true,"writeOnly":true}` has `localUser(username: ...)` and `/localUsers/{username}`. A `writeOnly` field accepts input and is excluded from responses, `scope`, filters and ordering.
+
+Objects used in GraphQL must have at least one field visible in responses; REST also accepts empty objects.
 
 ### Relations
 
@@ -441,30 +457,31 @@ Content-Type: application/json
 
 `PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the server origin.
 
-In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. The metadata file contains only `directory`, `mimeType`, and `name`; `size` is read from the actual file, while response URLs are computed. The server creates directories automatically and keeps validated metadata in memory while running. Use a disk-backed database and file storage from only one server process at a time, and do not edit stored files or metadata until that process stops. Paths below `files.directory` may not contain symbolic links, and file names are restricted to values that are portable across supported operating systems. The metadata file may be absent initially and is created on the first upload.
+In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. Metadata stores `directory`, `mimeType` and `name`; the server reads the size from the file and builds its URLs. Directories and the metadata file are created when needed.
+
+Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, loaded configuration or metadata file.
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
 ## Programmatic API
 
 ```js
-import { createServer } from '@kollors/deep-json-server';
+import { createServer } from '@kollors/deep-json-server/server';
 import config from './server.config.js';
 
 const facade = await createServer(config);
-const openapi = await facade.openapi();
-const sdl = await facade.graphql();
 const server = facade.fastify();
 await server.listen();
 // await server.close();
 ```
 
-The `openapi()` and `graphql()` methods return schemas. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup. Override server features with `createServer(config, { files: false, graphql: true, openapi: true })`.
+The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup. Override server features with `createServer(config, { files: false, graphql: true, openapi: true })`.
 
-Generators can also be used independently:
+The root import `@kollors/deep-json-server` also provides these functions. Server adapters load when enabled. Generators can be used independently:
 
 ```js
-import { generateOpenapi, generateGraphql, writeOpenapi, writeGraphql } from '@kollors/deep-json-server';
+import { generateOpenapi, writeOpenapi } from '@kollors/deep-json-server/openapi';
+import { generateGraphql, writeGraphql } from '@kollors/deep-json-server/graphql';
 
 const document = await generateOpenapi('./schema.json', { files: true });
 const sdl = await generateGraphql('./schema.json');
@@ -472,7 +489,7 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
-`generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model.
+`generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 
 ## Storage and development
 
@@ -487,6 +504,6 @@ npm run verify
 
 The command checks types, code style, test coverage and installation from the package archive.
 
-To publish a new alpha, update the version in `package.json` and push to `main`. GitHub Actions creates the version tag and publishes to npm `alpha` through trusted publishing. Already published versions are skipped. If the tag exists but publication failed, a retry uses that tag and verifies that the package files match it. Pushing a version tag also triggers publication; stable versions publish to `latest`.
+To publish a new alpha, update the version in `package.json`, `package-lock.json` and `src/constants.ts`, then push to `main`. GitHub Actions creates the version tag and publishes to npm `alpha` through trusted publishing. Already published versions are skipped. If the tag exists but publication failed, a retry uses that tag and verifies that the package files match it. Pushing a version tag also triggers publication; stable versions publish to `latest`.
 
 License: MIT.

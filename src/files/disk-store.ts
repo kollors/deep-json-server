@@ -4,7 +4,9 @@ import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, write
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createHttpError, createSerialQueue, isSystemError } from '../utils.js';
+import { domainError } from '../errors.js';
+import { canonicalPath } from '../paths.js';
+import { createSerialQueue, isSystemError } from '../utils.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata, type StoredFileMetadata } from './contract.js';
 
 const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void): Transform => {
@@ -15,7 +17,7 @@ const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void):
       size += chunk.length;
 
       if (size > maxFileSize) {
-        callback(createHttpError(413, `Размер файла не должен превышать ${maxFileSize} байт`));
+        callback(domainError('PAYLOAD_TOO_LARGE', `Размер файла не должен превышать ${maxFileSize} байт`));
         return;
       }
 
@@ -91,7 +93,7 @@ const writeMetadata = async (metadataPath: string, files: Map<string, StoredFile
 
 const assertRegularFile = (stats: { isFile(): boolean }): void => {
   if (!stats.isFile()) {
-    throw createHttpError(400, 'Путь должен указывать на обычный файл');
+    throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
   }
 };
 
@@ -103,17 +105,29 @@ const getFileSize = async (path: string): Promise<number> => {
     return stats.size;
   } catch (error) {
     if (isSystemError(error) && error.code === 'ENOENT') {
-      throw createHttpError(404, 'Файл не найден');
+      throw domainError('NOT_FOUND', 'Файл не найден');
     }
 
     throw error;
   }
 };
 
-export const createDiskFileStore = async ({ directory: sourceDirectoryPath, metadata: sourceMetadataPath }: { directory: string; metadata: string }): Promise<FileStore> => {
+export const createDiskFileStore = async ({
+  directory: sourceDirectoryPath,
+  metadata: sourceMetadataPath,
+  protectedPaths = [],
+}: {
+  directory: string;
+  metadata: string;
+  protectedPaths?: string[];
+}): Promise<FileStore> => {
   const directoryPath = resolve(sourceDirectoryPath);
   const metadataPath = resolve(sourceMetadataPath);
   const stagingPath = resolve(directoryPath, '.deep-json-server');
+  const protectedFiles = new Set(await Promise.all(protectedPaths.map(canonicalPath)));
+  const canonicalMetadataPath = await canonicalPath(metadataPath);
+  if (protectedFiles.has(canonicalMetadataPath)) throw new Error('File metadata must not overwrite a protected input file');
+  protectedFiles.add(canonicalMetadataPath);
   const schedule = createSerialQueue();
   const pendingCleanup = new Set<string>();
 
@@ -140,14 +154,16 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
 
   const assertContained = (path: string): void => {
     if (!isPathInside(realDirectoryPath, path)) {
-      throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
+      throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
     }
   };
 
   const resolveFilePath = (path: string): string => {
     const filePath = resolve(directoryPath, path);
+    const canonical = resolve(realDirectoryPath, relative(directoryPath, filePath));
+    if (protectedFiles.has(canonical)) throw domainError('INVALID_INPUT', 'Path is reserved for a server input file');
     if (filePath === directoryPath || !isPathInside(directoryPath, filePath) || filePath === metadataPath || isPathInside(stagingPath, filePath)) {
-      throw createHttpError(400, 'Путь файла выходит за пределы директории хранения');
+      throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
     }
 
     return filePath;
@@ -163,7 +179,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
 
       try {
         if ((await lstat(currentPath)).isSymbolicLink()) {
-          throw createHttpError(400, 'Путь файла не должен содержать символические ссылки');
+          throw domainError('INVALID_INPUT', 'Путь файла не должен содержать символические ссылки');
         }
       } catch (error) {
         if (!isSystemError(error) || error.code !== 'ENOENT') {
@@ -193,7 +209,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
       const currentStats = await lstat(currentPath);
 
       if (currentStats.isSymbolicLink() || !currentStats.isDirectory()) {
-        throw createHttpError(400, 'Путь файла должен содержать только обычные директории');
+        throw domainError('INVALID_INPUT', 'Путь файла должен содержать только обычные директории');
       }
 
       assertContained(await realpath(currentPath));
@@ -217,7 +233,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
       assertRegularFile(await lstat(filePath));
     } catch (error) {
       if (isSystemError(error) && error.code === 'ENOENT') {
-        throw createHttpError(404, 'Файл не найден');
+        throw domainError('NOT_FOUND', 'Файл не найден');
       }
 
       throw error;
@@ -243,7 +259,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     const file = files.get(path);
 
     if (file == null) {
-      throw createHttpError(404, 'Файл не найден');
+      throw domainError('NOT_FOUND', 'Файл не найден');
     }
 
     return file;
@@ -281,7 +297,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
     const key = getFileKey(storedFile);
 
     if (files.has(key) && !override) {
-      throw createHttpError(409, 'Файл уже существует');
+      throw domainError('CONFLICT', 'Файл уже существует');
     }
 
     const stagedPath = resolve(stagingPath, `${randomBytes(12).toString('hex')}.upload`);
@@ -304,7 +320,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
         const exists = files.has(key) || existsOnDisk;
 
         if (exists && !override) {
-          throw createHttpError(409, 'Файл уже существует');
+          throw domainError('CONFLICT', 'Файл уже существует');
         }
 
         const backupPath = `${path}.${randomBytes(6).toString('hex')}.backup`;
@@ -372,7 +388,7 @@ export const createDiskFileStore = async ({ directory: sourceDirectoryPath, meta
       const targetFilePath = await prepareTargetPath(targetPath);
 
       if (files.has(targetPath) || (await pathExists(targetFilePath))) {
-        throw createHttpError(409, 'Файл с таким путём уже существует');
+        throw domainError('CONFLICT', 'Файл с таким путём уже существует');
       }
 
       await rename(sourceFilePath, targetFilePath);

@@ -10,8 +10,6 @@ export interface RelationMetadata {
   targetResource: string;
 }
 
-export const getRelationKeys = (...names: string[]): string[] => [...new Set(names.flatMap((name) => [`${name}Id`, `${name}Ids`]))];
-
 export const resolveRelationResource = (resourceNames: string[], relation: string, sourceResource: string): string | undefined => {
   const resource = resourceNames.find((resourceName) => resourceName === relation) ?? resourceNames.find((resourceName) => singularize(resourceName) === relation);
 

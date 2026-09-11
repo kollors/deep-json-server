@@ -1,10 +1,9 @@
-import type { OpenapiSchema } from '../types.js';
-import { FILE_ROUTES } from './contract.js';
+import { FILE_ROUTES } from './http.js';
 
 type OpenapiObject = Record<string, unknown>;
-const createSchemaReference = (name: string): OpenapiSchema => ({ $ref: `#/components/schemas/${name}` });
-const createJsonContent = (schema: OpenapiSchema): OpenapiObject => ({ content: { 'application/json': { schema } } });
-const createResponse = (description: string, schema?: OpenapiSchema): OpenapiObject => ({ description, ...(schema != null && createJsonContent(schema)) });
+
+import { json as createJsonContent, response as createResponse, ref as createSchemaReference } from '../openapi/helpers.js';
+
 const createErrorResponse = (description: string): OpenapiObject => createResponse(description, createSchemaReference('Error'));
 const createParameterReference = (name: string): OpenapiObject => ({ $ref: `#/components/parameters/${name}` });
 const createRequestBody = (name: string): OpenapiObject => ({ required: true, ...createJsonContent(createSchemaReference(name)) });

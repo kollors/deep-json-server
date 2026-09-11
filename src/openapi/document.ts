@@ -1,15 +1,15 @@
 import { VERSION } from '../constants.js';
-import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/contract.js';
+import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/http.js';
 import { createFilePaths } from '../files/openapi.js';
 import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, type ValidationSchema, valueSchema } from '../model.js';
+import { normalizePagination } from '../pagination.js';
 import { operatorsFor } from '../query/contract.js';
 import { childrenOf, sortableFields } from '../query/options.js';
 import type { OpenapiDocument, OpenapiSchema } from '../types.js';
 import { isObject } from '../utils.js';
 
-const ref = (name: string): OpenapiSchema => ({ $ref: `#/components/schemas/${name}` });
-const json = (schema: unknown) => ({ content: { 'application/json': { schema } } });
-const response = (description: string, schema: unknown) => ({ description, ...json(schema) });
+import { json, ref, response } from './helpers.js';
+
 function toOpenapi(schema: ValidationSchema): OpenapiSchema {
   if (Array.isArray(schema.anyOf) && schema.anyOf.some((v) => isObject(v) && v.type === 'null')) {
     const nonNull = schema.anyOf.find((v) => isObject(v) && v.type !== 'null') as ValidationSchema;
@@ -24,8 +24,8 @@ function toOpenapi(schema: ValidationSchema): OpenapiSchema {
 export function buildOpenapiDocument({
   model,
   files = false,
-  pageSize = 10,
-  maxPageSize = 100,
+  pageSize,
+  maxPageSize,
   info = { title: 'Deep JSON Server API', version: VERSION },
 }: {
   model: Model;
@@ -35,6 +35,7 @@ export function buildOpenapiDocument({
   info?: Record<string, unknown>;
 }): OpenapiDocument {
   assertApi(model, 'openapi');
+  ({ pageSize, maxPageSize } = normalizePagination({ pageSize, maxPageSize }));
   const schemas: Record<string, OpenapiSchema> = {
     Error: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] },
     Pager: {
@@ -51,11 +52,13 @@ export function buildOpenapiDocument({
     schemas[name] = {};
     return true;
   }
-  function baseField(node: Node): OpenapiSchema {
-    const schema = toOpenapi(valueSchema(node));
+  function annotate(schema: OpenapiSchema, node: Node): OpenapiSchema {
     for (const key of ['description', 'example', 'default', 'readOnly', 'writeOnly'] as const) if (node[key] !== undefined) (schema as Record<string, unknown>)[key] = node[key];
     if (node.generated) schema.readOnly = true;
     return schema;
+  }
+  function baseField(node: Node): OpenapiSchema {
+    return annotate(toOpenapi(valueSchema(node)), node);
   }
   function annotateInput(schema: OpenapiSchema, node: Node, defaults: boolean): OpenapiSchema {
     for (const [key, property] of Object.entries(schema.properties ?? {})) {
@@ -78,7 +81,9 @@ export function buildOpenapiDocument({
       if (child.writeOnly) continue;
       if (child.relation || child.base === 'object') {
         const value = child.many ? page(entity, child) : output(entity, child);
-        properties[key] = child.nullable || (child.relation && !child.many && !child.required) ? { anyOf: [value, { type: 'object', nullable: true, enum: [null] }] } : value;
+        const shape = child.nullable || (child.relation && !child.many && !child.required) ? { anyOf: [value, { type: 'object' as const, nullable: true, enum: [null] }] } : value;
+        const attributes = annotate({}, child);
+        properties[key] = Object.keys(attributes).length ? { allOf: [shape], ...attributes } : shape;
       } else properties[key] = baseField(child);
     }
     // scope may select any subset, so response properties are intentionally optional.

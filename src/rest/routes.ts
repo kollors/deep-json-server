@@ -12,18 +12,18 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine): voi
       const context = await engine.context();
       const entity = context.model.byCollection.get(initial.collection)!;
       const options = parseRestOptions(request.query, true);
-      validateRest(engine, entity, options);
+      const plans = validateRest(engine, entity, options);
       const page = engine.list(engine.records(context, entity), entity.root, options);
-      return { data: page.data.map((ref) => project(engine, ref, options.scope, options.nested)), total: page.total };
+      return { data: page.data.map((ref) => project(engine, ref, options.scope, options.nested, '', plans)), total: page.total };
     });
     server.get(itemPath, async (request) => {
       const context = await engine.context();
       const entity = context.model.byCollection.get(initial.collection)!;
       const options = parseRestOptions(request.query, false);
-      validateRest(engine, entity, options);
+      const plans = validateRest(engine, entity, options);
       const ref = engine.find(context, entity, (request.params as Record<string, string>)[entity.primary]);
       if (!ref) throw domainError('NOT_FOUND', 'Record not found');
-      return project(engine, ref, options.scope, options.nested);
+      return project(engine, ref, options.scope, options.nested, '', plans);
     });
     for (const [method, mode] of [
       ['POST', 'create'],
@@ -37,8 +37,8 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine): voi
         handler: async (request, reply) => {
           const options = parseRestOptions(request.query, false);
           const result = await engine.mutate(initial, mode, (request.params as Record<string, string>)[initial.primary], request.body, (ref) => {
-            validateRest(engine, ref.entity, options);
-            return project(engine, ref, options.scope, options.nested);
+            const plans = validateRest(engine, ref.entity, options);
+            return project(engine, ref, options.scope, options.nested, '', plans);
           });
           return reply.code(mode === 'create' ? 201 : 200).send(result);
         },

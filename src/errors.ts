@@ -1,4 +1,4 @@
-export type ErrorCode = 'INVALID_INPUT' | 'INVALID_QUERY' | 'NOT_FOUND' | 'CONFLICT';
+export type ErrorCode = 'INVALID_INPUT' | 'INVALID_QUERY' | 'NOT_FOUND' | 'CONFLICT' | 'PAYLOAD_TOO_LARGE';
 export class DomainError extends Error {
   constructor(
     readonly code: ErrorCode,

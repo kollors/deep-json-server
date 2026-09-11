@@ -65,7 +65,7 @@ export function validateScope(node: Node, scope: Scope, depth = 0): void {
   for (const [key, selection] of Object.entries(scope)) {
     if (key === '*') continue;
     const child = childrenOf(node)[key];
-    if (!child || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
+    if (!Object.hasOwn(childrenOf(node), key) || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
     if (selection) {
       if (!child.relation && child.base !== 'object') badQuery(`Scalar field ${key} cannot have a selection`);
       validateScope(child, selection, depth + 1);

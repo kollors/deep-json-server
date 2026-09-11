@@ -3,7 +3,7 @@ import { isEqual, isObject } from '../utils.js';
 import { operatorsFor } from './contract.js';
 import { badQuery, childrenOf } from './options.js';
 
-type Predicate = (value: unknown) => boolean;
+export type Predicate = (value: unknown) => boolean;
 const comparable = (value: unknown): value is string | number => typeof value === 'string' || typeof value === 'number';
 const equal = (left: unknown, right: unknown) => isEqual(left, right);
 function condition(node: Node, input: unknown, depth: number): Predicate {
@@ -69,6 +69,7 @@ export function compileWhere(node: Node, input: unknown, depth = 0): Predicate {
     }
     const child = childrenOf(node)[key];
     if (!Object.hasOwn(childrenOf(node), key) || child.writeOnly) badQuery(`Unknown or inaccessible filter field ${key}`);
+    if (child.mixed) badQuery(`Field ${key} has inconsistent types; provide an explicit schema`);
     const nested = condition(child, value, depth + 1);
     return (field) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined);
   });

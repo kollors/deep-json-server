@@ -26,7 +26,12 @@ try {
       '--input-type=module',
       '--eval',
       `import assert from 'node:assert/strict';
-      import { createServer } from '@kollors/deep-json-server';
+      import { createServer } from '@kollors/deep-json-server/server';
+      import { generateOpenapi } from '@kollors/deep-json-server/openapi';
+      import { generateGraphql } from '@kollors/deep-json-server/graphql';
+      const schema = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } };
+      assert.equal((await generateOpenapi(schema)).openapi, '3.0.3');
+      assert.match(await generateGraphql(schema), /itemList/);
       const facade = await createServer({
         database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } },
         graphql: { enabled: true }, server: { logger: false },

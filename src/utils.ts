@@ -4,10 +4,6 @@ import pluralize from 'pluralize';
 
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-export interface HttpError extends Error {
-  statusCode: number;
-}
-
 export const assertKnownKeys = (value: object, keys: Set<string>, path: string): void => {
   const unknownKey = Object.keys(value).find((key) => !keys.has(key));
 
@@ -15,8 +11,6 @@ export const assertKnownKeys = (value: object, keys: Set<string>, path: string):
     throw new Error(`Неизвестный ключ ${path}.${unknownKey}`);
   }
 };
-
-export const createHttpError = (statusCode: number, message: string): HttpError => Object.assign(new Error(message), { statusCode });
 
 /** Creates a scheduler that runs mutations sequentially. */
 export const createSerialQueue = () => {
@@ -43,12 +37,9 @@ export const createUniqueId = (isUsed: (id: string) => boolean): string => {
   return id;
 };
 
-export const getResourceNames = (data: object): string[] => Object.keys(data);
 export const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isSafeKey = (key: string): boolean => !UNSAFE_KEYS.has(key);
 export const isSystemError = (error: unknown): error is NodeJS.ErrnoException => error instanceof Error && 'code' in error;
-/** Converts a single value or an array to an array. */
-export const toArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [value]);
 
 export const isEqual = (left: unknown, right: unknown): boolean => {
   if (Object.is(left, right)) {

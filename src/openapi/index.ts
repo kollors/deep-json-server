@@ -5,16 +5,17 @@ import { DEFAULT_HOST, DEFAULT_PORT } from '../constants.js';
 import type { OpenapiDocument } from '../types.js';
 
 const getServerUrl = (host: string, port: number): string => {
-  const serverPort = Number(port);
+  const serverPort = port;
 
-  if (typeof host !== 'string' || host === '') {
+  if (typeof host !== 'string' || host.trim() === '') {
     throw new Error('Адрес сервера не должен быть пустым');
   }
 
-  if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65_535) {
-    throw new Error('Порт должен быть целым числом от 1 до 65535');
+  if (!Number.isInteger(serverPort) || serverPort < 0 || serverPort > 65_535) {
+    throw new Error('Порт должен быть целым числом от 0 до 65535');
   }
 
+  if (serverPort === 0) return '/';
   const serverHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 
   return `http://${serverHost}:${serverPort}`;

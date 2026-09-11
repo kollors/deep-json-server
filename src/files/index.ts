@@ -4,6 +4,7 @@ import { createDiskFileStore } from './disk-store.js';
 import { createMemoryFileStore } from './memory-store.js';
 
 /** Creates a disk- or memory-backed file store. */
-export const createFileStore = async (config: FilesConfig): Promise<FileStore> => (config.data != null ? createMemoryFileStore(config.data) : createDiskFileStore(config));
+export const createFileStore = async (config: FilesConfig, protectedPaths: string[] = []): Promise<FileStore> =>
+  config.data != null ? createMemoryFileStore(config.data) : createDiskFileStore({ ...config, protectedPaths });
 
 export { registerFileRoutes } from './routes.js';

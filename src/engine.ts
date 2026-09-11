@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './constants.js';
 import type { DatabaseStore } from './database.js';
-import { createId, validateDatabase } from './database.js';
+import { createId } from './database.js';
 import { domainError } from './errors.js';
 import { childName, type Entity, inferModel, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
-import { compileWhere } from './query/filter.js';
+import { compileWhere, type Predicate } from './query/filter.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
 import type { DatabaseData, DatabaseRecord, JsonObject } from './types.js';
 import { isObject } from './utils.js';
+
+const REF = Symbol('record reference');
 export interface Ref {
+  [REF]: true;
   entity: Entity;
   node: Node;
   value: JsonObject;
@@ -20,12 +24,18 @@ export interface Context {
   model: Model;
   indexes: Map<string, Map<string, JsonObject[]>>;
 }
+export interface PreparedList {
+  page: number;
+  pageSize: number;
+  predicate?: Predicate;
+  rules: Array<{ direction: 'ASC' | 'DESC'; keys: string[] }>;
+}
 export interface Page {
   data: Ref[];
   total: number;
 }
 export const makeContext = (data: DatabaseData, model: Model): Context => ({ data, model, indexes: new Map() });
-export const rootRef = (context: Context, entity: Entity, value: JsonObject): Ref => ({ context, entity, node: entity.root, value, root: value, bindings: {} });
+export const rootRef = (context: Context, entity: Entity, value: JsonObject): Ref => ({ [REF]: true, context, entity, node: entity.root, value, root: value, bindings: {} });
 const keyOf = (value: unknown): string => `${typeof value}:${String(value)}`;
 function sourceValues(ref: Ref, node: Node): unknown[] {
   const path = node.source as string;
@@ -36,7 +46,7 @@ function sourceValues(ref: Ref, node: Node): unknown[] {
 }
 export function related(ref: Ref, node: Node): Ref[] {
   const entity = node.relation as Entity;
-  const indexKey = `${entity.name}:${node.target}`;
+  const indexKey = `${entity.collection}:${node.target}`;
   let index = ref.context.indexes.get(indexKey);
   if (!index) {
     index = new Map();
@@ -60,12 +70,12 @@ export function resolveField(ref: Ref, node: Node): unknown {
   }
   const key = childName(node);
   const value = Object.hasOwn(ref.value, key) ? ref.value[key] : undefined;
-  if (node.base !== 'object' || value == null) return value;
+  if ((ref.context.model.explicit && node.base !== 'object') || value == null) return value;
   const wrap = (object: JsonObject): Ref => ({ ...ref, node, value: object, bindings: { ...ref.bindings, [node.path]: object } });
   if (Array.isArray(value)) return value.every(isObject) ? (value as JsonObject[]).map(wrap) : value;
   return isObject(value) ? wrap(value as JsonObject) : value;
 }
-export const isRef = (value: unknown): value is Ref => isObject(value) && 'context' in value && 'bindings' in value;
+export const isRef = (value: unknown): value is Ref => isObject(value) && (value as Partial<Ref>)[REF] === true;
 function filterView(ref: Ref): Record<string, unknown> {
   const value: Record<string, unknown> = {};
   for (const [name, node] of Object.entries(childrenOf(ref.node)))
@@ -81,30 +91,38 @@ function filterView(ref: Ref): Record<string, unknown> {
 }
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 export class Engine {
+  private inferredModels = new WeakMap<DatabaseData, Model>();
   constructor(
     readonly store: DatabaseStore,
     public model: Model,
-    readonly pageSize = 10,
-    readonly maxPageSize = 100,
-  ) {}
+    readonly pageSize = DEFAULT_PAGE_SIZE,
+    readonly maxPageSize = DEFAULT_MAX_PAGE_SIZE,
+  ) {
+    this.inferredModels.set(store.database.data, model);
+  }
+  private modelFor(data: DatabaseData): Model {
+    if (this.model.explicit) return this.model;
+    let model = this.inferredModels.get(data);
+    if (!model) {
+      model = inferModel(data);
+      this.inferredModels.set(data, model);
+    }
+    return model;
+  }
   async context(): Promise<Context> {
     const data = await this.store.read();
-    if (!this.model.explicit) this.model = inferModel(data);
+    if (!this.model.explicit) this.model = this.modelFor(data);
     return makeContext(data, this.model);
-  }
-  entity(collection: string): Entity {
-    const entity = this.model.byCollection.get(collection);
-    if (!entity) throw domainError('NOT_FOUND', 'Resource not found');
-    return entity;
   }
   records(context: Context, entity: Entity): Ref[] {
     return (context.data[entity.collection] ?? []).map((value) => rootRef(context, entity, value));
   }
   find(context: Context, entity: Entity, key: unknown): Ref | undefined {
-    return this.records(context, entity).find((ref) => String(ref.value[entity.primary]) === String(key));
+    const value = (context.data[entity.collection] ?? []).find((record) => String(record[entity.primary]) === String(key));
+    return value ? rootRef(context, entity, value) : undefined;
   }
-  validateOptions(node: Node, options: ListOptions): { page: number; pageSize: number } {
-    if (options.where !== undefined) compileWhere(node, options.where);
+  prepareOptions(node: Node, options: ListOptions = {}): PreparedList {
+    const predicate = options.where !== undefined ? compileWhere(node, options.where) : undefined;
     if (options.order !== undefined) {
       if (!Array.isArray(options.order)) badQuery('order must be an array');
       for (const rule of options.order) {
@@ -127,13 +145,11 @@ export class Engine {
       !Number.isSafeInteger((page - 1) * pageSize)
     )
       badQuery(`Invalid pager; pageSize must be 1..${this.maxPageSize}`);
-    return { page, pageSize };
+    return { page, pageSize, predicate, rules: (options.order ?? []).map((rule) => ({ direction: rule.direction, keys: pathParts(rule.field) })) };
   }
-  list(records: Ref[], node: Node, options: ListOptions = {}): Page {
-    const { page, pageSize } = this.validateOptions(node, options);
-    const predicate = options.where ? compileWhere(node, options.where) : undefined;
+  list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options)): Page {
+    const { page, pageSize, predicate, rules } = prepared;
     const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : [...records];
-    const rules = (options.order ?? []).map((rule) => ({ ...rule, keys: pathParts(rule.field) }));
     if (rules.length)
       data.sort((a, b) => {
         for (const rule of rules) {
@@ -219,11 +235,11 @@ export class Engine {
     }
     const outcome = await this.store.update((database) => {
       const finish = (data: DatabaseData, record: JsonObject) => {
-        const model = this.model.explicit ? this.model : inferModel(data);
+        const model = this.modelFor(data);
         const currentEntity = model.byCollection.get(entity.collection) as Entity;
         const ref = rootRef(makeContext(data, model), currentEntity, record);
         const output = prepare ? prepare(ref) : (ref as T);
-        return { model: this.model.explicit ? this.model : inferModel(database.data), output };
+        return { model: data === database.data || this.model.explicit ? model : this.modelFor(database.data), output };
       };
       // Reserve the highest existing generated value before any deletion or replacement.
       for (const owner of this.model.entities)
@@ -273,11 +289,6 @@ export class Engine {
       if (mode === 'create') collection.push(record);
       else collection[collection.indexOf((current as Ref).value)] = record;
       this.validateData(database.data);
-      try {
-        validateDatabase(database.data, new Map(this.model.entities.map((e) => [e.collection, e.primary])));
-      } catch (error) {
-        throw domainError('INVALID_INPUT', (error as Error).message);
-      }
       return finish(database.data, record);
     });
     this.model = outcome.model;

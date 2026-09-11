@@ -122,7 +122,8 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   assert.equal(doc.info.title, 'Example');
   assert.equal(doc.servers[0].url, 'http://[::1]:9000');
   assert.match(await readFile(graphqlPath, 'utf8'), /itemList/);
-  for (const bad of [{ host: '' }, { port: 0 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
+  for (const bad of [{ host: '' }, { port: -1 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
+  assert.deepEqual(createOpenapi({ document: doc, port: 0 }).servers, [{ url: '/' }]);
   model.Item.api = ['openapi'];
   const only = await facadeFor(model);
   assert.ok((await only.openapi()).paths['/items']);

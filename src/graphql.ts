@@ -16,14 +16,11 @@ import {
   GraphQLSchema,
   GraphQLString,
 } from 'graphql';
-import type { Context, Engine, Ref } from './engine.js';
-import { resolveField } from './engine.js';
-import { preflight } from './graphql/preflight.js';
 import { assertApi, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from './model.js';
 import { operatorsFor } from './query/contract.js';
-import { type ListOptions, sortableFields } from './query/options.js';
+import { sortableFields } from './query/options.js';
 
-export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
+export function buildGraphql(model: Model): GraphQLSchema {
   assertApi(model, 'graphql');
   const names = new Set(['String', 'Float', 'Int', 'Boolean', 'ID', 'Query', 'Mutation', 'Pager', 'OrderDirection']);
   const reserve = (name: string): string => {
@@ -60,6 +57,7 @@ export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
     [entity, node] = canonical(entity, node);
     let type = objects.get(node);
     if (type) return type;
+    if (!Object.values(node.children).some((child) => !child.writeOnly)) throw new Error(`GraphQL object ${nodeName(entity, node)} must contain at least one visible field`);
     type = new GraphQLObjectType({
       name: reserve(nodeName(entity, node)),
       fields: () =>
@@ -76,12 +74,8 @@ export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
                 {
                   type: childType,
                   description: child.description,
-                  extensions: object && child.many ? { listNode: child } : undefined,
+                  extensions: { node: child, ...(object && child.many ? { listNode: child } : {}) },
                   args: object && child.many ? listArgs(entity, child) : undefined,
-                  resolve: (ref: Ref, args: ListOptions) => {
-                    const value = resolveField(ref, child);
-                    return object && child.many && value != null ? engine!.list(value as Ref[], child, args) : value;
-                  },
                 },
               ];
             }),
@@ -183,8 +177,8 @@ export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
     const ordering = order(entity, node);
     return { where: { type: where(entity, node) }, pager: { type: pager }, ...(ordering ? { order: { type: new GraphQLList(new GraphQLNonNull(ordering)) } } : {}) };
   }
-  const queries: GraphQLFieldConfigMap<unknown, { snapshot: () => Promise<Context> }> = {};
-  const mutations: GraphQLFieldConfigMap<unknown, { snapshot: () => Promise<Context> }> = {};
+  const queries: GraphQLFieldConfigMap<unknown, unknown> = {};
+  const mutations: GraphQLFieldConfigMap<unknown, unknown> = {};
   for (const entity of model.entities.filter((e) => e.api.includes('graphql'))) {
     const name = operationName(entity);
     for (const operation of [name, `${name}List`]) if (queries[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
@@ -192,19 +186,12 @@ export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
     queries[name] = {
       type: output(entity, entity.root),
       args: keyArg,
-      resolve: async (_root, args, ctx, info) => {
-        preflight(info, engine!);
-        return engine!.find(await ctx.snapshot(), entity, args[entity.primary]) ?? null;
-      },
+      extensions: { entity, operation: 'find' },
     };
     queries[`${name}List`] = {
       type: new GraphQLNonNull(page(entity, entity.root)),
       args: listArgs(entity, entity.root),
-      extensions: { listNode: entity.root },
-      resolve: async (_root, args, ctx, info) => {
-        preflight(info, engine!);
-        return engine!.list(engine!.records(await ctx.snapshot(), entity), entity.root, args);
-      },
+      extensions: { listNode: entity.root, entity, operation: 'list' },
     };
     for (const mode of ['create', 'replace', 'update', 'delete'] as const) {
       const operation = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
@@ -213,10 +200,7 @@ export function buildGraphql(model: Model, engine?: Engine): GraphQLSchema {
       mutations[operation] = {
         type: output(entity, entity.root),
         args: { ...(mode !== 'create' ? keyArg : {}), ...(mode !== 'delete' && fields.length ? { data: { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) } } : {}) },
-        resolve: (_root, args, _ctx, info) => {
-          preflight(info, engine!);
-          return engine!.mutate(entity, mode, args[entity.primary], args.data ?? {});
-        },
+        extensions: { entity, operation: mode },
       };
     }
   }

@@ -1,7 +1,6 @@
-import { basename } from 'node:path';
 import type { Readable } from 'node:stream';
-import type { OpenapiSchema } from '../types.js';
-import { createHttpError, isObject } from '../utils.js';
+import { domainError } from '../errors.js';
+import { isObject } from '../utils.js';
 
 export interface StoredFileMetadata {
   directory: string;
@@ -10,11 +9,6 @@ export interface StoredFileMetadata {
 }
 export interface FileRecord extends StoredFileMetadata {
   size: number;
-}
-export interface FileMetadata extends FileRecord {
-  downloadUrl: string;
-  metadataUrl: string;
-  url: string;
 }
 export interface FileUpload extends StoredFileMetadata {
   maxFileSize: number;
@@ -33,41 +27,7 @@ export interface FileStore {
   upload(upload: FileUpload): Promise<{ created: boolean; file: FileRecord }>;
 }
 
-export const FILE_HEADERS = {
-  directory: { key: 'content-directory', name: 'Content-Directory' },
-  name: { key: 'content-name', name: 'Content-Name' },
-  override: { key: 'content-override', name: 'Content-Override' },
-} as const;
-
-export const FILE_ROUTES = {
-  download: '/_files/download',
-  metadata: '/_files/metadata',
-  storage: '/_files/storage',
-} as const;
-
-export const PATCH_BODY_LIMIT = 64 * 1024;
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+\/[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
-
-export const FILE_METADATA_SCHEMA: OpenapiSchema = {
-  properties: {
-    directory: { type: 'string' },
-    downloadUrl: { format: 'uri-reference', type: 'string' },
-    metadataUrl: { format: 'uri-reference', type: 'string' },
-    mimeType: { type: 'string' },
-    name: { type: 'string' },
-    size: { minimum: 0, type: 'integer' },
-    url: { format: 'uri-reference', type: 'string' },
-  },
-  required: ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url'],
-  type: 'object',
-};
-
-export const FILE_UPDATE_SCHEMA: OpenapiSchema = {
-  additionalProperties: false,
-  anyOf: [{ required: ['directory'] }, { required: ['name'] }],
-  properties: { directory: { type: 'string' }, name: { type: 'string' } },
-  type: 'object',
-};
 
 export const getFileKey = ({ directory, name }: Pick<StoredFileMetadata, 'directory' | 'name'>): string => [directory, name].filter(Boolean).join('/');
 
@@ -91,7 +51,7 @@ export const validateName = (value: unknown, source: string): string => {
     hasControlCharacter(value) ||
     WINDOWS_RESERVED_NAME.test(value)
   ) {
-    throw createHttpError(400, `${source} должен содержать безопасное имя файла`);
+    throw domainError('INVALID_INPUT', `${source} должен содержать безопасное имя файла`);
   }
 
   return value;
@@ -99,7 +59,7 @@ export const validateName = (value: unknown, source: string): string => {
 
 export const validateDirectory = (value: unknown, source: string): string => {
   if (typeof value !== 'string') {
-    throw createHttpError(400, `${source} должен содержать безопасный относительный путь`);
+    throw domainError('INVALID_INPUT', `${source} должен содержать безопасный относительный путь`);
   }
 
   if (value === '') {
@@ -109,7 +69,7 @@ export const validateDirectory = (value: unknown, source: string): string => {
   const parts = value.split('/');
 
   if (value.startsWith('/') || value.endsWith('/') || value.includes('\\') || value.includes('\0') || parts.some((part) => part === '' || part === '.' || part === '..')) {
-    throw createHttpError(400, `${source} должен содержать безопасный относительный путь`);
+    throw domainError('INVALID_INPUT', `${source} должен содержать безопасный относительный путь`);
   }
 
   return value;
@@ -119,7 +79,7 @@ export const normalizeMimeType = (value: unknown, source = 'Заголовок C
   const mimeType = typeof value === 'string' ? value.split(';', 1)[0].trim().toLowerCase() : '';
 
   if (mimeType === '' || !MIME_TYPE_PATTERN.test(mimeType)) {
-    throw createHttpError(400, `${source} должен содержать корректный MIME-тип`);
+    throw domainError('INVALID_INPUT', `${source} должен содержать корректный MIME-тип`);
   }
 
   return mimeType;
@@ -148,18 +108,3 @@ export const getPathLocation = (path: string): Pick<StoredFileMetadata, 'directo
 
   return { directory: parts.join('/'), name };
 };
-
-const encodeFilePath = (file: StoredFileMetadata): string => getFileKey(file).split('/').map(encodeURIComponent).join('/');
-
-export const createFileMetadata = (file: FileRecord): FileMetadata => {
-  const path = encodeFilePath(file);
-
-  return {
-    ...file,
-    downloadUrl: `${FILE_ROUTES.download}/${path}`,
-    metadataUrl: `${FILE_ROUTES.metadata}/${path}`,
-    url: `${FILE_ROUTES.storage}/${path}`,
-  };
-};
-
-export const getDownloadName = (name: string): string => encodeURIComponent(basename(name)).replaceAll("'", '%27');

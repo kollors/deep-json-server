@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import type { MemoryFile } from '../config.js';
-import { createHttpError, createSerialQueue } from '../utils.js';
+import { domainError } from '../errors.js';
+import { createSerialQueue } from '../utils.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata } from './contract.js';
 
 const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer> => {
@@ -13,7 +14,7 @@ const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer
     size += buffer.length;
 
     if (size > maxFileSize) {
-      throw createHttpError(413, `Размер файла не должен превышать ${maxFileSize} байт`);
+      throw domainError('PAYLOAD_TOO_LARGE', `Размер файла не должен превышать ${maxFileSize} байт`);
     }
 
     chunks.push(buffer);
@@ -49,7 +50,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
     const storedFile = storedFiles.get(path);
 
     if (storedFile == null) {
-      throw createHttpError(404, 'Файл не найден');
+      throw domainError('NOT_FOUND', 'Файл не найден');
     }
 
     return storedFile;
@@ -66,7 +67,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
     const path = getFileKey({ directory, name });
 
     if (storedFiles.has(path) && !override) {
-      throw createHttpError(409, 'Файл уже существует');
+      throw domainError('CONFLICT', 'Файл уже существует');
     }
 
     const content = await readUpload(stream, maxFileSize);
@@ -75,7 +76,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
       const exists = storedFiles.has(path);
 
       if (exists && !override) {
-        throw createHttpError(409, 'Файл уже существует');
+        throw domainError('CONFLICT', 'Файл уже существует');
       }
 
       const file = { directory, mimeType, name, size: content.length };
@@ -93,7 +94,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
       const targetPath = getFileKey(file);
 
       if (sourcePath !== targetPath && storedFiles.has(targetPath)) {
-        throw createHttpError(409, 'Файл с таким путём уже существует');
+        throw domainError('CONFLICT', 'Файл с таким путём уже существует');
       }
 
       storedFiles.delete(sourcePath);
@@ -105,7 +106,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
   const remove = (path: string): ReturnType<FileStore['remove']> =>
     schedule(() => {
       if (!storedFiles.delete(path)) {
-        throw createHttpError(404, 'Файл не найден');
+        throw domainError('NOT_FOUND', 'Файл не найден');
       }
     });
 

@@ -41,6 +41,7 @@ export interface Node extends Field {
   children: Record<string, Node>;
   relation?: Entity;
   implicit?: boolean;
+  mixed?: boolean;
 }
 export interface Entity {
   name: string;
@@ -117,7 +118,7 @@ function addField(entity: Entity, path: string, field: Field, implicit = false):
   const key = parts.at(-1) as string;
   const node = newNode(path, field);
   node.implicit = implicit;
-  node.children = parent.children[key]?.children ?? {};
+  node.children = parent.children[key]?.children ?? Object.create(null);
   parent.children[key] = node;
   entity.fields[path] = node;
   return node;
@@ -142,6 +143,7 @@ function checkField(path: string, field: unknown): asserts field is Field {
   if (field.onDelete !== undefined && !['restrict', 'cascade'].includes(String(field.onDelete))) throw new Error(`${path}: invalid onDelete`);
   if (field.format !== undefined && !['date', 'date-time', 'email', 'uri', 'uuid'].includes(String(field.format))) throw new Error(`${path}: unknown format`);
   const base = (field.type as string).replace(/\[\]$/, '');
+  if (base === 'object' && field.enum !== undefined) throw new Error(`${path}: enum is supported only for primitive fields`);
   if (['minLength', 'maxLength', 'pattern', 'format'].some((k) => field[k] !== undefined) && base !== 'string') throw new Error(`${path}: string constraint on non-string field`);
   if (['minimum', 'maximum'].some((k) => field[k] !== undefined) && base !== 'number') throw new Error(`${path}: number constraint on non-number field`);
   if (typeof field.pattern === 'string') new RegExp(field.pattern, 'u');
@@ -242,7 +244,8 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
 }
 export function writable(node: Node, mode: InputMode): boolean {
   if (node.relation || node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
-  return node.base !== 'object' || Object.values(node.children).some((child) => writable(child, mode));
+  const children = Object.values(node.children);
+  return node.base !== 'object' || children.length === 0 || children.some((child) => writable(child, mode));
 }
 export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
@@ -295,13 +298,24 @@ export function inferModel(database: DatabaseData): Model {
   for (const [collection, records] of Object.entries(database)) {
     const name = toPascalCase(singularize(collection));
     const entity: Entity = { name, collection, api: [], primary: 'id', fields: Object.create(null), root: newNode('', { type: 'object' }) };
+    const observed = new Map<string, Set<string>>();
     const scan = (record: Record<string, unknown>, prefix = '') => {
       for (const [key, value] of Object.entries(record)) {
         if (!NAME.test(key) || !isSafeKey(key)) continue;
         const path = prefix + key;
         const sample = Array.isArray(value) ? value.find((v) => v !== null) : value;
         const base = isObject(sample) ? 'object' : ['string', 'number', 'boolean'].includes(typeof sample) ? typeof sample : 'string';
-        if (!entity.fields[path] || sample != null) addField(entity, path, { type: base + (Array.isArray(value) ? '[]' : '') });
+        const type = base + (Array.isArray(value) ? '[]' : '');
+        const types = observed.get(path) ?? new Set<string>();
+        if (sample != null) types.add(type);
+        observed.set(path, types);
+        const node = entity.fields[path] ?? addField(entity, path, { type });
+        if (types.size) {
+          node.mixed = types.size > 1;
+          node.base = [...types].some((type) => type.startsWith('object')) ? 'object' : [...types].sort()[0].replace(/\[\]$/, '');
+          node.many = [...types].every((type) => type.endsWith('[]'));
+          node.type = node.base + (node.many ? '[]' : '');
+        }
         if (isObject(value)) scan(value, `${path}.`);
         if (Array.isArray(value))
           value.filter(isObject).forEach((v) => {
@@ -321,6 +335,7 @@ export function inferModel(database: DatabaseData): Model {
   const resources = Object.keys(database);
   for (const entity of model.entities)
     for (const field of Object.values(entity.fields)) {
+      if (field.mixed) continue;
       const relation = getRelationMetadata(childName(field), resources, entity.collection);
       if (!relation) continue;
       const target = model.byCollection.get(relation.targetResource) as Entity;

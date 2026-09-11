@@ -1,17 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import type { GraphQLSchema } from 'graphql';
 import mercurius from 'mercurius';
-import type { Context, Engine } from '../engine.js';
+import type { Engine } from '../engine.js';
 import { DomainError } from '../errors.js';
+import { attachResolvers, createGraphqlContext } from './resolvers.js';
 export function registerGraphqlRoutes(server: FastifyInstance, schema: GraphQLSchema, engine: Engine, path: string): void {
+  attachResolvers(schema, engine);
   server.register(mercurius, {
     schema,
     path,
     queryDepth: 32,
-    context: () => {
-      let snapshot: Promise<Context> | undefined;
-      return { snapshot: () => (snapshot ??= engine.context()) };
-    },
+    context: () => createGraphqlContext(engine),
     errorFormatter: (execution, context) => {
       const formatted = mercurius.defaultErrorFormatter(execution, context);
       formatted.response.errors = execution.errors.map((error) => {

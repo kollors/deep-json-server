@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyServerOptions } from 'fastify';
 import type { ModelSchema } from './model.js';
+import { normalizePagination } from './pagination.js';
 import type { DatabaseData } from './types.js';
 import { assertKnownKeys, isObject } from './utils.js';
 
@@ -201,7 +202,7 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   const maxFileSize = getPositiveInteger(server.maxFileSize, 'config.server.maxFileSize');
   const maxPageSize = getPositiveInteger(server.maxPageSize, 'config.server.maxPageSize');
   const pageSize = getPositiveInteger(server.pageSize, 'config.server.pageSize');
-  if (pageSize !== undefined && pageSize > (maxPageSize ?? 100)) throw new Error('pageSize exceeds maxPageSize');
+  normalizePagination({ pageSize, maxPageSize });
   const port = server.port;
 
   if (port != null && (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65_535)) {
@@ -219,7 +220,12 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   return {
     database,
     files,
-    openapi: { enabled: openapi.enabled as boolean | undefined, endpoint: openapiEndpoint, path: resolveConfigPath(openapiPath, directoryPath), ...(info && { info: info as OpenapiConfig['info'] }) },
+    openapi: {
+      enabled: openapi.enabled as boolean | undefined,
+      endpoint: openapiEndpoint,
+      path: resolveConfigPath(openapiPath, directoryPath),
+      ...(info && { info: copyInput(info) as OpenapiConfig['info'] }),
+    },
     graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphql.enabled as boolean | undefined, endpoint },
     server: {
       cors: cors as boolean | undefined,
@@ -237,7 +243,7 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
 export const normalizeServerConfig = (config: DeepJsonServerConfig, directoryPath?: string): NormalizedServerConfig => normalizeConfig(config, directoryPath);
 
 /** Loads an ES module config and resolves paths from its directory. */
-export async function readServerConfig(configPath: string): Promise<NormalizedServerConfig> {
+export async function readConfigModule(configPath: string): Promise<{ config: Record<string, unknown>; directory: string; path: string }> {
   const resolvedConfigPath = resolve(getString(configPath, 'config', true));
   let config: unknown;
 
@@ -257,5 +263,44 @@ export async function readServerConfig(configPath: string): Promise<NormalizedSe
     throw new Error('Конфигурация сервера должна экспортировать JSON-объект через export default');
   }
 
-  return normalizeConfig(config, dirname(resolvedConfigPath));
+  return { config, directory: dirname(resolvedConfigPath), path: resolvedConfigPath };
+}
+
+const sourcePaths = new WeakMap<NormalizedServerConfig, string>();
+export const configSourcePath = (config: NormalizedServerConfig): string | undefined => sourcePaths.get(config);
+export function configure(config: unknown, directory: string, sourcePath?: string): NormalizedServerConfig {
+  const normalized = normalizeConfig(config, directory);
+  if (sourcePath) sourcePaths.set(normalized, sourcePath);
+  return normalized;
+}
+export function configureGeneration(
+  source: Record<string, unknown>,
+  formats: string[],
+  directory: string,
+  sourcePath: string,
+  overrides: { host?: string; port?: number; files?: boolean },
+): NormalizedServerConfig {
+  assertKnownKeys(source, CONFIG_KEYS, 'config');
+  const database = getObject(source.database, 'config.database', true);
+  if (database.schema === undefined) throw new Error('Generation requires an explicit model schema');
+  const openapi = formats.includes('openapi');
+  const server = openapi ? (getObject(source.server, 'config.server') ?? {}) : {};
+  return configure(
+    {
+      database: { data: {}, schema: database.schema },
+      openapi: openapi ? source.openapi : undefined,
+      graphql: formats.includes('graphql') ? source.graphql : undefined,
+      files: openapi && (overrides.files || source.files != null) ? { data: [] } : undefined,
+      server: openapi
+        ? {
+            host: overrides.host ?? server.host,
+            port: overrides.port ?? server.port,
+            pageSize: server.pageSize,
+            maxPageSize: server.maxPageSize,
+          }
+        : {},
+    },
+    directory,
+    sourcePath,
+  );
 }

@@ -3,8 +3,9 @@ import { resolve } from 'node:path';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import type { DatabaseConfig } from './config.js';
+import { domainError } from './errors.js';
 import type { DatabaseData, DatabaseRecord } from './types.js';
-import { createHttpError, createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
+import { createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
 
 export interface DatabaseContainer {
   data: DatabaseData;
@@ -135,6 +136,14 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
 
 export const readDatabaseFile = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'), keys);
 
+const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => {
+  try {
+    validateDatabase(data, keys);
+  } catch (error) {
+    throw domainError('INVALID_INPUT', (error as Error).message);
+  }
+};
+
 const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = await readDatabaseFile(resolvedDatabasePath, keys);
@@ -156,7 +165,7 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
       await counterStore.read();
       const draft = { data: structuredClone(database.data), counters: structuredClone(counterStore.data) };
       const result = operation(draft);
-      validateDatabase(draft.data, keys);
+      validateDraft(draft.data, keys);
       // Reserve generated numbers first: failed data writes may leave gaps, never reused IDs.
       if (JSON.stringify(draft.counters) !== JSON.stringify(counterStore.data)) {
         counterStore.data = draft.counters;
@@ -183,7 +192,7 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
       const draft = structuredClone(database);
       const result = operation(draft);
 
-      validateDatabase(draft.data, keys);
+      validateDraft(draft.data, keys);
       database.data = draft.data;
       database.counters = draft.counters;
 
@@ -196,16 +205,6 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
 /** Creates a disk- or memory-backed database with serialized updates. */
 export const createDatabaseStore = async (config: DatabaseConfig, keys?: Map<string, string>): Promise<DatabaseStore> =>
   config.data != null ? createMemoryDatabaseStore(config.data, keys) : createDiskDatabaseStore(config.path, keys);
-
-export const getCollection = (database: DatabaseContainer, resource: string): DatabaseRecord[] => {
-  const collection = isSafeKey(resource) ? database.data[resource] : undefined;
-
-  if (!Array.isArray(collection)) {
-    throw createHttpError(404, 'Ресурс не найден');
-  }
-
-  return collection;
-};
 
 export const findItemIndex = (collection: DatabaseRecord[], id: unknown): number => collection.findIndex((item) => String(item.id) === String(id));
 

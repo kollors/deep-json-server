@@ -1,19 +1,11 @@
-import Fastify, { type FastifyInstance, type FastifyListenOptions } from 'fastify';
-import { printSchema } from 'graphql';
-import { type DeepJsonServerConfig, normalizeServerConfig } from './config.js';
-import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_MAX_PAGE_SIZE, DEFAULT_PORT } from './constants.js';
-import { createDatabaseStore } from './database.js';
-import { Engine } from './engine.js';
+import type { FastifyInstance, FastifyListenOptions } from 'fastify';
+import { configSourcePath, type DeepJsonServerConfig, type NormalizedServerConfig, normalizeServerConfig } from './config.js';
+import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT } from './constants.js';
 import { DomainError } from './errors.js';
 import { resolveFeatures, type ServerFeatures, validateEndpoints } from './features.js';
-import { FILE_HEADERS } from './files/contract.js';
-import { createFileStore, registerFileRoutes } from './files/index.js';
-import { registerGraphqlRoutes } from './graphql/routes.js';
-import { buildGraphql } from './graphql.js';
-import { assertApi, inferModel, loadModel } from './model.js';
-import { buildOpenapiDocument } from './openapi/document.js';
-import { createOpenapi } from './openapi/index.js';
-import { registerRestRoutes } from './rest/routes.js';
+import { domainStatus } from './http/errors.js';
+import { normalizePagination } from './pagination.js';
+import { inputPaths } from './paths.js';
 import type { OpenapiDocument } from './types.js';
 import { isObject } from './utils.js';
 export interface ServerFacade {
@@ -25,24 +17,34 @@ export type { ServerFeatures } from './features.js';
 
 type ListenCallback = (error: Error | null, address: string) => void;
 const CORS_HEADERS = {
-  'Access-Control-Allow-Headers': [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', '),
+  'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
   'Access-Control-Allow-Origin': '*',
 };
 export async function createServer(config: DeepJsonServerConfig, features: ServerFeatures = {}): Promise<ServerFacade> {
-  const normalized = normalizeServerConfig(config);
+  return createConfiguredServer(normalizeServerConfig(config), features);
+}
+export async function createConfiguredServer(normalized: NormalizedServerConfig, features: ServerFeatures = {}): Promise<ServerFacade> {
   const enabled = resolveFeatures(normalized, features);
+  const { loadModel, inferModel } = await import('./model.js');
   const explicitModel = await loadModel(normalized.database.schema);
-  const { cors = true, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE, maxPageSize = DEFAULT_MAX_PAGE_SIZE } = normalized.server;
-  const pageSize = normalized.server.pageSize ?? Math.min(10, maxPageSize);
-  const openapi = async () => {
-    assertApi(explicitModel, 'openapi');
-    return createOpenapi({
-      document: buildOpenapiDocument({ model: explicitModel, files: enabled.files, pageSize, maxPageSize, info: normalized.openapi.info }),
+  const { default: Fastify } = await import('fastify');
+  const corsHeaders = { ...CORS_HEADERS };
+  if (enabled.files) {
+    const { FILE_HEADERS } = await import('./files/http.js');
+    corsHeaders['Access-Control-Allow-Headers'] = [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', ');
+  }
+  const { cors = true, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE } = normalized.server;
+  const { pageSize, maxPageSize } = normalizePagination(normalized.server);
+  const openapi = async () =>
+    (await import('./openapi/public.js')).openapiFromModel(explicitModel, {
+      files: enabled.files,
+      pageSize,
+      maxPageSize,
+      info: normalized.openapi.info,
       host: normalized.server.host,
       port: normalized.server.port,
     });
-  };
   let instance: FastifyInstance | undefined;
   const getFastify = (): FastifyInstance => {
     if (instance) return instance;
@@ -55,27 +57,27 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
         return;
       }
       if (callback) {
-        originalListen(optionsOrCallback ?? defaults, callback);
+        originalListen({ ...defaults, ...optionsOrCallback }, callback);
         return;
       }
-      return originalListen(optionsOrCallback ?? defaults);
+      return originalListen({ ...defaults, ...optionsOrCallback });
     };
     server.listen = listen as FastifyInstance['listen'];
     server.setErrorHandler((error, request, reply) => {
-      const candidate =
-        error instanceof DomainError ? ({ INVALID_INPUT: 400, INVALID_QUERY: 400, NOT_FOUND: 404, CONFLICT: 409 } as const)[error.code] : isObject(error) ? error.statusCode : undefined;
+      const candidate = error instanceof DomainError ? domainStatus[error.code] : isObject(error) ? error.statusCode : undefined;
       const status = typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599 ? candidate : 500;
       if (status === 500) request.log.error(error);
       return reply.code(status).send({ error: status === 500 ? 'Внутренняя ошибка сервера' : error instanceof Error ? error.message : String(error) });
     });
     if (cors) {
       server.addHook('onRequest', async (_request, reply) => {
-        for (const [key, value] of Object.entries(CORS_HEADERS)) reply.header(key, value);
+        for (const [key, value] of Object.entries(corsHeaders)) reply.header(key, value);
       });
       server.options('/', async (_request, reply) => reply.code(204).send());
       server.options('/*', async (_request, reply) => reply.code(204).send());
     }
     server.register(async (app) => {
+      const [{ createDatabaseStore }, { Engine }, { registerRestRoutes }] = await Promise.all([import('./database.js'), import('./engine.js'), import('./rest/routes.js')]);
       const keys = explicitModel ? new Map(explicitModel.entities.map((e) => [e.collection, e.primary])) : undefined;
       const store = await createDatabaseStore(normalized.database, keys);
       const model = explicitModel ?? inferModel(store.database.data);
@@ -88,12 +90,21 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
         [...(enabled.graphql ? [graphqlPath] : []), ...(enabled.openapi ? [openapiPath] : [])],
       );
       registerRestRoutes(app, engine);
-      if (enabled.graphql) registerGraphqlRoutes(app, buildGraphql(model, engine), engine, graphqlPath);
+      if (enabled.graphql) {
+        const [{ registerGraphqlRoutes }, { buildGraphql }] = await Promise.all([import('./graphql/routes.js'), import('./graphql.js')]);
+        registerGraphqlRoutes(app, buildGraphql(model), engine, graphqlPath);
+      }
       if (enabled.openapi) {
         const document = await openapi();
+        document.servers = [{ url: '/' }];
         app.get(openapiPath, async () => document);
       }
-      if (enabled.files) registerFileRoutes(app, { getStore: () => createFileStore(normalized.files!), maxFileSize });
+      const files = normalized.files;
+      if (enabled.files && files) {
+        const { createFileStore, registerFileRoutes } = await import('./files/index.js');
+        const protectedPaths = inputPaths({ database: normalized.database }, '.', configSourcePath(normalized));
+        registerFileRoutes(app, { getStore: () => createFileStore(files, protectedPaths), maxFileSize });
+      }
     });
     instance = server;
     return server;
@@ -102,8 +113,7 @@ export async function createServer(config: DeepJsonServerConfig, features: Serve
     fastify: getFastify,
     openapi,
     graphql: async () => {
-      assertApi(explicitModel, 'graphql');
-      return printSchema(buildGraphql(explicitModel));
+      return (await import('./graphql/public.js')).graphqlFromModel(explicitModel);
     },
   };
 }

@@ -1,21 +1,8 @@
 import type { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { createHttpError } from '../utils.js';
-import {
-  createFileMetadata,
-  FILE_HEADERS,
-  FILE_ROUTES,
-  FILE_UPDATE_SCHEMA,
-  type FileStore,
-  type FileUpdate,
-  getDownloadName,
-  getFileKey,
-  getPathLocation,
-  normalizeMimeType,
-  PATCH_BODY_LIMIT,
-  validateDirectory,
-  validateName,
-} from './contract.js';
+import { createHttpError } from '../http/errors.js';
+import { type FileStore, type FileUpdate, getFileKey, getPathLocation, normalizeMimeType, validateDirectory, validateName } from './contract.js';
+import { createFileMetadata, FILE_HEADERS, FILE_ROUTES, FILE_UPDATE_SCHEMA, getDownloadName, PATCH_BODY_LIMIT } from './http.js';
 
 interface FilePathParams {
   '*': string;
