@@ -30,7 +30,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
   };
   const objects = new Map<Node, GraphQLObjectType>();
   const pages = new Map<Node, GraphQLObjectType>();
-  const inputs = new Map<string, GraphQLInputObjectType>();
+  const inputs = new Map<Node, Map<string, GraphQLInputObjectType>>();
   const wheres = new Map<Node, GraphQLInputObjectType>();
   const filters = new Map<Node, GraphQLInputObjectType>();
   const orders = new Map<Node, GraphQLInputObjectType>();
@@ -97,7 +97,13 @@ export function buildGraphql(model: Model): GraphQLSchema {
   }
   function input(entity: Entity, node: Node, mode: InputMode, root = false, nested = false): GraphQLInputObjectType {
     const name = `${nodeName(entity, node)}${nested ? 'Nested' : ''}${mode[0].toUpperCase() + mode.slice(1)}`;
-    let type = inputs.get(name);
+    const variant = `${mode}:${root}:${nested}`;
+    let variants = inputs.get(node);
+    if (!variants) {
+      variants = new Map();
+      inputs.set(node, variants);
+    }
+    let type = variants.get(variant);
     if (type) return type;
     type = new GraphQLInputObjectType({
       name: reserve(name),
@@ -119,7 +125,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
         return fields;
       },
     });
-    inputs.set(name, type);
+    variants.set(variant, type);
     return type;
   }
   function where(entity: Entity, node: Node): GraphQLInputObjectType {

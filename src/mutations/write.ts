@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createId, type DatabaseContainer } from '../database.js';
 import { domainError } from '../errors.js';
-import { type Entity, type Model, type Node, pathParts, readPath, validateRecord } from '../model.js';
+import { bindingFor, canWriteKey, type Entity, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from '../model.js';
 import { keyOf, makeContext, type Ref, related, rootRef, sourceValues } from '../records.js';
 import type { JsonObject, JsonValue } from '../types.js';
 import { isEqual, isObject } from '../utils.js';
@@ -21,6 +21,7 @@ interface Selection {
 
 /** Executes all nested writes on the enclosing database transaction's draft. */
 export class MutationWriter {
+  private indexes = new Map<Entity, Map<string, JsonObject>>();
   private active = new Set<JsonObject>();
   private selections: Array<{ ref: Ref; node: Node; targets: JsonObject[] }> = [];
   constructor(
@@ -36,7 +37,8 @@ export class MutationWriter {
     else if (Object.hasOwn(body, entity.primary)) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     this.database.data[entity.collection] ??= [];
     const collection = this.database.data[entity.collection];
-    const current = mode === 'create' ? undefined : collection.find((record) => String(record[entity.primary]) === String(key));
+    const index = this.index(entity);
+    const current = mode === 'create' ? undefined : index.get(String(key));
     if (mode !== 'create' && !current) throw domainError('NOT_FOUND', `${entity.name}: record not found`);
     if (current && this.active.has(current)) throw domainError('CONFLICT', 'A nested write cannot modify an active ancestor record');
     const input = structuredClone(body) as JsonObject;
@@ -49,12 +51,16 @@ export class MutationWriter {
       if (mode !== 'update') this.defaults(entity.root, next);
       if (mode === 'create') this.generate(entity, next);
     } else if (mode === 'create') next.id = createId(collection);
-    if (collection.some((record) => record !== current && String(record[entity.primary]) === String(next[entity.primary]))) throw domainError('CONFLICT', 'Primary key already exists');
+    const duplicate = index.get(String(next[entity.primary]));
+    if (duplicate && duplicate !== current) throw domainError('CONFLICT', 'Primary key already exists');
     // Keep identities stable so multiple nested references see the same draft record.
     const record = current ?? {};
     for (const name of Object.keys(record)) delete record[name];
     Object.assign(record, next);
-    if (!current) collection.push(record);
+    if (!current) {
+      collection.push(record);
+      index.set(String(record[entity.primary]), record);
+    }
     this.active.add(record);
     try {
       const pending: Selection[] = [];
@@ -72,7 +78,7 @@ export class MutationWriter {
       if (node.relation) {
         const supplied = Object.hasOwn(ref.value, name);
         // A PUT also disconnects omitted reverse links; direct storage keys follow normal replacement.
-        const omitted = !supplied && replace && node.source === ref.entity.primary && node.target !== node.relation.primary && this.canWrite(node.relation, node.target as string);
+        const omitted = !supplied && replace && isReverseRelation(ref.entity, node) && canWriteKey(node.relation, node.target as string);
         if (!supplied && !omitted) continue;
         if (supplied && node.source !== ref.entity.primary && this.slots(ref.entity, input, node.source as string, inputBindings).some(({ object, key }) => Object.hasOwn(object, key)))
           throw domainError('INVALID_INPUT', `Supply either ${node.path} or its source key ${node.source}`);
@@ -105,8 +111,8 @@ export class MutationWriter {
     const key = object ? input[entity.primary] : input;
     const primary = entity.fields[entity.primary];
     if (!['string', 'number'].includes(typeof key) || (this.model.explicit && typeof key !== primary.base)) throw domainError('INVALID_INPUT', `${entity.name}.${entity.primary}: invalid key type`);
-    const current = (this.database.data[entity.collection] ?? []).find((record) => keyOf(record[entity.primary]) === keyOf(key));
-    if (!current) throw domainError('NOT_FOUND', `${entity.name}: related record not found`);
+    const current = this.index(entity).get(String(key));
+    if (!current || keyOf(current[entity.primary]) !== keyOf(key)) throw domainError('NOT_FOUND', `${entity.name}: related record not found`);
     if (!object) return current;
     const data = { ...input };
     delete data[entity.primary];
@@ -121,7 +127,7 @@ export class MutationWriter {
     const entries = value === null ? [] : node.many ? (value as unknown[]) : [value];
     const targets = entries.map((entry) => this.resolve(target, entry, depth));
     if (new Set(targets).size !== targets.length) throw domainError('INVALID_INPUT', `Duplicate record in ${node.path}`);
-    if (this.canWrite(ref.entity, node.source as string)) {
+    if (!isReverseRelation(ref.entity, node)) {
       const slots = this.slots(ref.entity, ref.root, node.source as string, ref.bindings, true);
       if (slots.length !== 1) throw domainError('INVALID_INPUT', `Ambiguous source ${node.source}; supply its storage keys explicitly`);
       const keys = targets.flatMap((record) => {
@@ -170,25 +176,24 @@ export class MutationWriter {
     }
   }
 
-  private canWrite(entity: Entity, path: string): boolean {
-    const parts = pathParts(path);
-    return parts.every((_, index) => {
-      const field = entity.fields[parts.slice(0, index + 1).join('.')];
-      return field && !field.primary && !field.generated && !field.readOnly;
-    });
+  private index(entity: Entity): Map<string, JsonObject> {
+    let index = this.indexes.get(entity);
+    if (!index) {
+      index = new Map((this.database.data[entity.collection] ?? []).map((record) => [String(record[entity.primary]), record]));
+      this.indexes.set(entity, index);
+    }
+    return index;
   }
 
   private set(entity: Entity, slot: Slot, value: JsonValue | undefined): void {
     if (isEqual(slot.object[slot.key], value)) return;
-    if (!this.canWrite(entity, slot.field.path)) throw domainError('INVALID_INPUT', `Cannot change protected relation key ${entity.name}.${slot.field.path}`);
+    if (!canWriteKey(entity, slot.field.path)) throw domainError('INVALID_INPUT', `Cannot change protected relation key ${entity.name}.${slot.field.path}`);
     if (value === undefined) delete slot.object[slot.key];
     else slot.object[slot.key] = value;
   }
 
   private slots(entity: Entity, root: JsonObject, path: string, bindings: Record<string, JsonObject> = {}, create = false): Slot[] {
-    const binding = Object.keys(bindings)
-      .filter((prefix) => path.startsWith(`${prefix}.`))
-      .sort((a, b) => b.length - a.length)[0];
+    const binding = bindingFor(bindings, path);
     const parts = pathParts(binding ? path.slice(binding.length + 1) : path);
     const field = entity.fields[path];
     if (!field) throw domainError('INVALID_INPUT', `Unknown relation key ${entity.name}.${path}`);

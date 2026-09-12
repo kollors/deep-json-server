@@ -87,7 +87,7 @@ test('field names matching operators filter correctly through objects, lists and
   const schema = model({ profile: { type: 'object' }, 'profile.contains': { type: 'string' }, 'profile.eq': { type: 'string' }, children: { type: 'object[]' }, 'children.in': { type: 'number' } });
   const { server } = await setup(t, schema, { items: [{ id: '1', profile: { contains: 'abc', eq: 'yes' }, children: [{ in: 3 }] }] }, { graphql: { enabled: true } });
   const where = { profile: { contains: { eq: 'abc' }, eq: { eq: 'yes' } }, children: { some: { in: { gte: 3 } } } };
-  const rest = await server.inject(`/items?${new URLSearchParams({ where: JSON.stringify(where) })}`);
+  const rest = await server.inject(`/items?${new URLSearchParams({ scope: JSON.stringify([{ '*': true }, { where }]) })}`);
   assert.equal(rest.json().total, 1);
   const graph = await gql(server, '{itemList(where:{profile:{contains:{eq:"abc"},eq:{eq:"yes"}},children:{some:{in:{gte:3}}}}){total}}');
   assert.equal(graph.json().data.itemList.total, 1);
@@ -128,9 +128,9 @@ test('OpenAPI checks file operation collisions and nullable enum filters match r
   const { server, facade } = await setup(t, schema, { items: [{ id: '1', state: null }] }, { graphql: { enabled: true } });
   const doc = await facade.openapi();
   assert.deepEqual(doc.components.schemas.Item_stateFilter.properties.eq.enum, ['a', 'b', null]);
-  assert.equal((await server.inject(`/items?${new URLSearchParams({ where: JSON.stringify({ state: { eq: null } }) })}`)).json().total, 1);
+  assert.equal((await server.inject(`/items?${new URLSearchParams({ scope: JSON.stringify([{ '*': true }, { where: { state: { eq: null } } }]) })}`)).json().total, 1);
   assert.equal((await gql(server, '{itemList(where:{state:{eq:null}}){total}}')).json().data.itemList.total, 1);
-  assert.equal((await server.inject(`/items?${new URLSearchParams({ where: JSON.stringify({ state: { eq: 'missing' } }) })}`)).statusCode, 400);
+  assert.equal((await server.inject(`/items?${new URLSearchParams({ scope: JSON.stringify([{ '*': true }, { where: { state: { eq: 'missing' } } }]) })}`)).statusCode, 400);
 });
 
 test('schemaless commits publish the inferred model and reject invalid projections before persistence', async (t) => {
@@ -138,14 +138,14 @@ test('schemaless commits publish the inferred model and reject invalid projectio
   const path = join(dir, 'db.json');
   await fs.writeFile(path, '{"items":[]}');
   const { server } = await setup(t, undefined, {}, { database: { path } });
-  const post = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify({ name: true }) })}`, payload: { name: 'one' } });
+  const post = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify([{ name: true }]) })}`, payload: { name: 'one' } });
   assert.equal(post.statusCode, 201);
   const id = JSON.parse(await fs.readFile(path, 'utf8')).items[0].id;
-  const patch = await server.inject({ method: 'PATCH', url: `/items/${id}?${new URLSearchParams({ scope: JSON.stringify({ name: true }) })}`, payload: { name: 'two' } });
+  const patch = await server.inject({ method: 'PATCH', url: `/items/${id}?${new URLSearchParams({ scope: JSON.stringify([{ name: true }]) })}`, payload: { name: 'two' } });
   assert.equal(patch.statusCode, 200);
   assert.equal(patch.json().name, 'two');
   const before = await fs.readFile(path, 'utf8');
-  const failed = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify({ missing: true }) })}`, payload: { name: 'three' } });
+  const failed = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify([{ missing: true }]) })}`, payload: { name: 'three' } });
   assert.equal(failed.statusCode, 400);
   assert.equal(await fs.readFile(path, 'utf8'), before);
   const raw = await server.inject({ method: 'POST', url: '/items', headers: { 'content-type': 'application/json' }, payload: '{"new-field":"saved"}' });

@@ -4,7 +4,7 @@
 
 A JSON-backed mock server with REST, GraphQL, nested queries, binary files and schema exports. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.4 is a prerelease.** When upgrading from 0.x, update your model schema and query parameters using the examples below.
+**1.0.0-alpha.5 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON-backed mock server with REST, GraphQL, nested queries, binary files and s
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.4`.
+To install a specific version, use `@1.0.0-alpha.5`.
 
 ## Quick start
 
@@ -136,7 +136,7 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 
 Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions.
 
-Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope={"*":true}`. Fields with mixed value types can be read, but using them in `where`, `order` or `nested` requires an explicit schema.
+Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope=[{"*":true}]`. Fields with mixed value types can be read, but filtering, ordering and paging heterogeneous lists require an explicit schema.
 
 ### Fields
 
@@ -288,51 +288,59 @@ mutation {
 
 ### REST query parameters
 
-Query parameters `where`, `order`, `pager`, `nested` and `scope` contain JSON. Example shown before URL encoding:
+REST accepts one query parameter, `scope`, containing a JSON array `[fields, arguments?]`. The first object selects fields; the optional second object supplies `where`, `order` and `pager` for a list. The same format applies to the root query, embedded objects and relations.
 
-```text
-GET /users?where={"fullName":{"contains":"Мира"}}&order=[{"field":"fullName","direction":"ASC"}]&pager={"page":1,"pageSize":20}
-```
-
-Construct encoded URLs with `URLSearchParams`:
+Select users and their movies with independent ordering and pagination:
 
 ```js
-const params = new URLSearchParams({
-  scope: JSON.stringify({ id: true, fullName: true, movies: { id: true, title: true } }),
-  nested: JSON.stringify({ movies: { order: [{ field: 'title', direction: 'ASC' }], pager: { page: 1, pageSize: 5 } } }),
-});
+const scope = [
+  {
+    id: true,
+    fullName: true,
+    movies: [
+      { id: true, title: true },
+      {
+        order: [{ field: 'title', direction: 'ASC' }],
+        pager: { page: 1, pageSize: 5 },
+      },
+    ],
+  },
+  {
+    where: { fullName: { contains: 'Мира' } },
+    order: [{ field: 'fullName', direction: 'ASC' }],
+    pager: { page: 1, pageSize: 20 },
+  },
+];
+const params = new URLSearchParams({ scope: JSON.stringify(scope) });
 const response = await fetch(`/users?${params}`);
 ```
 
-`scope` selects fields in the response:
+Select ordinary fields with `true` and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes own fields and stored keys, except `writeOnly` fields; select relations explicitly.
+
+For example, select a movie's own fields, its actors' users and sorted genres:
 
 ```json
-{
-  "*": true,
-  "actors": {
-    "user": { "id": true, "fullName": true },
-    "genres": { "*": true }
+[
+  {
+    "*": true,
+    "actors": [
+      {
+        "user": [{ "id": true, "fullName": true }],
+        "genres": [
+          { "*": true },
+          { "order": [{ "field": "name", "direction": "ASC" }] }
+        ]
+      }
+    ]
   }
-}
+]
 ```
 
-`true` includes a field; an object selects fields inside an object or relation. `"*": true` includes own fields and stored keys, except `writeOnly` fields. Relations are listed explicitly. Setting a relation to `true` selects its own fields.
+Omitting `scope` returns own fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
 
-Omitting `scope` selects own fields. `{}` selects no fields. Values must be `true` or nested objects; `false`, `null` and arrays return `400`. Lists retain the `{ data, total }` response structure.
+Arguments are available only on lists. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
 
-`nested` maps full response paths to list options:
-
-```json
-{
-  "actors": { "pager": { "pageSize": 5 } },
-  "actors.genres": {
-    "where": { "id": { "in": ["2", "3"] } },
-    "order": [{ "field": "name", "direction": "ASC" }]
-  }
-}
-```
-
-A path in `nested` must be selected by `scope` and point to an object list. Single-record routes and mutations accept `scope` and `nested`; root `where`, `order` and `pager` apply to collection GET. Invalid names and unsafe paths return `400`.
+OpenAPI remains at version 3.0.3. It cannot define a separate schema for each array position: the documentation describes the elements, and the server strictly validates their order.
 
 ### GraphQL
 

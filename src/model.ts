@@ -94,6 +94,22 @@ export const pathParts = (path: string): string[] => {
   if (parts.some((p) => !NAME.test(p) || !isSafeKey(p))) throw domainError('INVALID_INPUT', `Invalid field path: ${path}`);
   return parts;
 };
+/** Finds the nearest physical object containing a relation key. */
+export function bindingFor(bindings: Record<string, unknown>, path: string): string | undefined {
+  let nearest: string | undefined;
+  for (const prefix of Object.keys(bindings)) if ((path === prefix || path.startsWith(`${prefix}.`)) && (!nearest || prefix.length > nearest.length)) nearest = prefix;
+  return nearest;
+}
+export function canWriteKey(entity: Entity, path: string): boolean {
+  const parts = pathParts(path);
+  return parts.every((_, index) => {
+    const field = entity.fields[parts.slice(0, index + 1).join('.')];
+    return field && !field.primary && !field.generated && !field.readOnly;
+  });
+}
+export function isReverseRelation(entity: Entity, node: Node): boolean {
+  return node.source === entity.primary || (!canWriteKey(entity, node.source as string) && canWriteKey(node.relation as Entity, node.target as string));
+}
 export const readPath = (value: unknown, path: string | string[]): unknown[] => {
   const parts = typeof path === 'string' ? pathParts(path) : path;
   if (!parts.length) return Array.isArray(value) ? value.flatMap((v) => readPath(v, [])) : value == null ? [] : [value];
@@ -310,6 +326,7 @@ export function validateRecord(entity: Entity, value: unknown, mode: InputMode, 
   if (!validate(value)) throw domainError('INVALID_INPUT', `${entity.name}: ${ajv.errorsText(validate.errors)}`);
 }
 export function inferModel(database: DatabaseData): Model {
+  const valueType = (value: unknown) => (isObject(value) ? 'object' : ['string', 'number', 'boolean'].includes(typeof value) ? typeof value : 'string');
   const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: false };
   for (const [collection, records] of Object.entries(database)) {
     const name = toPascalCase(singularize(collection));
@@ -320,14 +337,17 @@ export function inferModel(database: DatabaseData): Model {
         if (!NAME.test(key) || !isSafeKey(key)) continue;
         const path = prefix + key;
         const sample = Array.isArray(value) ? value.find((v) => v !== null) : value;
-        const base = isObject(sample) ? 'object' : ['string', 'number', 'boolean'].includes(typeof sample) ? typeof sample : 'string';
+        const base = valueType(sample);
         const type = base + (Array.isArray(value) ? '[]' : '');
         const types = observed.get(path) ?? new Set<string>();
-        if (sample != null) types.add(type);
+        for (const element of Array.isArray(value) ? value : [value]) {
+          if (element == null) continue;
+          types.add(valueType(element) + (Array.isArray(value) ? '[]' : ''));
+        }
         observed.set(path, types);
         const node = entity.fields[path] ?? addField(entity, path, { type });
         if (types.size) {
-          node.mixed = types.size > 1;
+          node.mixed = node.mixed || types.size > 1 || (Array.isArray(value) && value.some(isObject) && value.some((item) => !isObject(item)));
           node.base = [...types].some((type) => type.startsWith('object')) ? 'object' : [...types].sort()[0].replace(/\[\]$/, '');
           node.many = [...types].every((type) => type.endsWith('[]'));
           node.type = node.base + (node.many ? '[]' : '');

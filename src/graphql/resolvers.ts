@@ -1,7 +1,8 @@
 import { type FieldNode, type GraphQLResolveInfo, type GraphQLSchema, isObjectType } from 'graphql';
-import { type Context, type Engine, type PreparedList, type Ref, resolveField } from '../engine.js';
+import type { Engine, PreparedList } from '../engine.js';
 import type { Entity, InputMode, Node } from '../model.js';
 import type { ListOptions } from '../query/options.js';
+import { type Context, type Ref, resolveField } from '../records.js';
 import { preflight } from './preflight.js';
 
 export interface GraphqlContext {

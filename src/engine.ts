@@ -1,15 +1,13 @@
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './constants.js';
 import type { DatabaseStore } from './database.js';
 import { domainError } from './errors.js';
-import { type Entity, inferModel, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
+import { type Entity, inferModel, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
 import { MutationWriter } from './mutations/write.js';
 import { compileWhere, type Predicate } from './query/filter.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
 import type { DatabaseData, JsonObject } from './types.js';
 import { isObject } from './utils.js';
-
-export { type Context, isRef, makeContext, type Ref, related, resolveField, rootRef } from './records.js';
 
 export interface PreparedList {
   page: number;
@@ -127,7 +125,7 @@ export class Engine {
           if (!node.many && matches.length > 1) throw domainError('INVALID_INPUT', `Multiple targets for ${ref.entity.name}.${node.path}`);
           if (node.required && !matches.length) throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is empty`);
           const values = sourceValues(ref, node);
-          if (node.source !== ref.entity.primary && values.some((value) => !matches.some((match) => readPath(match.value, node.target as string).some((target) => keyOf(target) === keyOf(value)))))
+          if (!isReverseRelation(ref.entity, node) && values.some((value) => !matches.some((match) => readPath(match.value, node.target as string).some((target) => keyOf(target) === keyOf(value)))))
             throw domainError('INVALID_INPUT', `Dangling relation ${ref.entity.name}.${node.path}`);
         } else if (node.base === 'object') {
           const child = resolveField(ref, node);

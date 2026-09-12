@@ -51,10 +51,10 @@ test('exports catalog without data or runtime server and resolves every referenc
   assert.equal(document.components.schemas.User.properties.bornAt.format, 'date');
   assert.equal(document.components.schemas.UserUpdate.required, undefined);
   assert.equal(document.components.schemas.Pager.properties.pageSize.maximum, 100);
-  const parameter = document.paths['/users'].get.parameters.find((p) => p.name === 'where');
+  const parameter = document.paths['/users'].get.parameters.find((p) => p.name === 'scope');
   assert.ok(parameter.content['application/json']);
   assert.equal(parameter.schema, undefined);
-  assert.ok(document.components.schemas.UserNested.properties['movies.actors.genres']);
+  assert.equal(document.components.schemas.Movie_actorsScopeFields.properties.genres.$ref, '#/components/schemas/GenreListScope');
   checkReferences(document);
   const sdl = await facade.graphql();
   assert.deepEqual(validateSchema(buildSchema(sdl)), []);
@@ -300,16 +300,36 @@ test('OpenAPI describes JSON scope with model fields and recursive relations', a
     for (const operation of Object.values(path)) {
       const parameter = operation.parameters.find((p) => p.name === 'scope');
       assert.equal(parameter.schema, undefined);
-      assert.equal(parameter.content['application/json'].schema.$ref, '#/components/schemas/ItemScope');
+      assert.equal(parameter.content['application/json'].schema.$ref, operation.operationId === 'itemList' ? '#/components/schemas/ItemListScope' : '#/components/schemas/ItemScope');
+      assert.deepEqual(
+        operation.parameters.filter((p) => p.in === 'query').map((p) => p.name),
+        ['scope'],
+      );
     }
   }
   const ajv = new Ajv({ strict: false });
   ajv.addSchema({ components: doc.components }, 'scope-contract');
   const validate = ajv.compile({ $ref: 'scope-contract#/components/schemas/ItemScope' });
-  for (const scope of [{}, { '*': true }, { name: true }, { profile: true, peers: true }, { profile: { name: true }, peers: { peers: { id: true } } }]) {
+  for (const scope of [[{}], [{ '*': true }], [{ name: true }], [{ profile: [{ '*': true }], peers: [{ '*': true }] }], [{ profile: [{ name: true }], peers: [{ peers: [{ id: true }] }] }]]) {
     assert.equal(validate(scope), true, JSON.stringify(validate.errors));
   }
-  for (const scope of [true, [], null, { name: false }, { name: {} }, { secret: true }, { missing: true }, { '*': {} }, { profile: { secret: true } }, { peers: [] }, { peers: { name: 1 } }]) {
+  for (const scope of [
+    true,
+    [],
+    null,
+    {},
+    [{ name: false }],
+    [{ name: {} }],
+    [{ secret: true }],
+    [{ missing: true }],
+    [{ '*': {} }],
+    [{ profile: [{ secret: true }] }],
+    [{ peers: [] }],
+    [{ peers: [{ name: 1 }] }],
+    [{ profile: true }],
+    [{ profile: [{}, {}] }],
+    [{}, {}],
+  ]) {
     assert.equal(validate(scope), false, JSON.stringify(scope));
   }
 });

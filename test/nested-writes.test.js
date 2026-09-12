@@ -60,7 +60,7 @@ const setup = async (t, schema = model, initial = data, disk = false) => {
   await app.ready();
   return { app, facade, path: database.path };
 };
-const url = (path, scope = { '*': true }) => `${path}?${new URLSearchParams({ scope: JSON.stringify(scope) })}`;
+const url = (path, scope = [{ '*': true }]) => `${path}?${new URLSearchParams({ scope: JSON.stringify(scope) })}`;
 const mutate = (app, method, body, path = '/movies/1', scope) => app.inject({ method, url: url(path, scope), payload: body });
 const get = async (app, path) => {
   const response = await app.inject(path);
@@ -71,7 +71,7 @@ const gql = (app, query, variables) => app.inject({ method: 'POST', url: '/graph
 
 test('nested PATCH mixes references, updates and creates without storing relation objects', async (t) => {
   const { app } = await setup(t);
-  const result = await mutate(app, 'PATCH', { genres: [1, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', { '*': true, genres: true });
+  const result = await mutate(app, 'PATCH', { genres: [1, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', [{ '*': true, genres: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json().genreIds, [1, 2, 3]);
   assert.deepEqual(
@@ -126,7 +126,7 @@ test('nested source paths use the correct array element and accept single relati
       owner: { name: 'new owner' },
     },
     '/movies/1',
-    { '*': true, actors: { '*': true, user: true, genres: true }, owner: true },
+    [{ '*': true, actors: [{ '*': true, user: [{ '*': true }], genres: [{ '*': true }] }], owner: [{ '*': true }] }],
   );
   assert.equal(result.statusCode, 200, result.body);
   assert.equal(result.json().actors.data[0].userId, 1);
@@ -162,7 +162,7 @@ test('nested failures roll back every record and counter on disk', async (t) => 
     assert.equal(await readFile(path, 'utf8'), before);
     await assert.rejects(() => readFile(`${path}.counters.json`), { code: 'ENOENT' });
   }
-  const invalidScope = await mutate(app, 'PATCH', { genres: [{ name: 'must roll back' }] }, '/movies/1', { missing: true });
+  const invalidScope = await mutate(app, 'PATCH', { genres: [{ name: 'must roll back' }] }, '/movies/1', [{ missing: true }]);
   assert.equal(invalidScope.statusCode, 400);
   assert.equal(await readFile(path, 'utf8'), before);
   const good = await mutate(app, 'PATCH', { genres: [{ name: 'saved' }] });
@@ -207,7 +207,7 @@ test('reverse links attach new records and replace only the selected parent memb
     ],
     children: [{ id: 1, name: 'child', parentIds: [2] }],
   });
-  const result = await mutate(app, 'PATCH', { children: [1, { name: 'new child' }] }, '/parents/1', { children: true });
+  const result = await mutate(app, 'PATCH', { children: [1, { name: 'new child' }] }, '/parents/1', [{ children: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual((await get(app, '/children/1')).parentIds, [2, 1]);
   assert.deepEqual((await get(app, '/children/2')).parentIds, [1]);
@@ -221,7 +221,7 @@ test('reverse links attach new records and replace only the selected parent memb
 
 test('reverse scalar keys can be supplied by a nested parent creation', async (t) => {
   const { app } = await setup(t, reverseModel(false, true), { parents: [], children: [] });
-  const result = await mutate(app, 'POST', { name: 'parent', children: [{ name: 'child' }] }, '/parents', { '*': true, children: true });
+  const result = await mutate(app, 'POST', { name: 'parent', children: [{ name: 'child' }] }, '/parents', [{ '*': true, children: [{ '*': true }] }]);
   assert.equal(result.statusCode, 201, result.body);
   assert.equal(result.json().children.data[0].parentId, result.json().id);
   assert.equal((await mutate(app, 'PATCH', { children: [] }, '/parents/1')).statusCode, 200);

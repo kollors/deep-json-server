@@ -4,7 +4,7 @@ import { createFilePaths } from '../files/openapi.js';
 import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../model.js';
 import { normalizePagination } from '../pagination.js';
 import { operatorsFor } from '../query/contract.js';
-import { childrenOf, sortableFields } from '../query/options.js';
+import { sortableFields } from '../query/options.js';
 import type { OpenapiDocument, OpenapiSchema } from '../types.js';
 import { isObject } from '../utils.js';
 
@@ -106,20 +106,32 @@ export function buildOpenapiDocument({
     schemas[name] = { type: 'object', additionalProperties: false, properties };
     return ref(name);
   }
-  function scope(entity: Entity, node: Node): OpenapiSchema {
+  function scope(entity: Entity, node: Node, list = node.many): OpenapiSchema {
     if (node.relation) {
       entity = node.relation;
       node = entity.root;
     }
-    const name = `${nodeName(entity, node)}Scope`;
+    const name = `${nodeName(entity, node)}${list ? 'List' : ''}Scope`;
     if (!reserve(name, node)) return ref(name);
-    const included: OpenapiSchema = { type: 'boolean', enum: [true] };
-    const properties: Record<string, OpenapiSchema> = { '*': included };
-    for (const [key, child] of Object.entries(node.children)) {
-      if (child.writeOnly) continue;
-      properties[key] = child.relation || child.base === 'object' ? { oneOf: [included, scope(entity, child)] } : included;
+    const fieldsName = `${nodeName(entity, node)}ScopeFields`;
+    if (reserve(fieldsName, node)) {
+      const included: OpenapiSchema = { type: 'boolean', enum: [true] };
+      const properties: Record<string, OpenapiSchema> = { '*': included };
+      for (const [key, child] of Object.entries(node.children)) {
+        if (child.writeOnly) continue;
+        properties[key] = child.relation || child.base === 'object' ? scope(entity, child) : included;
+      }
+      schemas[fieldsName] = { type: 'object', additionalProperties: false, properties };
     }
-    schemas[name] = { type: 'object', additionalProperties: false, properties };
+    schemas[name] = {
+      type: 'array',
+      minItems: 1,
+      maxItems: list ? 2 : 1,
+      items: list ? { anyOf: [ref(fieldsName), options(entity, node)] } : ref(fieldsName),
+      description: list
+        ? '[fields, arguments?]. The first object selects fields; the optional second object contains where, order and pager. OpenAPI 3.0 cannot express positional item schemas; the server validates their order.'
+        : '[fields]. * selects own fields without relations or writeOnly fields.',
+    };
     return ref(name);
   }
   function page(entity: Entity, node: Node): OpenapiSchema {
@@ -206,35 +218,15 @@ export function buildOpenapiDocument({
       reserve(key, entity.root);
       schemas[key] = writeInput(entity.root, mode, true);
     }
-    const nestedName = `${name}Nested`;
-    reserve(nestedName, entity.root);
-    const nestedProperties: Record<string, OpenapiSchema> = {};
-    const collect = (owner: Entity, node: Node, prefix: string, seen: Set<Node>) => {
-      for (const [key, child] of Object.entries(childrenOf(node))) {
-        if (child.writeOnly || (!child.relation && child.base !== 'object')) continue;
-        const path = prefix + key;
-        if (child.many) nestedProperties[path] = options(owner, child);
-        const target = child.relation?.root ?? child;
-        if (!seen.has(target)) collect(child.relation ?? owner, target, `${path}.`, new Set([...seen, target]));
-      }
-    };
-    collect(entity, entity.root, '', new Set([entity.root]));
-    schemas[nestedName] = {
-      type: 'object',
-      properties: nestedProperties,
-      additionalProperties: { type: 'object', additionalProperties: false, properties: { where: { type: 'object' }, order: { type: 'array', items: { type: 'object' } }, pager: ref('Pager') } },
-      description: 'Path -> list options. Recursive paths are validated against the model at runtime.',
-    };
-    const shape = [
-      {
-        in: 'query',
-        name: 'scope',
-        ...json(scope(entity, entity.root)),
-        description: 'JSON field selection: true includes a field; an object selects nested fields. * includes own fields and excludes relations and writeOnly fields.',
-      },
-      { in: 'query', name: 'nested', ...json(ref(nestedName)) },
-    ];
-    const list = [...shape, ...Object.entries(options(entity, entity.root).properties ?? {}).map(([key, schema]) => ({ in: 'query', name: key, ...json(schema) }))];
+    const selectionParameter = (list: boolean) => ({
+      in: 'query',
+      name: 'scope',
+      ...json(scope(entity, entity.root, list)),
+      description:
+        'JSON [fields, arguments?]. Scalars use true; objects and relations use their own scope arrays. * includes own fields without relations or writeOnly fields. Arguments are available only on lists.',
+    });
+    const shape = [selectionParameter(false)];
+    const list = [selectionParameter(true)];
     const key = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...entity.fields[entity.primary], generated: undefined }) };
     const errors = { 400: response('Invalid request', ref('Error')), 404: response('Not found', ref('Error')), 409: response('Conflict', ref('Error')) };
     const make = (operationId: string, parameters: unknown[], schema: unknown, mode?: 'create' | 'replace' | 'update') => {

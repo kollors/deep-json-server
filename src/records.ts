@@ -1,4 +1,4 @@
-import { childName, type Entity, type Model, type Node, readPath } from './model.js';
+import { bindingFor, childName, type Entity, type Model, type Node, readPath } from './model.js';
 import type { DatabaseData, JsonObject } from './types.js';
 import { isObject } from './utils.js';
 
@@ -22,9 +22,7 @@ export const rootRef = (context: Context, entity: Entity, value: JsonObject): Re
 export const keyOf = (value: unknown): string => `${typeof value}:${String(value)}`;
 export function sourceValues(ref: Ref, node: Node): unknown[] {
   const path = node.source as string;
-  const binding = Object.keys(ref.bindings)
-    .filter((prefix) => path === prefix || path.startsWith(`${prefix}.`))
-    .sort((a, b) => b.length - a.length)[0];
+  const binding = bindingFor(ref.bindings, path);
   return binding ? readPath(ref.bindings[binding], path === binding ? [] : path.slice(binding.length + 1)) : readPath(ref.root, path);
 }
 export function related(ref: Ref, node: Node): Ref[] {
@@ -55,7 +53,7 @@ export function resolveField(ref: Ref, node: Node): unknown {
   const value = Object.hasOwn(ref.value, key) ? ref.value[key] : undefined;
   if ((ref.context.model.explicit && node.base !== 'object') || value == null) return value;
   const wrap = (object: JsonObject): Ref => ({ ...ref, node, value: object, bindings: { ...ref.bindings, [node.path]: object } });
-  if (Array.isArray(value)) return value.every(isObject) ? (value as JsonObject[]).map(wrap) : value;
+  if (Array.isArray(value)) return value.map((item) => (isObject(item) ? wrap(item as JsonObject) : item));
   return isObject(value) ? wrap(value as JsonObject) : value;
 }
 export const isRef = (value: unknown): value is Ref => isObject(value) && (value as Partial<Ref>)[REF] === true;

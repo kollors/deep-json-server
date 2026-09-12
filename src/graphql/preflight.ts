@@ -15,7 +15,15 @@ import type { Node } from '../model.js';
 export function preflight(info: GraphQLResolveInfo, engine: Engine): Map<FieldNode, PreparedList> {
   const prepared = new Map<FieldNode, PreparedList>();
   const root = info.operation.operation === 'mutation' ? info.schema.getMutationType()! : info.schema.getQueryType()!;
+  const visited = new Map<SelectionSetNode, Set<GraphQLObjectType>>();
   const walk = (selectionSet: SelectionSetNode, parent: GraphQLObjectType): void => {
+    let parents = visited.get(selectionSet);
+    if (!parents) {
+      parents = new Set();
+      visited.set(selectionSet, parents);
+    }
+    if (parents.has(parent)) return;
+    parents.add(parent);
     for (const selection of selectionSet.selections) {
       if (getDirectiveValues(GraphQLSkipDirective, selection, info.variableValues)?.if === true || getDirectiveValues(GraphQLIncludeDirective, selection, info.variableValues)?.if === false) continue;
       if (selection.kind === 'FragmentSpread') {
