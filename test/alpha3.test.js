@@ -240,7 +240,7 @@ test('public imports and REST startup do not load unrelated API runtimes', async
       const entry = mode === 'openapi' ? './dist/src/openapi/entry.js' : mode === 'graphql' ? './dist/src/graphql/entry.js' : './dist/index.js';
       const api = await import(entry);
       const schema = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } };
-      if (mode === 'openapi') await api.generateOpenapi(schema);
+      if (mode === 'openapi') await api.generateOpenapi(schema, { auth: true });
       if (mode === 'graphql') await api.generateGraphql(schema);
       if (mode === 'rest') { const app = (await api.createServer({ database: { data: { items: [] } }, server: { logger: false } })).fastify(); await app.ready(); await app.close(); }
       console.log(JSON.stringify([...loaded]));
@@ -249,6 +249,11 @@ test('public imports and REST startup do not load unrelated API runtimes', async
       { cwd: new URL('..', import.meta.url) },
     );
     const loaded = JSON.parse(stdout);
+    assert.equal(
+      loaded.some((path) => /\/auth\/(?:service|password|routes)\.js$/.test(path)),
+      false,
+      mode,
+    );
     const forbidden =
       mode === 'root'
         ? ['fastify', 'mercurius', 'graphql', 'lowdb', 'yaml']

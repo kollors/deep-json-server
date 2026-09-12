@@ -13,6 +13,7 @@ Usage:
   deep-json-server [options] <server.config.js>
   deep-json-server generate <openapi|graphql|openapi,graphql> <server.config.js>
 
+  --auth          Enable REST authentication and its OpenAPI description
   --files         Enable file routes
   --graphql       Enable the GraphQL endpoint
   --openapi       Enable the OpenAPI endpoint
@@ -42,7 +43,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
       positional.push(arg);
       continue;
     }
-    if (!['--files', '--graphql', '--openapi', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
+    if (!['--files', '--graphql', '--openapi', '--auth', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
     seen.add(arg);
     if (arg === '--host' || arg === '--port') {
       const value = args[++index];
@@ -66,7 +67,12 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   if (!isObject(serverOptions)) throw new Error('config.server must be an object');
   const overrides = { host: host ?? serverOptions.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? serverOptions.port ?? Number(process.env.PORT ?? DEFAULT_PORT) };
   const config = generate
-    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files } as { host: string; port: number; files?: boolean })
+    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files, auth: features.auth } as {
+        host: string;
+        port: number;
+        files?: boolean;
+        auth?: boolean;
+      })
     : configure({ ...source.config, server: { ...serverOptions, ...overrides } }, source.directory, source.path);
   if (generate) {
     if (!config.database.schema) throw new Error('Generation requires an explicit model schema');
@@ -79,6 +85,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
     const openapi = formats.includes('openapi')
       ? await generateOpenapi(config.database.schema, {
           files: config.files != null,
+          auth: config.auth?.enabled,
           host: config.server.host,
           port: config.server.port,
           pageSize: config.server.pageSize,

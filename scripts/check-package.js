@@ -26,6 +26,7 @@ try {
       '--input-type=module',
       '--eval',
       `import assert from 'node:assert/strict';
+      import { hashPassword } from '@kollors/deep-json-server/auth';
       import { createServer } from '@kollors/deep-json-server/server';
       import { generateOpenapi } from '@kollors/deep-json-server/openapi';
       import { generateGraphql } from '@kollors/deep-json-server/graphql';
@@ -34,6 +35,7 @@ try {
       assert.match(await generateGraphql(schema), /itemList/);
       const facade = await createServer({
         database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } },
+        auth: { enabled: true, users: [{ id: '1', username: 'admin', passwordHash: await hashPassword('packed-test') }] },
         graphql: { enabled: true }, server: { logger: false },
       });
       assert.match(await facade.graphql(), /itemCreate/);
@@ -43,6 +45,12 @@ try {
       assert.equal(created.statusCode, 201, created.body);
       const queried = await server.inject({ method: 'POST', url: '/graphql', payload: { query: '{ itemList { total data { name } } }' } });
       assert.equal(queried.json().data.itemList.data[0].name, 'packed');
+      const login = await server.inject({ method: 'POST', url: '/auth/login', payload: { username: 'admin', password: 'packed-test' } });
+      assert.equal(login.statusCode, 200, login.body);
+      const me = await server.inject({ url: '/auth/me', headers: { authorization: 'Bearer ' + login.json().accessToken } });
+      assert.equal(me.json().username, 'admin');
+      assert.doesNotMatch(await facade.graphql(), /authLogin|authMe|authLogout|AuthSession/);
+      assert.equal((await facade.openapi()).components.securitySchemes.AuthBearer.scheme, 'bearer');
       await server.close();`,
     ],
     {

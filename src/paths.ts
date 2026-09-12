@@ -12,10 +12,11 @@ export async function canonicalPath(path: string): Promise<string> {
     return resolve(await canonicalPath(parent), basename(absolute));
   }
 }
-export function inputPaths(config: { database?: unknown; files?: unknown }, directory = '.', sourcePath?: string): string[] {
+export function inputPaths(config: { database?: unknown; files?: unknown; auth?: unknown }, directory = '.', sourcePath?: string): string[] {
   const database = isObject(config.database) ? config.database : {};
   const files = isObject(config.files) ? config.files : {};
-  const paths = [sourcePath, database.path, database.schema, files.metadata].filter((path): path is string => typeof path === 'string');
+  const auth = isObject(config.auth) ? config.auth : {};
+  const paths = [sourcePath, database.path, database.schema, files.metadata, auth.users].filter((path): path is string => typeof path === 'string');
   if (typeof database.path === 'string') paths.push(`${database.path}.counters.json`);
   return paths.map((path) => resolve(directory, path));
 }

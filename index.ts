@@ -1,3 +1,5 @@
+export type { AuthConfig, AuthSession, AuthUser, AuthUserRecord } from './src/auth/contract.js';
+export { hashPassword } from './src/auth/public.js';
 export type { DatabaseConfig, DeepJsonServerConfig, FilesConfig, GraphqlConfig, MemoryFile, OpenapiConfig, ServerConfig } from './src/config.js';
 export type { ServerFeatures } from './src/features.js';
 export type { FileUpdate } from './src/files/contract.js';

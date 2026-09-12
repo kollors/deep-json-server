@@ -40,6 +40,7 @@ export interface OpenapiDocument {
   components: {
     parameters: Record<string, unknown>;
     schemas: Record<string, OpenapiSchema>;
+    securitySchemes?: Record<string, unknown>;
   };
   info: Record<string, unknown>;
   openapi: string;

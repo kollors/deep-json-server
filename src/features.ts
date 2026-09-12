@@ -1,15 +1,22 @@
 import type { NormalizedServerConfig } from './config.js';
 import { isObject } from './utils.js';
 export interface ServerFeatures {
+  auth?: boolean;
   files?: boolean;
   graphql?: boolean;
   openapi?: boolean;
 }
 export function resolveFeatures(config: NormalizedServerConfig, features: ServerFeatures = {}): Required<ServerFeatures> {
-  if (!isObject(features) || Object.entries(features).some(([key, value]) => !['files', 'graphql', 'openapi'].includes(key) || typeof value !== 'boolean'))
-    throw new Error('features supports boolean files, graphql and openapi keys');
+  if (!isObject(features) || Object.entries(features).some(([key, value]) => !['files', 'graphql', 'openapi', 'auth'].includes(key) || typeof value !== 'boolean'))
+    throw new Error('features supports boolean files, graphql, openapi and auth keys');
   const overrides: ServerFeatures = features;
-  const resolved = { files: overrides.files ?? config.files != null, graphql: overrides.graphql ?? config.graphql.enabled ?? false, openapi: overrides.openapi ?? config.openapi.enabled ?? false };
+  const resolved = {
+    auth: overrides.auth ?? config.auth?.enabled ?? false,
+    files: overrides.files ?? config.files != null,
+    graphql: overrides.graphql ?? config.graphql.enabled ?? false,
+    openapi: overrides.openapi ?? config.openapi.enabled ?? false,
+  };
+  if (resolved.auth && !config.auth) throw new Error('Укажите config.auth.users для включения auth');
   if (resolved.files && !config.files) throw new Error('Для файловых маршрутов укажите секцию config.files');
   return resolved;
 }

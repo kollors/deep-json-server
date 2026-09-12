@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-alpha.5",
+  "version": "1.0.0-alpha.6",
   "description": "JSON mock server with schema-driven REST, GraphQL, nested queries and OpenAPI generation",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,6 +24,10 @@
     "./graphql": {
       "types": "./dist/src/graphql/entry.d.ts",
       "import": "./dist/src/graphql/entry.js"
+    },
+    "./auth": {
+      "types": "./dist/src/auth/public.d.ts",
+      "import": "./dist/src/auth/public.js"
     }
   },
   "files": [

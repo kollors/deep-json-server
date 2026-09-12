@@ -1,3 +1,4 @@
+import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from '../auth/openapi.js';
 import { VERSION } from '../constants.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/http.js';
 import { createFilePaths } from '../files/openapi.js';
@@ -25,12 +26,14 @@ function toOpenapi(schema: ValidationSchema): OpenapiSchema {
 export function buildOpenapiDocument({
   model,
   files = false,
+  auth = false,
   pageSize,
   maxPageSize,
   info = { title: 'Deep JSON Server API', version: VERSION },
 }: {
   model: Model;
   files?: boolean;
+  auth?: boolean;
   pageSize?: number;
   maxPageSize?: number;
   info?: Record<string, unknown>;
@@ -271,5 +274,20 @@ export function buildOpenapiDocument({
       paths[path] = item;
     }
   }
-  return { openapi: '3.0.3', info, components: { schemas, parameters }, paths };
+  if (auth) {
+    for (const [name, schema] of Object.entries(AUTH_SCHEMAS)) {
+      if (schemas[name]) throw new Error(`OpenAPI schema collision: ${name}`);
+      schemas[name] = structuredClone(schema);
+    }
+    for (const [path, item] of Object.entries(authOpenapiPaths())) {
+      if (paths[path] || model.entities.some((entity) => path.startsWith(`/${entity.collection}/`))) throw new Error(`Auth path collision: ${path}`);
+      for (const operation of Object.values(item)) {
+        const id = (operation as { operationId: string }).operationId;
+        if (operations.has(id)) throw new Error(`OpenAPI operation collision: ${id}`);
+        operations.add(id);
+      }
+      paths[path] = item;
+    }
+  }
+  return { openapi: '3.0.3', info, components: { schemas, parameters, ...(auth ? { securitySchemes: structuredClone(AUTH_SECURITY_SCHEMES) } : {}) }, paths };
 }

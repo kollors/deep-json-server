@@ -1,3 +1,7 @@
+import type { AuthConfig } from './auth/contract.js';
+
+export type { AuthConfig } from './auth/contract.js';
+
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyServerOptions } from 'fastify';
@@ -6,7 +10,7 @@ import { normalizePagination } from './pagination.js';
 import type { DatabaseData } from './types.js';
 import { assertKnownKeys, isObject } from './utils.js';
 
-const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server']);
+const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server', 'auth']);
 const DATABASE_KEYS = new Set(['data', 'path', 'schema']);
 const FILES_KEYS = new Set(['data', 'directory', 'metadata']);
 const OPENAPI_KEYS = new Set(['path', 'info', 'enabled', 'endpoint']);
@@ -53,6 +57,7 @@ export interface ServerConfig {
 export interface DeepJsonServerConfig {
   database: DatabaseConfig;
   files?: FilesConfig;
+  auth?: AuthConfig;
   openapi?: OpenapiConfig;
   graphql?: GraphqlConfig;
   server?: ServerConfig;
@@ -60,6 +65,7 @@ export interface DeepJsonServerConfig {
 export interface NormalizedServerConfig {
   database: DatabaseConfig;
   files?: FilesConfig;
+  auth?: AuthConfig;
   openapi: OpenapiConfig;
   graphql: GraphqlConfig;
   server: ServerConfig;
@@ -170,6 +176,21 @@ const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | un
   };
 };
 
+const normalizeAuth = (value: unknown, directory: string): AuthConfig | undefined => {
+  const auth = getObject(value, 'config.auth');
+  if (!auth) return undefined;
+  assertKnownKeys(auth, new Set(['enabled', 'users', 'expiresIn']), 'config.auth');
+  if (auth.enabled !== undefined && typeof auth.enabled !== 'boolean') throw new Error('config.auth.enabled must be boolean');
+  if (typeof auth.users !== 'string' && !Array.isArray(auth.users)) throw new Error('config.auth.users must be a file path or user array');
+  const expiresIn = getPositiveInteger(auth.expiresIn, 'config.auth.expiresIn');
+  if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
+  return {
+    enabled: auth.enabled as boolean | undefined,
+    users: typeof auth.users === 'string' ? resolve(directory, getString(auth.users, 'config.auth.users', true)) : (copyInput(auth.users) as AuthConfig['users']),
+    expiresIn,
+  };
+};
+
 const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServerConfig => {
   if (!isObject(config)) {
     throw new Error('Конфигурация сервера должна содержать JSON-объект');
@@ -220,6 +241,7 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   return {
     database,
     files,
+    auth: normalizeAuth(config.auth, directoryPath),
     openapi: {
       enabled: openapi.enabled as boolean | undefined,
       endpoint: openapiEndpoint,
@@ -278,16 +300,19 @@ export function configureGeneration(
   formats: string[],
   directory: string,
   sourcePath: string,
-  overrides: { host?: string; port?: number; files?: boolean },
+  overrides: { host?: string; port?: number; files?: boolean; auth?: boolean },
 ): NormalizedServerConfig {
   assertKnownKeys(source, CONFIG_KEYS, 'config');
   const database = getObject(source.database, 'config.database', true);
   if (database.schema === undefined) throw new Error('Generation requires an explicit model schema');
   const openapi = formats.includes('openapi');
+  const auth = openapi ? getObject(source.auth, 'config.auth') : undefined;
+  if (auth?.enabled !== undefined && typeof auth.enabled !== 'boolean') throw new Error('config.auth.enabled must be boolean');
   const server = openapi ? (getObject(source.server, 'config.server') ?? {}) : {};
   return configure(
     {
       database: { data: {}, schema: database.schema },
+      auth: openapi ? { users: [], enabled: overrides.auth ?? auth?.enabled ?? false } : undefined,
       openapi: openapi ? source.openapi : undefined,
       graphql: formats.includes('graphql') ? source.graphql : undefined,
       files: openapi && (overrides.files || source.files != null) ? { data: [] } : undefined,

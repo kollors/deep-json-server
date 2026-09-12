@@ -4,7 +4,7 @@
 
 A JSON-backed mock server with REST, GraphQL, nested queries, binary files and schema exports. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.5 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
+**1.0.0-alpha.6 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON-backed mock server with REST, GraphQL, nested queries, binary files and s
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.5`.
+To install a specific version, use `@1.0.0-alpha.6`.
 
 ## Quick start
 
@@ -55,6 +55,9 @@ The user list is available at `http://127.0.0.1:4001/users`.
 | `graphql.enabled` | Enable GraphQL HTTP endpoint; default `false` |
 | `graphql.endpoint` | Endpoint path; default `/graphql` |
 | `graphql.path` | GraphQL SDL export destination |
+| `auth.enabled` | Enable authentication; default `false` |
+| `auth.users` | Path to a JSON array of auth users, or an in-memory array |
+| `auth.expiresIn` | Session lifetime in seconds; default 3600 |
 | `server.host`, `server.port` | Defaults `127.0.0.1`, `4001`; CLI also reads `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | Defaults 10 and 100; default size is capped by the maximum |
 | `server.cors`, `server.logger` | Default `true`; logger also accepts Fastify logger options |
@@ -71,6 +74,7 @@ Set `server.port` to `0` to let the operating system choose an available port. T
 | `--files` | Enable file routes |
 | `--graphql` | Enable the GraphQL API |
 | `--openapi` | Enable the OpenAPI endpoint |
+| `--auth` | Enable authentication using `auth.users` |
 | `--host <host>` | Server address |
 | `--port <port>` | Server port |
 | `--help`, `-h` | Show help |
@@ -96,7 +100,7 @@ export default {
 };
 ```
 
-Each format needs its own output file. The command rejects destinations that would overwrite the configuration, database, schema or file metadata.
+Each format needs its own output file. The command rejects destinations that would overwrite the configuration, database, schema, auth users or file metadata.
 
 ## Model schema
 
@@ -534,9 +538,47 @@ Content-Type: application/json
 
 In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. Metadata stores `directory`, `mimeType` and `name`; the server reads the size from the file and builds its URLs. Directories and the metadata file are created when needed.
 
-Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, loaded configuration or metadata file.
+Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, auth users, loaded configuration or metadata file.
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
+
+## Authentication
+
+The optional auth module provides REST routes for login, current user and logout. **It does not restrict access to REST records, files or GraphQL.**
+
+Create an auth user in a separate file with `setup-auth.mjs`:
+
+```js
+import { writeFile } from 'node:fs/promises';
+import { hashPassword } from '@kollors/deep-json-server/auth';
+
+const password = process.env.DJS_PASSWORD;
+if (!password) throw new Error('Set DJS_PASSWORD');
+await writeFile('./auth.json', JSON.stringify([
+  { id: '1', username: 'admin', passwordHash: await hashPassword(password) },
+], null, 2), { flag: 'wx', mode: 0o600 });
+```
+
+Set `DJS_PASSWORD` and run `node setup-auth.mjs`. Add the file to your server configuration:
+
+```js
+export default {
+  database: { path: './database.json' },
+  auth: { users: './auth.json', expiresIn: 3600 },
+};
+```
+
+Start with `npx deep-json-server --auth server.config.js`, or set `auth.enabled: true`. Each user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. Passwords use salted scrypt hashes. The file is read at startup; restart the server after editing it.
+
+| REST request | Input | Response |
+|---|---|---|
+| `POST /auth/login` | JSON `{ "username": "admin", "password": "…" }` | `{ accessToken, expiresIn, user: { id, username } }` |
+| `GET /auth/me` | Bearer token | `{ id, username }` |
+| `POST /auth/logout` | Bearer token | `{ success: true }` |
+
+Pass the token in `Authorization: Bearer <accessToken>`. Incorrect credentials and invalid or expired tokens return HTTP 401. Sessions are kept in memory and disappear on restart; logout revokes the supplied token. Login can return HTTP 429 when the server has too many concurrent login attempts or active sessions.
+
+OpenAPI includes these REST operations and a Bearer security scheme for `/auth/me` and `/auth/logout`. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration or use `generate openapi --auth server.config.js`; the users file is not read during generation. GraphQL and OpenAPI still require `database.schema`.
 
 ## Programmatic API
 
@@ -550,7 +592,7 @@ await server.listen();
 // await server.close();
 ```
 
-The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup. Override server features with `createServer(config, { files: false, graphql: true, openapi: true })`.
+The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup. Override server features with `createServer(config, { files: false, graphql: true, openapi: true, auth: true })`.
 
 The root import `@kollors/deep-json-server` also provides these functions. Server adapters load when enabled. Generators can be used independently:
 
@@ -564,13 +606,15 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
+`generateOpenapi()` accepts `{ auth: true }` to include auth operations. `hashPassword()` is also available from the root package.
+
 `generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 
 ## Storage and development
 
 Updates run sequentially within one server instance and are validated on a copy of the data before saving. Use one server process per database file. `increment` counters are stored next to the database in `<database path>.counters.json`; keep that file with the database. Numbers are reserved before the data write, so a failed write can leave gaps but cannot reuse a reserved number.
 
-The server is intended for mocking APIs. Implement authentication and password hashing in your application if needed.
+The server is intended for mocking APIs. Access rules for application data remain the responsibility of your application.
 
 ```sh
 npm ci

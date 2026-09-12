@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyListenOptions } from 'fastify';
+import { AUTH_PATHS } from './auth/contract.js';
 import { configSourcePath, type DeepJsonServerConfig, type NormalizedServerConfig, normalizeServerConfig } from './config.js';
 import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT } from './constants.js';
 import { DomainError } from './errors.js';
@@ -34,11 +35,13 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
     const { FILE_HEADERS } = await import('./files/http.js');
     corsHeaders['Access-Control-Allow-Headers'] = [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', ');
   }
+  if (enabled.auth) corsHeaders['Access-Control-Allow-Headers'] += ', Authorization';
   const { cors = true, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE } = normalized.server;
   const { pageSize, maxPageSize } = normalizePagination(normalized.server);
   const openapi = async () =>
     (await import('./openapi/public.js')).openapiFromModel(explicitModel, {
       files: enabled.files,
+      auth: enabled.auth,
       pageSize,
       maxPageSize,
       info: normalized.openapi.info,
@@ -87,8 +90,14 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       const openapiPath = normalized.openapi.endpoint ?? '/openapi.json';
       validateEndpoints(
         model.entities.map((entity) => entity.collection),
-        [...(enabled.graphql ? [graphqlPath] : []), ...(enabled.openapi ? [openapiPath] : [])],
+        [...(enabled.graphql ? [graphqlPath] : []), ...(enabled.openapi ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
       );
+      const auth = enabled.auth && normalized.auth ? await (await import('./auth/service.js')).createAuthService(normalized.auth) : undefined;
+      if (auth) {
+        app.addHook('onClose', async () => auth.close());
+        const { registerAuthRoutes } = await import('./auth/routes.js');
+        registerAuthRoutes(app, auth);
+      }
       registerRestRoutes(app, engine);
       if (enabled.graphql) {
         const [{ registerGraphqlRoutes }, { buildGraphql }] = await Promise.all([import('./graphql/routes.js'), import('./graphql.js')]);
@@ -102,7 +111,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       const files = normalized.files;
       if (enabled.files && files) {
         const { createFileStore, registerFileRoutes } = await import('./files/index.js');
-        const protectedPaths = inputPaths({ database: normalized.database }, '.', configSourcePath(normalized));
+        const protectedPaths = inputPaths({ database: normalized.database, auth: normalized.auth }, '.', configSourcePath(normalized));
         registerFileRoutes(app, { getStore: () => createFileStore(files, protectedPaths), maxFileSize });
       }
     });

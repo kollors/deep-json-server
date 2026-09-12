@@ -70,8 +70,8 @@ test('starts from config with consistent feature defaults', async () => {
     assert.deepEqual(
       calls.map(({ features }) => features),
       [
-        { files: true, graphql: false, openapi: false },
-        { files: true, graphql: false, openapi: false },
+        { auth: false, files: true, graphql: false, openapi: false },
+        { auth: false, files: true, graphql: false, openapi: false },
       ],
     );
     assert.deepEqual(calls[0].config.database, { path: fixture.databasePath, schema: fixture.schemaPath });
@@ -90,7 +90,7 @@ test('endpoint flags start the server and generation writes files independently'
   const calls = [];
   try {
     await runCli(['--openapi', '--graphql', '--host', '127.0.0.2', '--port', '4010', fixture.configPath], createServices(calls));
-    assert.deepEqual(calls[0].features, { files: true, graphql: true, openapi: true });
+    assert.deepEqual(calls[0].features, { auth: false, files: true, graphql: true, openapi: true });
     assert.equal(calls[0].openapiCalls, 0);
     assert.equal(calls[0].config.server.host, '127.0.0.2');
     assert.equal(calls[0].config.server.port, 4010);
