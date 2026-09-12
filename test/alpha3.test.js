@@ -135,7 +135,7 @@ test('nested field lookups reject inherited names and empty objects remain writa
   const created = await app.inject({ method: 'POST', url: '/items', payload: { settings: {}, profile: { name: 'A' } } });
   assert.equal(created.statusCode, 201, created.body);
   assert.deepEqual(created.json().settings, {});
-  for (const options of [{ scope: 'profile(toString)' }, { order: [{ field: 'profile.toString', direction: 'ASC' }] }, { where: { profile: { toString: { eq: 'x' } } } }])
+  for (const options of [{ scope: { profile: { toString: true } } }, { order: [{ field: 'profile.toString', direction: 'ASC' }] }, { where: { profile: { toString: { eq: 'x' } } } }])
     assert.equal((await app.inject(url('/items', options))).statusCode, 400);
   assert.ok((await generateOpenapi(schema)).components.schemas.ItemCreate.properties.settings);
   await assert.rejects(() => generateGraphql(schema), /at least one visible field/);
@@ -186,7 +186,10 @@ test('GraphQL prepares each selected list once and REST reuses nested plans', as
 
 test('inferred relation indexes use collections rather than singular model names', async (t) => {
   const { app } = await setup(t, { database: { data: { user: [{ id: '1', name: 'A' }], users: [{ id: '1', name: 'B' }], links: [{ id: '1', userId: '1', usersId: '1' }] } } });
-  for (const scope of ['user(name),users(name)', 'users(name),user(name)']) {
+  for (const scope of [
+    { user: { name: true }, users: { name: true } },
+    { users: { name: true }, user: { name: true } },
+  ]) {
     const result = (await app.inject(url('/links/1', { scope }))).json();
     assert.deepEqual(result, { user: { name: 'A' }, users: { name: 'B' } });
   }
@@ -200,14 +203,14 @@ test('mixed schemaless shapes preserve projected data and never expose internal 
   ];
   for (const items of [mixed, [...mixed].reverse()]) {
     const { app } = await setup(t, { database: { data: { items, tags: [{ id: 't' }], privateNotes: [{ id: 'p', text: 'fixture' }] } } });
-    const result = await app.inject('/items/1?scope=profile(name)');
+    const result = await app.inject(url('/items/1', { scope: { profile: { name: true } } }));
     assert.equal(result.statusCode, 200, result.body);
     assert.deepEqual(result.json(), { profile: { data: [{ name: 'A' }], total: 1 } });
     assert.doesNotMatch(result.body, /context|bindings|privateNotes/);
     assert.equal((await app.inject('/items')).statusCode, 200);
     for (const options of [{ where: { profile: {} } }, { order: [{ field: 'profile.name', direction: 'ASC' }] }, { nested: { profile: {} } }])
       assert.equal((await app.inject(url('/items', options))).statusCode, 400);
-    const updated = await app.inject({ method: 'PATCH', url: '/items/2?scope=profile', payload: { profile: [{ name: 'C' }] } });
+    const updated = await app.inject({ method: 'PATCH', url: url('/items/2', { scope: { profile: true } }), payload: { profile: [{ name: 'C' }] } });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.deepEqual(updated.json(), { profile: { data: [{ name: 'C' }], total: 1 } });
   }

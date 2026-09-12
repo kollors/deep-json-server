@@ -42,6 +42,7 @@ export interface Node extends Field {
   relation?: Entity;
   implicit?: boolean;
   mixed?: boolean;
+  relationKey?: boolean;
 }
 export interface Entity {
   name: string;
@@ -224,6 +225,8 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
       if (node.relation) {
         const sourceField = entity.fields[node.source as string];
         const targetField = node.relation.fields[node.target as string];
+        if (!sourceField.primary) sourceField.relationKey = true;
+        if (!targetField.primary) targetField.relationKey = true;
         if (sourceField.relation || targetField.relation || !['string', 'number'].includes(sourceField.base) || sourceField.base !== targetField.base)
           throw new Error(`Incompatible relation keys: ${entity.name}.${node.path}`);
       } else {
@@ -242,10 +245,11 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
   }
   return model;
 }
-export function writable(node: Node, mode: InputMode): boolean {
-  if (node.relation || node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
+export function writable(node: Node, mode: InputMode, relations = false): boolean {
+  if (node.relation) return relations;
+  if (node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
   const children = Object.values(node.children);
-  return node.base !== 'object' || children.length === 0 || children.some((child) => writable(child, mode));
+  return node.base !== 'object' || children.length === 0 || children.some((child) => writable(child, mode, relations));
 }
 export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
@@ -261,35 +265,47 @@ export function valueSchema(node: Node): ValidationSchema {
   return schema;
 }
 export type InputMode = 'stored' | 'create' | 'replace' | 'update';
-export function objectSchema(node: Node, mode: InputMode, root = false): ValidationSchema {
+export function objectSchema(node: Node, mode: InputMode, root = false, relationSchema?: (node: Node) => ValidationSchema): ValidationSchema {
   const properties: Record<string, ValidationSchema> = {};
   const required: string[] = [];
   for (const [key, child] of Object.entries(node.children)) {
-    if (child.relation || (mode !== 'stored' && !writable(child, mode))) continue;
+    if (child.relation) {
+      if (mode !== 'stored' && relationSchema) properties[key] = relationSchema(child);
+      continue;
+    }
+    if (mode !== 'stored' && !writable(child, mode, !!relationSchema)) continue;
     properties[key] =
       child.base === 'object'
         ? (() => {
-            let s: ValidationSchema = objectSchema(child, mode);
+            let s: ValidationSchema = objectSchema(child, mode, false, relationSchema);
             if (child.many) s = { type: 'array', items: s };
             return child.nullable ? { anyOf: [s, { type: 'null' }] } : s;
           })()
         : valueSchema(child);
-    if (child.required && !(root && mode === 'update') && !(mode !== 'stored' && child.default !== undefined)) required.push(key);
+    if (child.required && !(root && mode === 'update') && !(mode !== 'stored' && child.default !== undefined) && !(relationSchema && child.relationKey)) required.push(key);
   }
   return { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) };
 }
-const validators = new WeakMap<Entity, Map<InputMode, ValidateFunction>>();
-export function validateRecord(entity: Entity, value: unknown, mode: InputMode): void {
+export function relationInputSchema(node: Node, object: ValidationSchema = { type: 'object' }): ValidationSchema {
+  const target = node.relation as Entity;
+  let schema: ValidationSchema = { anyOf: [valueSchema(target.fields[target.primary]), object] };
+  if (node.many) schema = { type: 'array', items: schema };
+  else if (node.nullable) schema = { anyOf: [schema, { type: 'null' }] };
+  return schema;
+}
+const validators = new WeakMap<Entity, Map<string, ValidateFunction>>();
+export function validateRecord(entity: Entity, value: unknown, mode: InputMode, relations = false): void {
   const ajv = entityValidators.get(entity) as Ajv;
   let cache = validators.get(entity);
   if (!cache) {
     cache = new Map();
     validators.set(entity, cache);
   }
-  let validate = cache.get(mode);
+  const key = `${mode}:${relations}`;
+  let validate = cache.get(key);
   if (!validate) {
-    validate = ajv.compile(objectSchema(entity.root, mode, true));
-    cache.set(mode, validate);
+    validate = ajv.compile(objectSchema(entity.root, mode, true, relations ? (node) => relationInputSchema(node) : undefined));
+    cache.set(key, validate);
   }
   if (!validate(value)) throw domainError('INVALID_INPUT', `${entity.name}: ${ajv.errorsText(validate.errors)}`);
 }

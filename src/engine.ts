@@ -1,29 +1,16 @@
-import { randomUUID } from 'node:crypto';
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './constants.js';
 import type { DatabaseStore } from './database.js';
-import { createId } from './database.js';
 import { domainError } from './errors.js';
-import { childName, type Entity, inferModel, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
+import { type Entity, inferModel, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
+import { MutationWriter } from './mutations/write.js';
 import { compileWhere, type Predicate } from './query/filter.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
-import type { DatabaseData, DatabaseRecord, JsonObject } from './types.js';
+import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
+import type { DatabaseData, JsonObject } from './types.js';
 import { isObject } from './utils.js';
 
-const REF = Symbol('record reference');
-export interface Ref {
-  [REF]: true;
-  entity: Entity;
-  node: Node;
-  value: JsonObject;
-  root: JsonObject;
-  bindings: Record<string, JsonObject>;
-  context: Context;
-}
-export interface Context {
-  data: DatabaseData;
-  model: Model;
-  indexes: Map<string, Map<string, JsonObject[]>>;
-}
+export { type Context, isRef, makeContext, type Ref, related, resolveField, rootRef } from './records.js';
+
 export interface PreparedList {
   page: number;
   pageSize: number;
@@ -34,48 +21,6 @@ export interface Page {
   data: Ref[];
   total: number;
 }
-export const makeContext = (data: DatabaseData, model: Model): Context => ({ data, model, indexes: new Map() });
-export const rootRef = (context: Context, entity: Entity, value: JsonObject): Ref => ({ [REF]: true, context, entity, node: entity.root, value, root: value, bindings: {} });
-const keyOf = (value: unknown): string => `${typeof value}:${String(value)}`;
-function sourceValues(ref: Ref, node: Node): unknown[] {
-  const path = node.source as string;
-  const binding = Object.keys(ref.bindings)
-    .filter((prefix) => path === prefix || path.startsWith(`${prefix}.`))
-    .sort((a, b) => b.length - a.length)[0];
-  return binding ? readPath(ref.bindings[binding], path === binding ? [] : path.slice(binding.length + 1)) : readPath(ref.root, path);
-}
-export function related(ref: Ref, node: Node): Ref[] {
-  const entity = node.relation as Entity;
-  const indexKey = `${entity.collection}:${node.target}`;
-  let index = ref.context.indexes.get(indexKey);
-  if (!index) {
-    index = new Map();
-    for (const record of ref.context.data[entity.collection] ?? [])
-      for (const value of readPath(record, node.target as string)) {
-        const key = keyOf(value);
-        const bucket = index.get(key) ?? [];
-        bucket.push(record);
-        index.set(key, bucket);
-      }
-    ref.context.indexes.set(indexKey, index);
-  }
-  const found = new Set<JsonObject>();
-  for (const value of sourceValues(ref, node)) for (const record of index.get(keyOf(value)) ?? []) found.add(record);
-  return [...found].map((record) => rootRef(ref.context, entity, record));
-}
-export function resolveField(ref: Ref, node: Node): unknown {
-  if (node.relation) {
-    const records = related(ref, node);
-    return node.many ? records : (records[0] ?? null);
-  }
-  const key = childName(node);
-  const value = Object.hasOwn(ref.value, key) ? ref.value[key] : undefined;
-  if ((ref.context.model.explicit && node.base !== 'object') || value == null) return value;
-  const wrap = (object: JsonObject): Ref => ({ ...ref, node, value: object, bindings: { ...ref.bindings, [node.path]: object } });
-  if (Array.isArray(value)) return value.every(isObject) ? (value as JsonObject[]).map(wrap) : value;
-  return isObject(value) ? wrap(value as JsonObject) : value;
-}
-export const isRef = (value: unknown): value is Ref => isObject(value) && (value as Partial<Ref>)[REF] === true;
 function filterView(ref: Ref): Record<string, unknown> {
   const value: Record<string, unknown> = {};
   for (const [name, node] of Object.entries(childrenOf(ref.node)))
@@ -200,38 +145,10 @@ export class Engine {
         visit(rootRef(context, entity, record));
       }
   }
-  private defaults(node: Node, record: JsonObject): void {
-    for (const [key, child] of Object.entries(node.children)) {
-      if (child.relation) continue;
-      if (!Object.hasOwn(record, key) && child.default !== undefined) record[key] = structuredClone(child.default);
-      if (child.base === 'object' && record[key] != null) {
-        const values = child.many ? (record[key] as JsonObject[]) : [record[key] as JsonObject];
-        values.forEach((value) => {
-          this.defaults(child, value);
-        });
-      }
-    }
-  }
-  private preserve(node: Node, record: JsonObject, previous?: JsonObject): void {
-    for (const [key, child] of Object.entries(node.children)) {
-      if (child.relation) continue;
-      if ((child.generated || child.readOnly) && previous && Object.hasOwn(previous, key)) record[key] = structuredClone(previous[key]);
-      else if (child.base === 'object' && !child.many) {
-        const old = previous?.[key];
-        if (isObject(record[key])) this.preserve(child, record[key] as JsonObject, isObject(old) ? (old as JsonObject) : undefined);
-        else if (record[key] === undefined && isObject(old)) {
-          const preserved: JsonObject = {};
-          this.preserve(child, preserved, old as JsonObject);
-          if (Object.keys(preserved).length) record[key] = preserved;
-        }
-      }
-    }
-  }
   async mutate<T = Ref>(entity: Entity, mode: 'create' | 'replace' | 'update' | 'delete', key?: unknown, body?: unknown, prepare?: (ref: Ref) => T): Promise<T> {
     if (mode !== 'delete') {
       if (!isObject(body)) throw domainError('INVALID_INPUT', 'Request body must be an object');
-      if (this.model.explicit) validateRecord(entity, body, mode);
-      else if (Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
+      if (!this.model.explicit && Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     }
     const outcome = await this.store.update((database) => {
       const finish = (data: DatabaseData, record: JsonObject) => {
@@ -252,42 +169,18 @@ export class Engine {
             if (!Number.isSafeInteger(maximum) || maximum < 0) throw domainError('CONFLICT', 'Invalid increment counter');
             counters[name] = maximum;
           }
-      const context = makeContext(database.data, this.model);
-      const current = mode === 'create' ? undefined : this.find(context, entity, key);
-      if (mode !== 'create' && !current) throw domainError('NOT_FOUND', 'Record not found');
-      database.data[entity.collection] ??= [];
-      const collection = database.data[entity.collection];
       if (mode === 'delete') {
+        const context = makeContext(database.data, this.model);
+        const current = this.find(context, entity, key);
+        if (!current) throw domainError('NOT_FOUND', 'Record not found');
         const snapshot = structuredClone(database.data);
         this.cascade(context, current as Ref);
         this.validateData(database.data);
         return finish(snapshot, (current as Ref).value);
       }
-      const record = (mode === 'update' ? { ...current?.value, ...(structuredClone(body) as JsonObject) } : structuredClone(body)) as DatabaseRecord;
-      if (mode !== 'create') {
-        record[entity.primary] = (current as Ref).value[entity.primary];
-        this.preserve(entity.root, record, current?.value);
-      }
-      if (this.model.explicit) {
-        if (mode !== 'update') this.defaults(entity.root, record);
-        if (mode === 'create')
-          for (const [name, field] of Object.entries(entity.root.children)) {
-            if (field.generated === 'uuid') record[name] = randomUUID();
-            if (field.generated === 'increment') {
-              database.counters ??= {};
-              const counters = database.counters;
-              const counterKey = `${entity.collection}.${name}`;
-              const largest = counters[counterKey] ?? 0;
-              if (!Number.isSafeInteger(largest) || largest >= Number.MAX_SAFE_INTEGER) throw domainError('CONFLICT', 'Increment key exhausted');
-              record[name] = largest + 1;
-              counters[counterKey] = largest + 1;
-            }
-          }
-      } else if (mode === 'create') record.id = createId(collection);
-      const collision = collection.some((v) => v !== current?.value && String(v[entity.primary]) === String(record[entity.primary]));
-      if (collision) throw domainError('CONFLICT', 'Primary key already exists');
-      if (mode === 'create') collection.push(record);
-      else collection[collection.indexOf((current as Ref).value)] = record;
+      const writer = new MutationWriter(database, this.model, mode === 'replace' ? 'replace' : 'update');
+      const record = writer.write(entity, mode, key, body);
+      writer.validateRelations();
       this.validateData(database.data);
       return finish(database.data, record);
     });

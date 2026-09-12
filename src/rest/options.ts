@@ -1,56 +1,28 @@
 import type { Node } from '../model.js';
 import { pathParts } from '../model.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from '../query/options.js';
-import { isObject } from '../utils.js';
+import { isObject, isSafeKey } from '../utils.js';
 export interface Scope {
-  [key: string]: Scope | null;
+  [key: string]: Scope | true;
 }
 export interface RestOptions extends ListOptions {
   scope: Scope;
   nested: Record<string, ListOptions>;
 }
-export const ownScope: Scope = { '*': null };
-export function parseScope(value: unknown): Scope {
-  if (value === undefined) return ownScope;
-  if (typeof value !== 'string' || !value.length || value.length > 10000) badQuery('scope must be a nonempty string of at most 10000 characters');
-  let index = 0;
-  function parse(depth: number): Scope {
-    if (depth > 32) badQuery('scope is too deep');
-    const result: Scope = Object.create(null);
-    while (index < (value as string).length) {
-      const match = /^(\*|[A-Za-z][A-Za-z0-9_]*)/.exec((value as string).slice(index));
-      if (!match) badQuery('Invalid scope syntax');
-      const key = match[1];
-      if (key !== '*') pathParts(key);
-      index += key.length;
-      let child: Scope | null = null;
-      if ((value as string)[index] === '(') {
-        if (key === '*') badQuery('Wildcard cannot have a selection');
-        index++;
-        child = parse(depth + 1);
-        if ((value as string)[index++] !== ')') badQuery('Unclosed scope selection');
-      }
-      if (Object.hasOwn(result, key)) badQuery(`Duplicate scope field ${key}`);
-      result[key] = child;
-      if ((value as string)[index] !== ',') break;
-      index++;
-      if (index === (value as string).length) badQuery('Trailing scope comma');
-    }
-    if (!Object.keys(result).length) badQuery('Empty scope selection');
-    return result;
-  }
-  const result = parse(0);
-  if (index !== value.length) badQuery('Invalid scope syntax');
-  return result;
+export const ownScope: Scope = { '*': true };
+export function scopeFor(scope: Scope, key: string): Scope {
+  const selection = Object.hasOwn(scope, key) ? scope[key] : true;
+  return selection === true ? ownScope : selection;
 }
 export function parseRestOptions(query: unknown, list: boolean): RestOptions {
   if (!isObject(query)) badQuery('Invalid query');
   const allowed = list ? ['scope', 'nested', 'where', 'order', 'pager'] : ['scope', 'nested'];
   for (const key of Object.keys(query)) if (!allowed.includes(key)) badQuery(`Unknown query parameter ${key}`);
-  const result: RestOptions = { scope: parseScope(query.scope), nested: {} };
-  for (const key of ['where', 'order', 'pager', 'nested'] as const) {
+  const result: RestOptions = { scope: ownScope, nested: {} };
+  for (const key of ['scope', 'where', 'order', 'pager', 'nested'] as const) {
     if (query[key] === undefined) continue;
     if (typeof query[key] !== 'string') badQuery(`${key} must occur once and contain JSON`);
+    if (key === 'scope' && query[key].length > 10000) badQuery('scope must contain at most 10000 characters');
     try {
       result[key] = JSON.parse(query[key]) as never;
     } catch {
@@ -60,13 +32,19 @@ export function parseRestOptions(query: unknown, list: boolean): RestOptions {
   if (!isObject(result.nested)) badQuery('nested must be an object');
   return result;
 }
-export function validateScope(node: Node, scope: Scope, depth = 0): void {
+export function validateScope(node: Node, scope: unknown, depth = 0): asserts scope is Scope {
+  if (!isObject(scope)) badQuery('scope must be a JSON object');
   if (depth > 32) badQuery('scope is too deep');
   for (const [key, selection] of Object.entries(scope)) {
-    if (key === '*') continue;
+    if (key === '*') {
+      if (selection !== true) badQuery('scope wildcard must be true');
+      continue;
+    }
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || !isSafeKey(key)) badQuery(`Invalid scope field ${key}`);
+    if (selection !== true && !isObject(selection)) badQuery(`scope.${key} must be true or an object`);
     const child = childrenOf(node)[key];
     if (!Object.hasOwn(childrenOf(node), key) || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
-    if (selection) {
+    if (selection !== true) {
       if (!child.relation && child.base !== 'object') badQuery(`Scalar field ${key} cannot have a selection`);
       validateScope(child, selection, depth + 1);
     }
@@ -82,7 +60,7 @@ export function validateNested(root: Node, scope: Scope, nested: Record<string, 
     for (const key of pathParts(path)) {
       const child = childrenOf(current)[key];
       if (!Object.hasOwn(selection, key) && !(Object.hasOwn(selection, '*') && !child.relation)) badQuery(`nested path ${path} is not selected by scope`);
-      selection = Object.hasOwn(selection, key) ? (selection[key] ?? ownScope) : ownScope;
+      selection = scopeFor(selection, key);
       current = child;
     }
   }

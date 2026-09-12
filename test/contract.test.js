@@ -30,7 +30,7 @@ const simple = (fields) => ({ Item: { collection: 'items', fields: { id: { type:
 
 test('REST scope, nested lists, relation filters and GraphQL return the same catalog', async (t) => {
   const { server } = await setup(t);
-  const scope = 'id,fullName,movies(id,title,actors(user(id,fullName),genres(id,name)))';
+  const scope = { id: true, fullName: true, movies: { id: true, title: true, actors: { user: { id: true, fullName: true }, genres: { id: true, name: true } } } };
   const rest = await request(server, '/users', {
     scope,
     order: [{ field: 'fullName', direction: 'DESC' }],
@@ -42,31 +42,31 @@ test('REST scope, nested lists, relation filters and GraphQL return the same cat
     '{ userList(order:[{field:fullName,direction:DESC}],pager:{page:1,pageSize:1}) { total data { id fullName movies(order:[{field:title,direction:ASC}]) {total data {id title actors {total data {user {id fullName} genres(where:{id:{in:["3"]}},pager:{pageSize:1}) {total data {id name}}}}}}}}}',
   );
   assert.deepEqual(rest, graph.userList);
-  const filtered = await request(server, '/users', { where: { movies: { some: { actors: { some: { genres: { some: { id: { eq: '2' } } } } } } } }, scope: 'id' });
+  const filtered = await request(server, '/users', { where: { movies: { some: { actors: { some: { genres: { some: { id: { eq: '2' } } } } } } } }, scope: { id: true } });
   assert.equal(filtered.total, 2);
-  const none = await request(server, '/users', { scope: 'id,movies(id)', nested: { movies: { where: { title: { contains: 'missing' } } } } });
+  const none = await request(server, '/users', { scope: { id: true, movies: { id: true } }, nested: { movies: { where: { title: { contains: 'missing' } } } } });
   assert.equal(none.total, 2);
   assert.equal(none.data[0].movies.total, 0);
-  const single = await request(server, '/users/1', { scope: 'id,movies(title)', nested: { movies: { pager: { page: 9, pageSize: 1 } } } });
+  const single = await request(server, '/users/1', { scope: { id: true, movies: { title: true } }, nested: { movies: { pager: { page: 9, pageSize: 1 } } } });
   assert.equal(single.movies.total, 1);
   assert.deepEqual(single.movies.data, []);
 });
 
 test('wildcard includes raw keys and excludes all computed relations', async (t) => {
   const { server } = await setup(t);
-  const movie = await request(server, '/movies/1', { scope: '*' });
+  const movie = await request(server, '/movies/1', { scope: { '*': true } });
   assert.deepEqual(movie.publisherIds, ['2']);
   assert.equal(movie.publishers, undefined);
   assert.equal(movie.actors.data[0].user, undefined);
   assert.equal(movie.actors.data[0].userId, '1');
-  const nested = await request(server, '/movies/1', { scope: 'actors(genres(*))' });
+  const nested = await request(server, '/movies/1', { scope: { actors: { genres: { '*': true } } } });
   assert.deepEqual(
     nested.actors.data.map((a) => a.genres.data.map((g) => g.id)),
     [['2', '3'], ['3']],
   );
   assert.deepEqual(Object.keys(nested), ['actors']);
   assert.equal(nested.actors.data[0].genres.data[0].parents, undefined);
-  const parents = await request(server, '/genres/2', { scope: 'parents(id,children(id))' });
+  const parents = await request(server, '/genres/2', { scope: { parents: { id: true, children: { id: true } } } });
   assert.equal(parents.parents.data[0].children.data[0].id, '2');
 });
 
@@ -76,7 +76,7 @@ test('schemaless REST accepts new fields, infers relations, and rejects exporter
   t.after(() => server.close());
   await assert.rejects(() => facade.openapi(), /explicit/);
   await assert.rejects(() => facade.graphql(), /explicit/);
-  assert.equal((await request(server, '/users/1', { scope: 'movies(title)' })).movies.total, 1);
+  assert.equal((await request(server, '/users/1', { scope: { movies: { title: true } } })).movies.total, 1);
   let r = await server.inject({ method: 'POST', url: '/users', payload: { anything: { nested: 42 }, tags: [true, false] } });
   assert.equal(r.statusCode, 201, r.body);
   const key = r.json().id;
@@ -143,25 +143,33 @@ test('rejects invalid scope, nested, filter, ordering and pager even on empty co
     { nested: { name: {} } },
     { nested: { rows: { bad: 1 } } },
     { nested: { rows: { pager: { page: -1 } } } },
-    { scope: 'id', nested: { rows: {} } },
-    { scope: 'id(name)' },
-    { scope: 'secret' },
-    { scope: 'missing' },
-    { scope: 'id,id' },
-    { scope: 'id,' },
-    { scope: 'rows()' },
-    { scope: 'rows(name' },
-    { scope: '*(id)' },
-    { scope: '__proto__' },
-    { scope: 'rows(name))' },
-    { scope: 'rows(name),,id' },
+    { scope: { id: true }, nested: { rows: {} } },
+    { scope: { id: { name: true } } },
+    { scope: { secret: true } },
+    { scope: { missing: true } },
+    { scope: { id: false } },
+    { scope: { rows: null } },
+    { scope: { rows: [] } },
+    { scope: { rows: { name: 1 } } },
+    { scope: { id: 'true' } },
+    { scope: { '*': {} } },
+    { scope: { '*': false } },
+    { scope: { 'meta.value': true } },
+    { scope: { constructor: true } },
+    { scope: { rows: { prototype: true } } },
+    { scope: JSON.parse('{"__proto__":true}') },
+    { scope: [] },
+    { scope: true },
+    { scope: null },
+    { scope: 'id,rows(name)' },
+    { scope: '"id"' },
     { scope: '' },
   ];
   for (const q of queries) {
     const r = await server.inject(url('/items', q));
     assert.equal(r.statusCode, 400, `${JSON.stringify(q)}: ${r.body}`);
   }
-  for (const path of ['/items?where={', '/items?scope=id&scope=id', '/items?where={}&where={}']) assert.equal((await server.inject(path)).statusCode, 400, path);
+  for (const path of ['/items?where={', url('/items', { scope: { id: true } }) + '&scope=%7B%7D', '/items?where={}&where={}']) assert.equal((await server.inject(path)).statusCode, 400, path);
   assert.equal((await server.inject('/items/missing?where={}')).statusCode, 400);
   assert.deepEqual(await request(server, '/items', { where: { and: [] }, order: [{ field: 'meta.value', direction: 'ASC' }] }), { data: [], total: 0 });
 });
@@ -323,7 +331,7 @@ test('required and dangling relations are validated without data coercion', asyn
     const r = await server.inject({ method: 'POST', url: '/users', payload });
     assert.equal(r.statusCode, 400, r.body);
   }
-  const good = await server.inject({ method: 'POST', url: '/users?scope=id,country(code)', payload: { countryCode: 1 } });
+  const good = await server.inject({ method: 'POST', url: url('/users', { scope: { id: true, country: { code: true } } }), payload: { countryCode: 1 } });
   assert.equal(good.statusCode, 201, good.body);
   assert.equal(good.json().country.code, 1);
   assert.equal((await server.inject({ method: 'DELETE', url: '/countries/1' })).statusCode, 409);
@@ -420,8 +428,8 @@ test('prototype property names cannot leak inherited values into scope or filter
   const rows = await request(server, '/items');
   assert.equal(Object.hasOwn(rows.data[0], 'toString'), false);
   assert.equal(rows.data[1].toString, 'safe');
-  assert.equal((await request(server, '/items', { where: { toString: { eq: 'safe' } }, scope: 'id,toString' })).total, 1);
-  assert.equal((await server.inject(url('/items', { scope: 'valueOf' }))).statusCode, 400);
+  assert.equal((await request(server, '/items', { where: { toString: { eq: 'safe' } }, scope: { id: true, toString: true } })).total, 1);
+  assert.equal((await server.inject(url('/items', { scope: { valueOf: true } }))).statusCode, 400);
 });
 
 test('schemaless heterogeneous values are preserved rather than coerced to object shapes', async (t) => {
@@ -462,4 +470,66 @@ test('cascade does not restrict surviving roots through already removed embedded
   const r = await server.inject({ method: 'DELETE', url: '/users/u' });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal((await request(server, '/movies/m')).actors.total, 0);
+});
+
+test('JSON scope supports explicit relations, wildcard overrides and empty selections', async (t) => {
+  const { server } = await setup(t);
+  const selected = await request(server, '/movies/1', { scope: { '*': true, actors: { user: true, genres: { name: true } } } });
+  assert.equal(selected.id, '1');
+  assert.equal(selected.publishers, undefined);
+  assert.equal(selected.actors.data[0].user.fullName, database.users[0].fullName);
+  assert.equal(selected.actors.data[0].user.movies, undefined);
+  assert.deepEqual(Object.keys(selected.actors.data[0]), ['user', 'genres']);
+  assert.deepEqual(Object.keys(selected.actors.data[0].genres.data[0]), ['name']);
+  assert.deepEqual(await request(server, '/users/1', { scope: {} }), {});
+  const empty = await request(server, '/users', { scope: {} });
+  assert.equal(empty.total, database.users.length);
+  assert.deepEqual(
+    empty.data,
+    database.users.map(() => ({})),
+  );
+  const actors = await request(server, '/movies/1', { scope: { actors: {} }, nested: { actors: { pager: { pageSize: 1 } } } });
+  assert.deepEqual(actors.actors.data, [{}]);
+  assert.equal(actors.actors.total, 2);
+  const ownActors = await request(server, '/movies/1', { scope: { actors: true }, nested: { actors: { pager: { pageSize: 1 } } } });
+  assert.equal(ownActors.actors.data.length, 1);
+  assert.equal(ownActors.actors.data[0].user, undefined);
+  assert.equal((await server.inject(url('/movies/1', { scope: { actors: true }, nested: { 'actors.genres': {} } }))).statusCode, 400);
+});
+
+test('JSON scope applies to every mutation and cannot expose writeOnly fields', async (t) => {
+  const { server } = await setup(t, { items: [] }, simple({ name: { type: 'string', required: true }, secret: { type: 'string', writeOnly: true } }));
+  const created = await server.inject({ method: 'POST', url: url('/items', { scope: { '*': true } }), payload: { name: 'first', secret: 'hidden' } });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().secret, undefined);
+  const path = `/items/${created.json().id}`;
+  for (const method of ['PUT', 'PATCH']) {
+    const result = await server.inject({ method, url: url(path, { scope: { name: true } }), payload: { name: method, secret: 'hidden' } });
+    assert.equal(result.statusCode, 200, result.body);
+    assert.deepEqual(result.json(), { name: method });
+  }
+  assert.equal((await server.inject(url(path, { scope: { '*': true, secret: true } }))).statusCode, 400);
+  const failed = await server.inject({ method: 'DELETE', url: url(path, { scope: { name: false } }) });
+  assert.equal(failed.statusCode, 400);
+  assert.equal((await request(server, path)).name, 'PATCH');
+  const removed = await server.inject({ method: 'DELETE', url: url(path, { scope: {} }) });
+  assert.equal(removed.statusCode, 200, removed.body);
+  assert.deepEqual(removed.json(), {});
+  assert.equal((await request(server, '/items')).total, 0);
+});
+
+test('JSON scope retains size and depth limits', async (t) => {
+  const { server } = await setup(t, { items: [] }, simple({ peers: { type: 'Item[]', source: 'id' } }));
+  for (const [size, status] of [
+    [10000, 200],
+    [10001, 400],
+  ]) {
+    const response = await server.inject(url('/items', { scope: '{"id":true}'.padEnd(size, ' ') }));
+    assert.equal(response.statusCode, status, response.body);
+  }
+  const nested = (depth) => Array.from({ length: depth }).reduce((scope) => ({ peers: scope }), { id: true });
+  assert.equal((await server.inject(url('/items', { scope: nested(32) }))).statusCode, 200);
+  const response = await server.inject(url('/items', { scope: nested(33) }));
+  assert.equal(response.statusCode, 400);
+  assert.match(response.json().error, /too deep/);
 });

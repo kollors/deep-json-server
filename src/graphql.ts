@@ -95,8 +95,8 @@ export function buildGraphql(model: Model): GraphQLSchema {
     pages.set(node, type);
     return type;
   }
-  function input(entity: Entity, node: Node, mode: InputMode, root = false): GraphQLInputObjectType {
-    const name = `${nodeName(entity, node)}${mode[0].toUpperCase() + mode.slice(1)}`;
+  function input(entity: Entity, node: Node, mode: InputMode, root = false, nested = false): GraphQLInputObjectType {
+    const name = `${nodeName(entity, node)}${nested ? 'Nested' : ''}${mode[0].toUpperCase() + mode.slice(1)}`;
     let type = inputs.get(name);
     if (type) return type;
     type = new GraphQLInputObjectType({
@@ -104,10 +104,16 @@ export function buildGraphql(model: Model): GraphQLSchema {
       fields: () => {
         const fields: GraphQLInputFieldConfigMap = {};
         for (const [key, child] of Object.entries(node.children)) {
-          if (!writable(child, mode)) continue;
-          let childType: GraphQLInputType = child.base === 'object' ? input(entity, child, mode) : scalar(entity, child);
+          const lookup = nested && child.primary;
+          if (!lookup && !writable(child, mode, true)) continue;
+          let childType: GraphQLInputType = child.relation
+            ? input(child.relation, child.relation.root, mode, true, true)
+            : child.base === 'object'
+              ? input(entity, child, mode)
+              : scalar(entity, child);
           if (child.many) childType = new GraphQLList(new GraphQLNonNull(childType));
-          if (child.required && !child.nullable && !(root && mode === 'update') && child.default === undefined) childType = new GraphQLNonNull(childType);
+          if (!lookup && !child.relation && !child.relationKey && child.required && !child.nullable && !(root && (mode === 'update' || (nested && mode === 'create'))) && child.default === undefined)
+            childType = new GraphQLNonNull(childType);
           fields[key] = { type: childType, description: child.description };
         }
         return fields;
@@ -196,7 +202,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     for (const mode of ['create', 'replace', 'update', 'delete'] as const) {
       const operation = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
       if (mutations[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-      const fields = Object.values(entity.root.children).filter((child) => writable(child, mode === 'delete' ? 'update' : mode));
+      const fields = Object.values(entity.root.children).filter((child) => writable(child, mode === 'delete' ? 'update' : mode, true));
       mutations[operation] = {
         type: output(entity, entity.root),
         args: { ...(mode !== 'create' ? keyArg : {}), ...(mode !== 'delete' && fields.length ? { data: { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) } } : {}) },

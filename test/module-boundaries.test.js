@@ -138,14 +138,14 @@ test('schemaless commits publish the inferred model and reject invalid projectio
   const path = join(dir, 'db.json');
   await fs.writeFile(path, '{"items":[]}');
   const { server } = await setup(t, undefined, {}, { database: { path } });
-  const post = await server.inject({ method: 'POST', url: '/items?scope=name', payload: { name: 'one' } });
+  const post = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify({ name: true }) })}`, payload: { name: 'one' } });
   assert.equal(post.statusCode, 201);
   const id = JSON.parse(await fs.readFile(path, 'utf8')).items[0].id;
-  const patch = await server.inject({ method: 'PATCH', url: `/items/${id}?scope=name`, payload: { name: 'two' } });
+  const patch = await server.inject({ method: 'PATCH', url: `/items/${id}?${new URLSearchParams({ scope: JSON.stringify({ name: true }) })}`, payload: { name: 'two' } });
   assert.equal(patch.statusCode, 200);
   assert.equal(patch.json().name, 'two');
   const before = await fs.readFile(path, 'utf8');
-  const failed = await server.inject({ method: 'POST', url: '/items?scope=missing', payload: { name: 'three' } });
+  const failed = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify({ missing: true }) })}`, payload: { name: 'three' } });
   assert.equal(failed.statusCode, 400);
   assert.equal(await fs.readFile(path, 'utf8'), before);
   const raw = await server.inject({ method: 'POST', url: '/items', headers: { 'content-type': 'application/json' }, payload: '{"new-field":"saved"}' });

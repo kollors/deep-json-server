@@ -2,7 +2,7 @@ import { type Engine, isRef, type PreparedList, type Ref, resolveField } from '.
 import type { Entity } from '../model.js';
 import { childrenOf, nodeAt } from '../query/options.js';
 import type { JsonObject, JsonValue } from '../types.js';
-import { ownScope, type RestOptions, type Scope, validateNested, validateScope } from './options.js';
+import { ownScope, type RestOptions, type Scope, scopeFor, validateNested, validateScope } from './options.js';
 export function validateRest(engine: Engine, entity: Entity, options: RestOptions): Map<string, PreparedList> {
   validateScope(entity.root, options.scope);
   validateNested(entity.root, options.scope, options.nested);
@@ -14,7 +14,7 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, neste
   for (const [key, node] of Object.entries(children)) {
     if (node.writeOnly || (!Object.hasOwn(scope, key) && !(Object.hasOwn(scope, '*') && !node.relation))) continue;
     const value = resolveField(ref, node);
-    const selection = Object.hasOwn(scope, key) ? (scope[key] ?? ownScope) : ownScope;
+    const selection = scopeFor(scope, key);
     const path = prefix + key;
     if (value === undefined) continue;
     if (isRef(value)) output[key] = project(engine, value, selection, nested, `${path}.`, plans);
@@ -26,7 +26,7 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, neste
     } else output[key] = structuredClone(value) as JsonValue;
   }
   // Schemaless REST includes all raw fields, including fields absent in earlier records.
-  if (!ref.context.model.explicit && scope['*'] === null)
+  if (!ref.context.model.explicit && scope['*'] === true)
     for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && !children[key]?.relation) output[key] = structuredClone(value);
   return output;
 }

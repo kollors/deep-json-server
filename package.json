@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "description": "JSON mock server with schema-driven REST, GraphQL, nested queries and OpenAPI generation",
   "type": "module",
   "main": "./dist/index.js",

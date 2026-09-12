@@ -283,3 +283,33 @@ test('OpenAPI 3.0 nullable references and enum constraints accept actual null re
   assert.equal(validate({ id: '1', state: 'invalid', parent: null, profile: null }), false);
   assert.equal(document.components.schemas.ItemCreate.properties.state.nullable, true);
 });
+
+test('OpenAPI describes JSON scope with model fields and recursive relations', async () => {
+  const { Ajv } = await import('ajv');
+  const model = definition({
+    name: { type: 'string' },
+    secret: { type: 'string', writeOnly: true },
+    profile: { type: 'object' },
+    'profile.name': { type: 'string' },
+    'profile.secret': { type: 'string', writeOnly: true },
+    peers: { type: 'Item[]', source: 'id' },
+  });
+  const doc = await (await facadeFor(model)).openapi();
+  checkReferences(doc);
+  for (const path of Object.values(doc.paths)) {
+    for (const operation of Object.values(path)) {
+      const parameter = operation.parameters.find((p) => p.name === 'scope');
+      assert.equal(parameter.schema, undefined);
+      assert.equal(parameter.content['application/json'].schema.$ref, '#/components/schemas/ItemScope');
+    }
+  }
+  const ajv = new Ajv({ strict: false });
+  ajv.addSchema({ components: doc.components }, 'scope-contract');
+  const validate = ajv.compile({ $ref: 'scope-contract#/components/schemas/ItemScope' });
+  for (const scope of [{}, { '*': true }, { name: true }, { profile: true, peers: true }, { profile: { name: true }, peers: { peers: { id: true } } }]) {
+    assert.equal(validate(scope), true, JSON.stringify(validate.errors));
+  }
+  for (const scope of [true, [], null, { name: false }, { name: {} }, { secret: true }, { missing: true }, { '*': {} }, { profile: { secret: true } }, { peers: [] }, { peers: { name: 1 } }]) {
+    assert.equal(validate(scope), false, JSON.stringify(scope));
+  }
+});

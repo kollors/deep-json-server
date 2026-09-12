@@ -1,7 +1,7 @@
 import { VERSION } from '../constants.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/http.js';
 import { createFilePaths } from '../files/openapi.js';
-import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, type ValidationSchema, valueSchema } from '../model.js';
+import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../model.js';
 import { normalizePagination } from '../pagination.js';
 import { operatorsFor } from '../query/contract.js';
 import { childrenOf, sortableFields } from '../query/options.js';
@@ -14,6 +14,7 @@ function toOpenapi(schema: ValidationSchema): OpenapiSchema {
   if (Array.isArray(schema.anyOf) && schema.anyOf.some((v) => isObject(v) && v.type === 'null')) {
     const nonNull = schema.anyOf.find((v) => isObject(v) && v.type !== 'null') as ValidationSchema;
     const converted = toOpenapi(nonNull);
+    if (!converted.type) return { anyOf: [converted, { type: 'object', nullable: true, enum: [null] }] };
     return { ...converted, nullable: true, ...(converted.enum ? { enum: [...converted.enum.filter((value) => value !== null), null] } : {}) };
   }
   const result: Record<string, unknown> = { ...schema };
@@ -65,9 +66,24 @@ export function buildOpenapiDocument({
       const child = node.children[key];
       for (const attribute of ['description', 'example', 'writeOnly'] as const) if (child[attribute] !== undefined) (property as Record<string, unknown>)[attribute] = child[attribute];
       if (defaults && child.default !== undefined) property.default = child.default;
-      if (child.base === 'object') annotateInput(child.many ? (property.items as OpenapiSchema) : property, child, defaults);
+      if (!child.relation && child.base === 'object') annotateInput(child.many ? (property.items as OpenapiSchema) : property, child, defaults);
     }
     return schema;
+  }
+  function writeInput(node: Node, mode: 'create' | 'replace' | 'update', root = false, nestedMode = mode): OpenapiSchema {
+    return annotateInput(toOpenapi(objectSchema(node, mode, root, (child) => relationInputSchema(child, nestedInput(child.relation as Entity, nestedMode)))), node, mode !== 'update');
+  }
+  function nestedInput(entity: Entity, mode: 'create' | 'replace' | 'update'): OpenapiSchema {
+    const name = `${entity.name}Nested${mode[0].toUpperCase() + mode.slice(1)}`;
+    if (!reserve(name, entity.root)) return ref(name);
+    const existing = writeInput(entity.root, mode === 'replace' ? 'replace' : 'update', true, mode);
+    existing.properties ??= {};
+    existing.properties[entity.primary] = toOpenapi(valueSchema(entity.fields[entity.primary]));
+    existing.required = [...(existing.required ?? []), entity.primary];
+    const variants = [existing];
+    if (entity.fields[entity.primary].generated) variants.push(writeInput(entity.root, 'create', true, mode));
+    schemas[name] = { anyOf: variants, description: 'An object with a primary key updates an existing record; an object without a key creates one. PUT replaces, PATCH updates supplied fields.' };
+    return ref(name);
   }
   function output(entity: Entity, node: Node): OpenapiSchema {
     if (node.relation) {
@@ -87,6 +103,22 @@ export function buildOpenapiDocument({
       } else properties[key] = baseField(child);
     }
     // scope may select any subset, so response properties are intentionally optional.
+    schemas[name] = { type: 'object', additionalProperties: false, properties };
+    return ref(name);
+  }
+  function scope(entity: Entity, node: Node): OpenapiSchema {
+    if (node.relation) {
+      entity = node.relation;
+      node = entity.root;
+    }
+    const name = `${nodeName(entity, node)}Scope`;
+    if (!reserve(name, node)) return ref(name);
+    const included: OpenapiSchema = { type: 'boolean', enum: [true] };
+    const properties: Record<string, OpenapiSchema> = { '*': included };
+    for (const [key, child] of Object.entries(node.children)) {
+      if (child.writeOnly) continue;
+      properties[key] = child.relation || child.base === 'object' ? { oneOf: [included, scope(entity, child)] } : included;
+    }
     schemas[name] = { type: 'object', additionalProperties: false, properties };
     return ref(name);
   }
@@ -172,7 +204,7 @@ export function buildOpenapiDocument({
     for (const mode of ['create', 'replace', 'update'] as const) {
       const key = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
       reserve(key, entity.root);
-      schemas[key] = annotateInput(toOpenapi(objectSchema(entity.root, mode, true)), entity.root, mode !== 'update');
+      schemas[key] = writeInput(entity.root, mode, true);
     }
     const nestedName = `${name}Nested`;
     reserve(nestedName, entity.root);
@@ -194,7 +226,12 @@ export function buildOpenapiDocument({
       description: 'Path -> list options. Recursive paths are validated against the model at runtime.',
     };
     const shape = [
-      { in: 'query', name: 'scope', schema: { type: 'string' }, description: 'Own fields and explicit relations, e.g. *,movies(id,title). * excludes relations and writeOnly fields.' },
+      {
+        in: 'query',
+        name: 'scope',
+        ...json(scope(entity, entity.root)),
+        description: 'JSON field selection: true includes a field; an object selects nested fields. * includes own fields and excludes relations and writeOnly fields.',
+      },
       { in: 'query', name: 'nested', ...json(ref(nestedName)) },
     ];
     const list = [...shape, ...Object.entries(options(entity, entity.root).properties ?? {}).map(([key, schema]) => ({ in: 'query', name: key, ...json(schema) }))];
