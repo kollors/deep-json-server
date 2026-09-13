@@ -10,6 +10,9 @@ export interface RelationMetadata {
   targetResource: string;
 }
 
+/** Находит коллекцию по точному имени, единственному числу или обозначению родительской связи.
+ * @example resolveRelationResource(['users'], 'user', 'posts') → 'users'.
+ */
 export const resolveRelationResource = (resourceNames: string[], relation: string, sourceResource: string): string | undefined => {
   const resource = resourceNames.find((resourceName) => resourceName === relation) ?? resourceNames.find((resourceName) => singularize(resourceName) === relation);
 
@@ -20,8 +23,11 @@ export const resolveRelationResource = (resourceNames: string[], relation: strin
   return SELF_RELATIONS.has(relation) && resourceNames.includes(sourceResource) ? sourceResource : undefined;
 };
 
+/** Выводит описание связи из суффикса Id или Ids и доступных имён коллекций.
+ * @example getRelationMetadata('userId', ['users', 'posts'], 'posts') → { isMany: false, relationName: 'user', reverseRelationName: 'posts', sourceResource: 'posts', targetResource: 'users' }.
+ */
 export const getRelationMetadata = (key: string, resourceNames: string[], sourceResource: string): RelationMetadata | undefined => {
-  // Relation fields follow the <resource>Id and <resource>Ids conventions.
+  // Суффиксы Id и Ids обозначают одиночный ключ и массив ключей.
   const match = key.match(/^(.+)(Id|Ids)$/);
 
   if (match == null) {

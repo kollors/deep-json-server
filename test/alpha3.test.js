@@ -6,10 +6,10 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { createServer, generateGraphql, generateOpenapi } from '../dist/index.js';
-import { runCli } from '../dist/src/cli.js';
-import { configure, readConfigModule } from '../dist/src/config.js';
-import { Engine } from '../dist/src/engine.js';
-import { createConfiguredServer } from '../dist/src/server.js';
+import { runCli } from '../dist/src/cli/index.js';
+import { Engine } from '../dist/src/core/engine.js';
+import { configure, readConfigModule } from '../dist/src/server/config.js';
+import { createConfiguredServer } from '../dist/src/server/create.js';
 
 const model = (fields = {}) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
 const temporary = async (t) => {

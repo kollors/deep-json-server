@@ -227,3 +227,43 @@ test('disk file reads wait for a consistent metadata and content snapshot', asyn
     syncBuiltinESMExports();
   }
 });
+
+test('src contains module directories and core has no API or server dependencies', async () => {
+  const root = new URL('../src/', import.meta.url);
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  assert.deepEqual(entries.map((entry) => entry.name).sort(), ['auth', 'cli', 'core', 'files', 'graphql', 'openapi', 'rest', 'server']);
+  assert.ok(entries.every((entry) => entry.isDirectory()));
+  const dependencies = {
+    core: [],
+    auth: ['core'],
+    files: ['core'],
+    rest: ['core'],
+    graphql: ['core'],
+    openapi: ['core', 'auth', 'files'],
+    cli: ['core', 'server', 'openapi', 'graphql'],
+    server: ['core', 'rest', 'graphql', 'openapi', 'auth', 'files'],
+  };
+  for (const [module, allowed] of Object.entries(dependencies)) {
+    const directory = new URL(`${module}/`, root);
+    const paths = await fs.readdir(directory, { recursive: true });
+    for (const path of paths.filter((path) => path.endsWith('.ts'))) {
+      const url = new URL(path, directory);
+      const source = await fs.readFile(url, 'utf8');
+      for (const match of source.matchAll(/(?:from\s+|import\s*\()(['"])([^'"]+)\1/g)) {
+        const target = match[2];
+        if (!target.startsWith('.')) {
+          if (module === 'core') assert.ok(!['fastify', 'mercurius', 'graphql', 'yaml'].includes(target), `${url} imports ${target}`);
+          continue;
+        }
+        const resolved = new URL(target, url);
+        assert.ok(resolved.href.startsWith(directory.href) || allowed.some((name) => resolved.href.startsWith(new URL(`${name}/`, root).href)), `${url} imports ${target}`);
+        if (module === 'openapi' && !resolved.href.startsWith(directory.href) && !resolved.href.startsWith(new URL('core/', root).href)) {
+          assert.ok(
+            ['auth/contract.js', 'files/http.js'].some((path) => resolved.href === new URL(path, root).href),
+            `${url} imports a runtime instead of a contract: ${target}`,
+          );
+        }
+      }
+    }
+  }
+});

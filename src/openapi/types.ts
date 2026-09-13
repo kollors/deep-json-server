@@ -1,10 +1,4 @@
-export type JsonPrimitive = boolean | number | string | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
-export type JsonObject = { [key: string]: JsonValue };
-
-export type DatabaseId = number | string;
-export type DatabaseRecord = JsonObject;
-export type DatabaseData = Record<string, DatabaseRecord[]>;
+import type { JsonValue } from '../core/types.js';
 
 export type OpenapiType = 'array' | 'boolean' | 'integer' | 'number' | 'object' | 'string';
 
@@ -47,6 +41,3 @@ export interface OpenapiDocument {
   paths: Record<string, Record<string, unknown>>;
   servers?: Array<{ url: string }>;
 }
-
-export type QueryValue = string | string[] | undefined;
-export type Query = Record<string, QueryValue>;

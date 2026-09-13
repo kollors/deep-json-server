@@ -4,17 +4,29 @@ import { MAX_PASSWORD_LENGTH } from './contract.js';
 // OWASP scrypt profile: N=2^14, r=8, p=5 (16 MiB memory).
 const PREFIX = 'scrypt$16384$8$5';
 const HASH_PATTERN = /^scrypt\$16384\$8\$5\$([0-9a-f]{32})\$([0-9a-f]{64})$/;
+/** Проверяет формат строки с параметрами scrypt, солью и хешем; пароль не проверяет.
+ * @example validPasswordHash('plain text') → false.
+ */
 export const validPasswordHash = (value: unknown): value is string => typeof value === 'string' && HASH_PATTERN.test(value);
+/** Вычисляет 32 байта scrypt для пароля и заданной соли.
+ * @example derive('secret', Buffer.alloc(16)) → Promise<Buffer> длиной 32 байта; одинаковые входы дают одинаковый результат.
+ */
 const derive = (password: string, salt: Buffer): Promise<Buffer> =>
   new Promise((resolve, reject) => {
     scrypt(password, salt, 32, { N: 16384, r: 8, p: 5 }, (error, key) => (error ? reject(error) : resolve(key)));
   });
+/** Создаёт хеш пароля со случайной солью и сохраняет параметры вычисления в строке.
+ * @example hashPassword('secret') → Promise<string> вида 'scrypt$16384$8$5$<соль>$<хеш>'; результат случаен.
+ */
 export async function hashPassword(password: string): Promise<string> {
   if (typeof password !== 'string' || !password.length || password.length > MAX_PASSWORD_LENGTH) throw new Error(`Password must contain 1..${MAX_PASSWORD_LENGTH} characters`);
   const salt = randomBytes(16);
   const hash = await derive(password, salt);
   return `${PREFIX}$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
+/** Сравнивает пароль с сохранённым хешем за постоянное время после вычисления scrypt.
+ * @example verifyPassword('secret', await hashPassword('secret')) → true; другой пароль → false.
+ */
 export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
   const parts = HASH_PATTERN.exec(encoded);
   if (!parts) return false;

@@ -1,6 +1,6 @@
-import type { Node } from '../model.js';
-import { badQuery, childrenOf, type ListOptions } from '../query/options.js';
-import { isObject, isSafeKey } from '../utils.js';
+import type { Node } from '../core/model.js';
+import { badQuery, childrenOf, type ListOptions } from '../core/query/options.js';
+import { hasOnlyKeys, isObject, isSafeKey } from '../core/utils.js';
 export interface Fields {
   [key: string]: Scope | true;
 }
@@ -9,10 +9,16 @@ export interface RestOptions {
   scope: Scope;
 }
 export const ownScope: Scope = [{ '*': true }];
+/** Выбирает вложенный набор полей; для отсутствующего поля или true возвращает выбор собственных полей.
+ * @example scopeFor([{ '*': true }], 'name') → [{ '*': true }].
+ */
 export function scopeFor(scope: Scope, key: string): Scope {
   const selection = Object.hasOwn(scope[0], key) ? scope[0][key] : true;
   return selection === true ? ownScope : selection;
 }
+/** Читает JSON-массив выбора полей из единственного параметра URL; проверяет длину и синтаксис JSON.
+ * @example parseRestOptions({ scope: '[{"id":true}]' }) → { scope: [{ id: true }] }.
+ */
 export function parseRestOptions(query: unknown): RestOptions {
   if (!isObject(query)) badQuery('Invalid query');
   for (const key of Object.keys(query)) if (key !== 'scope') badQuery(`Unknown query parameter ${key}`);
@@ -25,12 +31,15 @@ export function parseRestOptions(query: unknown): RestOptions {
     badQuery('Invalid JSON in scope');
   }
 }
+/** Проверяет выбор полей рекурсивно; аргументы разрешены только для однородных списков.
+ * @example Для узла со строковым id: [{ id: true }] → undefined; [{ missing: true }] → ошибка.
+ */
 export function validateScope(node: Node, scope: unknown, list = false, depth = 0): asserts scope is Scope {
   if (depth > 32) badQuery('scope is too deep');
   if (!Array.isArray(scope) || scope.length < 1 || scope.length > 2 || !isObject(scope[0])) badQuery('scope must be [fields, arguments?]');
   if (scope.length === 2) {
     if (!list || node.mixed) badQuery('scope arguments require a list with consistent object types');
-    if (!isObject(scope[1]) || Object.keys(scope[1]).some((key) => !['where', 'order', 'pager'].includes(key))) badQuery('Invalid scope arguments');
+    if (!isObject(scope[1]) || !hasOnlyKeys(scope[1], ['where', 'order', 'pager'])) badQuery('Invalid scope arguments');
   }
   const children = childrenOf(node);
   for (const [key, selection] of Object.entries(scope[0])) {

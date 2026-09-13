@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createId, type DatabaseContainer } from '../database.js';
 import { domainError } from '../errors.js';
+import { AUDIT_FIELDS } from '../lifecycle/options.js';
 import { bindingFor, canWriteKey, type Entity, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from '../model.js';
 import { keyOf, makeContext, type Ref, related, rootRef, sourceValues } from '../records.js';
 import type { JsonObject, JsonValue } from '../types.js';
@@ -19,7 +20,7 @@ interface Selection {
   omitted: boolean;
 }
 
-/** Executes all nested writes on the enclosing database transaction's draft. */
+/** Выполняет вложенные изменения в общем черновике транзакции. */
 export class MutationWriter {
   private indexes = new Map<Entity, Map<string, JsonObject>>();
   private active = new Set<JsonObject>();
@@ -28,11 +29,13 @@ export class MutationWriter {
     private database: DatabaseContainer,
     private model: Model,
     private existingMode: 'replace' | 'update',
+    private beforeWrite: (entity: Entity, record: JsonObject) => void = () => {},
   ) {}
 
   write(entity: Entity, mode: WriteMode, key: unknown, body: unknown, depth = 0): JsonObject {
     if (depth > 32) throw domainError('INVALID_INPUT', 'Nested writes are too deep');
     if (!isObject(body)) throw domainError('INVALID_INPUT', 'Record input must be an object');
+    if (Object.keys(body).some((name) => entity.fields[name]?.system)) throw domainError('INVALID_INPUT', 'System fields are read-only');
     if (this.model.explicit) validateRecord(entity, body, mode, true);
     else if (Object.hasOwn(body, entity.primary)) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     this.database.data[entity.collection] ??= [];
@@ -41,11 +44,13 @@ export class MutationWriter {
     const current = mode === 'create' ? undefined : index.get(String(key));
     if (mode !== 'create' && !current) throw domainError('NOT_FOUND', `${entity.name}: record not found`);
     if (current && this.active.has(current)) throw domainError('CONFLICT', 'A nested write cannot modify an active ancestor record');
+    if (current) this.beforeWrite(entity, current);
     const input = structuredClone(body) as JsonObject;
     const next: JsonObject = mode === 'update' ? { ...current, ...input } : { ...input };
     if (current) {
       next[entity.primary] = current[entity.primary];
       this.preserve(entity.root, next, current);
+      for (const name of AUDIT_FIELDS) if (!entity.fields[name] && Object.hasOwn(current, name)) next[name] = current[name];
     }
     if (this.model.explicit) {
       if (mode !== 'update') this.defaults(entity.root, next);
@@ -53,7 +58,7 @@ export class MutationWriter {
     } else if (mode === 'create') next.id = createId(collection);
     const duplicate = index.get(String(next[entity.primary]));
     if (duplicate && duplicate !== current) throw domainError('CONFLICT', 'Primary key already exists');
-    // Keep identities stable so multiple nested references see the same draft record.
+    // Сохраняем ссылки на объекты, чтобы вложенные обращения видели одну и ту же запись черновика.
     const record = current ?? {};
     for (const name of Object.keys(record)) delete record[name];
     Object.assign(record, next);
@@ -77,7 +82,7 @@ export class MutationWriter {
     for (const [name, node] of Object.entries(ref.node.children)) {
       if (node.relation) {
         const supplied = Object.hasOwn(ref.value, name);
-        // A PUT also disconnects omitted reverse links; direct storage keys follow normal replacement.
+        // При замене разрываем пропущенные обратные связи; прямые ключи заменяются вместе с записью.
         const omitted = !supplied && replace && isReverseRelation(ref.entity, node) && canWriteKey(node.relation, node.target as string);
         if (!supplied && !omitted) continue;
         if (supplied && node.source !== ref.entity.primary && this.slots(ref.entity, input, node.source as string, inputBindings).some(({ object, key }) => Object.hasOwn(object, key)))

@@ -1,22 +1,29 @@
-import type { AuthConfig } from './auth/contract.js';
+import type { AuthConfig } from '../auth/contract.js';
+import type { DatabaseConfig } from '../core/database.js';
+import { recordOptions } from '../core/lifecycle/options.js';
+import { errorMessage, isPortNumber } from '../core/utils.js';
+import type { FilesConfig, MemoryFile } from '../files/contract.js';
 
-export type { AuthConfig } from './auth/contract.js';
+export type { AuthConfig } from '../auth/contract.js';
 
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyServerOptions } from 'fastify';
-import type { ModelSchema } from './model.js';
-import { normalizePagination } from './pagination.js';
-import type { DatabaseData } from './types.js';
-import { assertKnownKeys, isObject } from './utils.js';
+import type { ModelSchema } from '../core/model.js';
+import { normalizePagination } from '../core/pagination.js';
+import type { DatabaseData } from '../core/types.js';
+import { assertKnownKeys, isObject } from '../core/utils.js';
 
 const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server', 'auth']);
-const DATABASE_KEYS = new Set(['data', 'path', 'schema']);
+const DATABASE_KEYS = new Set(['data', 'path', 'schema', 'timestamps', 'softDelete']);
 const FILES_KEYS = new Set(['data', 'directory', 'metadata']);
 const OPENAPI_KEYS = new Set(['path', 'info', 'enabled', 'endpoint']);
 const GRAPHQL_KEYS = new Set(['path', 'enabled', 'endpoint']);
 const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
 let configImportIndex = 0;
+/** Глубоко копирует структурированные данные и оборачивает ошибку неподдерживаемого значения.
+ * @example copyInput({ a: [1] }) → независимая копия { a: [1] }; функция в значении → ошибка.
+ */
 const copyInput = <T>(value: T): T => {
   try {
     return structuredClone(value);
@@ -26,14 +33,8 @@ const copyInput = <T>(value: T): T => {
 };
 
 export type DatabaseSchema = ModelSchema;
-export type DatabaseConfig = { data: DatabaseData; path?: never; schema?: DatabaseSchema | string } | { data?: never; path: string; schema?: DatabaseSchema | string };
-export interface MemoryFile {
-  content: Uint8Array;
-  directory?: string;
-  mimeType: string;
-  name: string;
-}
-export type FilesConfig = { data: MemoryFile[]; directory?: never; metadata?: never } | { data?: never; directory: string; metadata: string };
+export type { DatabaseConfig } from '../core/database.js';
+export type { FilesConfig, MemoryFile } from '../files/contract.js';
 export interface OpenapiConfig {
   enabled?: boolean;
   endpoint?: string;
@@ -71,6 +72,9 @@ export interface NormalizedServerConfig {
   server: ServerConfig;
 }
 
+/** Проверяет объект и обязательность значения; необязательные null и undefined пропускает.
+ * @example getObject(undefined, 'data') → undefined; getObject([], 'data', true) → ошибка.
+ */
 function getObject(value: unknown, path: string, required: true): Record<string, unknown>;
 function getObject(value: unknown, path: string, required?: false): Record<string, unknown> | undefined;
 function getObject(value: unknown, path: string, required = false): Record<string, unknown> | undefined {
@@ -85,6 +89,9 @@ function getObject(value: unknown, path: string, required = false): Record<strin
   return value;
 }
 
+/** Проверяет непустую строку, не обрезая её; необязательные null и undefined пропускает.
+ * @example getString(' a ', 'name') → ' a '; getString('', 'name') → ошибка.
+ */
 function getString(value: unknown, path: string, required: true): string;
 function getString(value: unknown, path: string, required?: false): string | undefined;
 function getString(value: unknown, path: string, required = false): string | undefined {
@@ -99,8 +106,14 @@ function getString(value: unknown, path: string, required = false): string | und
   return value;
 }
 
+/** Делает заданный путь абсолютным относительно указанного каталога.
+ * @example resolveConfigPath('a.json', '/tmp') → '/tmp/a.json'; undefined → undefined.
+ */
 const resolveConfigPath = (value: string | undefined, directoryPath: string): string | undefined => (value == null ? undefined : resolve(directoryPath, value));
 
+/** Принимает положительное целое число или отсутствие значения.
+ * @example getPositiveInteger(2, 'size') → 2; getPositiveInteger(0, 'size') → ошибка.
+ */
 const getPositiveInteger = (value: unknown, path: string): number | undefined => {
   if (value == null) {
     return undefined;
@@ -113,6 +126,9 @@ const getPositiveInteger = (value: unknown, path: string): number | undefined =>
   return value;
 };
 
+/** Принимает объект описания или разрешает путь к нему относительно каталога.
+ * @example normalizeSchema('schema.json', '/tmp') → '/tmp/schema.json'.
+ */
 const normalizeSchema = (schema: unknown, directoryPath: string): DatabaseSchema | string | undefined => {
   if (schema == null) {
     return undefined;
@@ -125,6 +141,9 @@ const normalizeSchema = (schema: unknown, directoryPath: string): DatabaseSchema
   return getObject(schema, 'config.database.schema', true) as DatabaseSchema;
 };
 
+/** Проверяет выбор между файлом и данными в памяти, разрешает пути и копирует данные.
+ * @example { path: 'db.json' } с каталогом /tmp → path: '/tmp/db.json'; одновременно data и path → ошибка.
+ */
 const normalizeDatabase = (value: unknown, directoryPath: string): DatabaseConfig => {
   const database = getObject(value, 'config.database', true);
 
@@ -138,14 +157,22 @@ const normalizeDatabase = (value: unknown, directoryPath: string): DatabaseConfi
   }
 
   const schema = normalizeSchema(database.schema, directoryPath);
+  recordOptions({ timestamps: database.timestamps as boolean | undefined, softDelete: database.softDelete as boolean | undefined });
+  const flags = {
+    ...(database.timestamps !== undefined ? { timestamps: database.timestamps as boolean } : {}),
+    ...(database.softDelete !== undefined ? { softDelete: database.softDelete as boolean } : {}),
+  };
 
   if (hasData) {
-    return { data: copyInput(getObject(database.data, 'config.database.data', true)) as DatabaseData, schema };
+    return { data: copyInput(getObject(database.data, 'config.database.data', true)) as DatabaseData, schema, ...flags };
   }
 
-  return { path: resolve(directoryPath, getString(database.path, 'config.database.path', true)), schema };
+  return { path: resolve(directoryPath, getString(database.path, 'config.database.path', true)), schema, ...flags };
 };
 
+/** Проверяет выбор между файлами в памяти и дисковым хранилищем, разрешает пути.
+ * @example normalizeFiles(undefined, '/tmp') → undefined; { data: [] } → { data: [] }.
+ */
 const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | undefined => {
   const files = getObject(value, 'config.files');
 
@@ -176,21 +203,25 @@ const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | un
   };
 };
 
+/** Проверяет источник учётных записей и срок сессии; массив копирует, путь делает абсолютным.
+ * @example { users: 'users.json' } с каталогом /tmp → users: '/tmp/users.json'.
+ */
 const normalizeAuth = (value: unknown, directory: string): AuthConfig | undefined => {
   const auth = getObject(value, 'config.auth');
   if (!auth) return undefined;
-  assertKnownKeys(auth, new Set(['enabled', 'users', 'expiresIn']), 'config.auth');
-  if (auth.enabled !== undefined && typeof auth.enabled !== 'boolean') throw new Error('config.auth.enabled must be boolean');
+  assertKnownKeys(auth, new Set(['users', 'expiresIn']), 'config.auth');
   if (typeof auth.users !== 'string' && !Array.isArray(auth.users)) throw new Error('config.auth.users must be a file path or user array');
   const expiresIn = getPositiveInteger(auth.expiresIn, 'config.auth.expiresIn');
   if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
   return {
-    enabled: auth.enabled as boolean | undefined,
     users: typeof auth.users === 'string' ? resolve(directory, getString(auth.users, 'config.auth.users', true)) : (copyInput(auth.users) as AuthConfig['users']),
     expiresIn,
   };
 };
 
+/** Проверяет секции настроек и возвращает нормализованный объект с абсолютными путями.
+ * @example { database: { path: 'db.json' } } с каталогом /tmp → database.path: '/tmp/db.json'.
+ */
 const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServerConfig => {
   if (!isObject(config)) {
     throw new Error('Конфигурация сервера должна содержать JSON-объект');
@@ -226,7 +257,7 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   normalizePagination({ pageSize, maxPageSize });
   const port = server.port;
 
-  if (port != null && (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65_535)) {
+  if (port != null && !isPortNumber(port)) {
     throw new Error('Ключ config.server.port должен быть целым числом от 0 до 65535');
   }
 
@@ -261,10 +292,14 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
   };
 };
 
-/** Validates configuration and resolves relative paths. */
+/** Проверяет настройки и разрешает относительные пути, не читая содержимое файлов.
+ * @example При directoryPath = '/tmp' путь './db.json' → '/tmp/db.json'.
+ */
 export const normalizeServerConfig = (config: DeepJsonServerConfig, directoryPath?: string): NormalizedServerConfig => normalizeConfig(config, directoryPath);
 
-/** Loads an ES module config and resolves paths from its directory. */
+/** Загружает default-экспорт ES-модуля, обходя кеш повторного импорта; выполняет код модуля.
+ * @example Файл /tmp/config.mjs с export default {} → { config: {}, directory: '/tmp', path: '/tmp/config.mjs' }.
+ */
 export async function readConfigModule(configPath: string): Promise<{ config: Record<string, unknown>; directory: string; path: string }> {
   const resolvedConfigPath = resolve(getString(configPath, 'config', true));
   let config: unknown;
@@ -272,11 +307,11 @@ export async function readConfigModule(configPath: string): Promise<{ config: Re
   try {
     const configUrl = pathToFileURL(resolvedConfigPath);
 
-    // Bypass the module cache so repeated reads use the latest config.
+    // Обходим кеш модуля, чтобы повторное чтение выполняло обновлённый файл.
     configUrl.searchParams.set('deep-json-server-import', String(configImportIndex++));
     config = (await import(configUrl.href)).default;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
 
     throw new Error(`Не удалось загрузить конфигурацию ${resolvedConfigPath}: ${message}`, { cause: error });
   }
@@ -289,30 +324,37 @@ export async function readConfigModule(configPath: string): Promise<{ config: Re
 }
 
 const sourcePaths = new WeakMap<NormalizedServerConfig, string>();
+/** Возвращает сохранённый путь исходного файла для данного объекта настроек.
+ * @example Для объекта без зарегистрированного источника → undefined.
+ */
 export const configSourcePath = (config: NormalizedServerConfig): string | undefined => sourcePaths.get(config);
+/** Нормализует настройки и запоминает путь их источника во внутренней таблице.
+ * @example configure(config, '/tmp', '/tmp/config.mjs') → настройки; configSourcePath(result) → '/tmp/config.mjs'.
+ */
 export function configure(config: unknown, directory: string, sourcePath?: string): NormalizedServerConfig {
   const normalized = normalizeConfig(config, directory);
   if (sourcePath) sourcePaths.set(normalized, sourcePath);
   return normalized;
 }
+/** Выбирает настройки для указанных форматов экспорта и подставляет пустые данные вместо чтения базы.
+ * @example formats = ['graphql'] → настройки генерации GraphQL с database.data = {}.
+ */
 export function configureGeneration(
   source: Record<string, unknown>,
   formats: string[],
   directory: string,
   sourcePath: string,
-  overrides: { host?: string; port?: number; files?: boolean; auth?: boolean },
+  overrides: { host?: string; port?: number; files?: boolean; timestamps?: boolean; softDelete?: boolean },
 ): NormalizedServerConfig {
   assertKnownKeys(source, CONFIG_KEYS, 'config');
   const database = getObject(source.database, 'config.database', true);
   if (database.schema === undefined) throw new Error('Generation requires an explicit model schema');
   const openapi = formats.includes('openapi');
-  const auth = openapi ? getObject(source.auth, 'config.auth') : undefined;
-  if (auth?.enabled !== undefined && typeof auth.enabled !== 'boolean') throw new Error('config.auth.enabled must be boolean');
   const server = openapi ? (getObject(source.server, 'config.server') ?? {}) : {};
   return configure(
     {
-      database: { data: {}, schema: database.schema },
-      auth: openapi ? { users: [], enabled: overrides.auth ?? auth?.enabled ?? false } : undefined,
+      database: { data: {}, schema: database.schema, timestamps: overrides.timestamps ?? database.timestamps, softDelete: overrides.softDelete ?? database.softDelete },
+      auth: source.auth != null ? { users: [] } : undefined,
       openapi: openapi ? source.openapi : undefined,
       graphql: formats.includes('graphql') ? source.graphql : undefined,
       files: openapi && (overrides.files || source.files != null) ? { data: [] } : undefined,

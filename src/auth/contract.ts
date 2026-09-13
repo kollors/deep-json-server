@@ -1,12 +1,13 @@
 export interface AuthUser {
   id: string;
   username: string;
+  isAdmin: boolean;
 }
-export interface AuthUserRecord extends AuthUser {
+export interface AuthUserRecord extends Omit<AuthUser, 'isAdmin'> {
+  isAdmin?: boolean;
   passwordHash: string;
 }
 export interface AuthConfig {
-  enabled?: boolean;
   users: string | AuthUserRecord[];
   /** Session lifetime in seconds. Defaults to one hour. */
   expiresIn?: number;

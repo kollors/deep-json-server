@@ -1,9 +1,11 @@
-import { assertApi, loadModel, type Model, type ModelSchema } from '../model.js';
-import { normalizePagination } from '../pagination.js';
-import type { OpenapiDocument } from '../types.js';
+import { assertApi, loadModel, type Model, type ModelSchema } from '../core/model.js';
+import { normalizePagination } from '../core/pagination.js';
 import { buildOpenapiDocument } from './document.js';
 import { createOpenapi } from './index.js';
+import type { OpenapiDocument } from './types.js';
 export interface OpenapiOptions {
+  timestamps?: boolean;
+  softDelete?: boolean;
   auth?: boolean;
   files?: boolean;
   host?: string;
@@ -12,6 +14,9 @@ export interface OpenapiOptions {
   maxPageSize?: number;
   info?: { title: string; version: string; description?: string };
 }
+/** Проверяет параметры экспорта и строит документ из подготовленной модели.
+ * @example Модель с коллекцией notes → документ с paths['/notes'].
+ */
 export function openapiFromModel(model: Model | undefined, options: OpenapiOptions = {}): OpenapiDocument {
   assertApi(model, 'openapi');
   if (options.auth !== undefined && typeof options.auth !== 'boolean') throw new Error('auth must be boolean');
@@ -21,7 +26,10 @@ export function openapiFromModel(model: Model | undefined, options: OpenapiOptio
   const pagination = normalizePagination(options);
   return createOpenapi({ document: buildOpenapiDocument({ model, auth: options.auth, files: options.files, info: options.info, ...pagination }), host: options.host, port: options.port });
 }
+/** Загружает описание из объекта или файла и возвращает документ спецификации.
+ * @example Корректное описание → Promise<OpenapiDocument> с openapi: '3.0.3'.
+ */
 export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions = {}): Promise<OpenapiDocument> {
-  return openapiFromModel(await loadModel(schema), options);
+  return openapiFromModel(await loadModel(schema, options), options);
 }
 export { writeOpenapi } from './index.js';

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
-import { runCli } from '../src/cli.js';
+import { runCli } from '../src/cli/index.js';
 
 try {
   await runCli();

@@ -1,13 +1,15 @@
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './constants.js';
 import type { DatabaseStore } from './database.js';
 import { domainError } from './errors.js';
+import { RecordMutation } from './lifecycle/mutation.js';
+import type { Actor } from './lifecycle/options.js';
 import { type Entity, inferModel, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
 import { MutationWriter } from './mutations/write.js';
 import { compileWhere, type Predicate } from './query/filter.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
 import type { DatabaseData, JsonObject } from './types.js';
-import { isObject } from './utils.js';
+import { hasOnlyKeys, isObject } from './utils.js';
 
 export interface PreparedList {
   page: number;
@@ -26,7 +28,7 @@ function filterView(ref: Ref): Record<string, unknown> {
       Object.defineProperty(value, name, {
         enumerable: true,
         get: () => {
-          const field = resolveField(ref, node);
+          const field = resolveField(ref, node, true);
           return isRef(field) ? filterView(field) : Array.isArray(field) ? field.map((v) => (isRef(v) ? filterView(v) : v)) : field;
         },
       });
@@ -43,38 +45,52 @@ export class Engine {
   ) {
     this.inferredModels.set(store.database.data, model);
   }
+  /** Возвращает явную модель или кешированное описание, выведенное из переданного снимка данных.
+   * @example Повторный вызов с тем же объектом data → тот же объект Model.
+   */
   private modelFor(data: DatabaseData): Model {
     if (this.model.explicit) return this.model;
     let model = this.inferredModels.get(data);
     if (!model) {
-      model = inferModel(data);
+      model = inferModel(data, this.model.options);
       this.inferredModels.set(data, model);
     }
     return model;
   }
+  /** Читает актуальный снимок хранилища и создаёт контекст с пустым кешем индексов.
+   * @example context() → Promise<Context>; при ошибке чтения хранилища → отклонённый Promise.
+   */
   async context(): Promise<Context> {
     const data = await this.store.read();
     if (!this.model.explicit) this.model = this.modelFor(data);
     return makeContext(data, this.model);
   }
+  /** Оборачивает все записи выбранной коллекции ссылками с контекстом.
+   * @example Пустая коллекция → []; две записи → две ссылки Ref.
+   */
   records(context: Context, entity: Entity): Ref[] {
     return (context.data[entity.collection] ?? []).map((value) => rootRef(context, entity, value));
   }
+  /** Ищет запись по строковому представлению первичного ключа, включая удалённые записи.
+   * @example Ключ '1' находит запись с числовым ключом 1; отсутствующий ключ → undefined.
+   */
   find(context: Context, entity: Entity, key: unknown): Ref | undefined {
     const value = (context.data[entity.collection] ?? []).find((record) => String(record[entity.primary]) === String(key));
     return value ? rootRef(context, entity, value) : undefined;
   }
+  /** Проверяет аргументы списка и подготавливает предикат, пути сортировки и размеры страницы.
+   * @example pager: { page: 2, pageSize: 5 } → план с page: 2 и pageSize: 5; page: 0 → ошибка.
+   */
   prepareOptions(node: Node, options: ListOptions = {}): PreparedList {
-    const predicate = options.where !== undefined ? compileWhere(node, options.where) : undefined;
+    const predicate = options.where !== undefined || node.softDelete || node.relation?.softDelete ? compileWhere(node, options.where ?? {}) : undefined;
     if (options.order !== undefined) {
       if (!Array.isArray(options.order)) badQuery('order must be an array');
       for (const rule of options.order) {
-        if (!isObject(rule) || Object.keys(rule).some((k) => !['field', 'direction'].includes(k)) || typeof rule.field !== 'string' || !['ASC', 'DESC'].includes(rule.direction))
-          badQuery('Invalid order rule');
+        if (!isObject(rule) || !hasOnlyKeys(rule, ['field', 'direction']) || typeof rule.field !== 'string' || !['ASC', 'DESC'].includes(rule.direction)) badQuery('Invalid order rule');
         nodeAt(node, rule.field, true);
       }
     }
-    if (options.pager !== undefined && (!isObject(options.pager) || Object.keys(options.pager).some((k) => !['page', 'pageSize'].includes(k)))) badQuery('Invalid pager');
+    if (options.pager !== undefined && (!isObject(options.pager) || !hasOnlyKeys(options.pager, ['page', 'pageSize']))) badQuery('Invalid pager');
     const page = options.pager?.page ?? 1;
     const pageSize = options.pager?.pageSize ?? this.pageSize;
     if (
@@ -90,6 +106,9 @@ export class Engine {
       badQuery(`Invalid pager; pageSize must be 1..${this.maxPageSize}`);
     return { page, pageSize, predicate, rules: (options.order ?? []).map((rule) => ({ direction: rule.direction, keys: pathParts(rule.field) })) };
   }
+  /** Фильтрует, сортирует и возвращает страницу, не меняя порядок исходного массива.
+   * @example Три подходящие записи, page: 2, pageSize: 2 → { data: [третья запись], total: 3 }.
+   */
   list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options)): Page {
     const { page, pageSize, predicate, rules } = prepared;
     const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : [...records];
@@ -114,6 +133,9 @@ export class Engine {
       });
     return { data: data.slice((page - 1) * pageSize, page * pageSize), total: data.length };
   }
+  /** Проверяет коллекции, значения полей и целостность активных связей.
+   * @example Согласованные записи → undefined; обязательная связь без цели → исключение.
+   */
   validateData(data: DatabaseData): void {
     if (!this.model.explicit) return;
     for (const collection of Object.keys(data)) if (!this.model.byCollection.has(collection)) throw domainError('INVALID_INPUT', `Undeclared collection ${collection}`);
@@ -121,7 +143,7 @@ export class Engine {
     const visit = (ref: Ref): void => {
       for (const node of Object.values(ref.node.children)) {
         if (node.relation) {
-          const matches = related(ref, node);
+          const matches = related(ref, node).filter((match) => !match.entity.softDelete || match.value.deletedAt == null);
           if (!node.many && matches.length > 1) throw domainError('INVALID_INPUT', `Multiple targets for ${ref.entity.name}.${node.path}`);
           if (node.required && !matches.length) throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is empty`);
           const values = sourceValues(ref, node);
@@ -140,15 +162,20 @@ export class Engine {
     for (const entity of this.model.entities)
       for (const record of data[entity.collection] ?? []) {
         validateRecord(entity, record, 'stored');
-        visit(rootRef(context, entity, record));
+        if (!entity.softDelete || record.deletedAt == null) visit(rootRef(context, entity, record));
       }
   }
-  async mutate<T = Ref>(entity: Entity, mode: 'create' | 'replace' | 'update' | 'delete', key?: unknown, body?: unknown, prepare?: (ref: Ref) => T): Promise<T> {
+  /** Выполняет одну операцию записи в транзакции, включая связи, права и подготовку ответа.
+   * @example Режим update с { name: 'Анна' } → обновлённая запись; ошибка проверки → прежние данные.
+   */
+  async mutate<T = Ref>(entity: Entity, mode: 'create' | 'replace' | 'update' | 'delete', key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: Actor): Promise<T> {
+    if (this.model.options.auth && !actor) throw domainError('UNAUTHENTICATED', 'Authentication required');
     if (mode !== 'delete') {
       if (!isObject(body)) throw domainError('INVALID_INPUT', 'Request body must be an object');
       if (!this.model.explicit && Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     }
     const outcome = await this.store.update((database) => {
+      const lifecycle = new RecordMutation(database.data, this.model, actor);
       const finish = (data: DatabaseData, record: JsonObject) => {
         const model = this.modelFor(data);
         const currentEntity = model.byCollection.get(entity.collection) as Entity;
@@ -172,23 +199,34 @@ export class Engine {
         const current = this.find(context, entity, key);
         if (!current) throw domainError('NOT_FOUND', 'Record not found');
         const snapshot = structuredClone(database.data);
-        this.cascade(context, current as Ref);
+        lifecycle.check(entity, current.value);
+        if (entity.softDelete && current.value.deletedAt != null) return finish(database.data, current.value);
+        this.cascade(context, current as Ref, lifecycle);
+        lifecycle.finish();
         this.validateData(database.data);
-        return finish(snapshot, (current as Ref).value);
+        return finish(entity.softDelete ? database.data : snapshot, (current as Ref).value);
       }
-      const writer = new MutationWriter(database, this.model, mode === 'replace' ? 'replace' : 'update');
+      const writer = new MutationWriter(database, this.model, mode === 'replace' ? 'replace' : 'update', (owner, record) => lifecycle.write(owner, record));
       const record = writer.write(entity, mode, key, body);
       writer.validateRelations();
+      lifecycle.finish();
       this.validateData(database.data);
       return finish(database.data, record);
     });
     this.model = outcome.model;
     return outcome.output;
   }
-  private cascade(context: Context, initial: Ref): void {
+  /** Вычисляет каскад удаления, проверяет запрещающие связи и меняет только черновик данных.
+   * @example Удаление родителя при cascade → удалённые зависимые записи; restrict → исключение.
+   */
+  private cascade(context: Context, initial: Ref, lifecycle: RecordMutation): void {
     if (!this.model.explicit) {
-      const rows = context.data[initial.entity.collection];
-      rows.splice(rows.indexOf(initial.value), 1);
+      lifecycle.deleteGroup(initial, new Set([initial.value]));
+      if (!initial.entity.softDelete) {
+        const rows = context.data[initial.entity.collection];
+        rows.splice(rows.indexOf(initial.value), 1);
+      }
+      lifecycle.capturePruned(initial);
       return;
     }
     const deleted = new Set<JsonObject>([initial.value]);
@@ -208,7 +246,10 @@ export class Engine {
         }
       }
     };
-    for (const entity of this.model.entities) this.records(context, entity).forEach(collect);
+    for (const entity of this.model.entities)
+      this.records(context, entity)
+        .filter((ref) => !entity.softDelete || ref.value.deletedAt == null)
+        .forEach(collect);
     let changed = true;
     while (changed) {
       changed = false;
@@ -222,6 +263,7 @@ export class Engine {
     }
     for (const { ref, node, targets } of owners) if (survives(ref) && targets.some((v) => deleted.has(v.value))) blocked.push({ owner: ref.value, root: ref.root, node });
     if (blocked.length) throw domainError('CONFLICT', `Delete restricted by ${blocked[0].node.path}`);
+    lifecycle.deleteGroup(initial, deleted);
     const prune = (node: Node, record: JsonObject): void => {
       for (const [key, child] of Object.entries(node.children))
         if (!child.relation && child.base === 'object' && record[key] != null) {
@@ -235,10 +277,11 @@ export class Engine {
         }
     };
     for (const entity of this.model.entities) {
-      context.data[entity.collection] = (context.data[entity.collection] ?? []).filter((record) => !deleted.has(record));
+      context.data[entity.collection] = (context.data[entity.collection] ?? []).filter((record) => entity.softDelete || !deleted.has(record));
       context.data[entity.collection].forEach((record) => {
-        prune(entity.root, record);
+        if (!deleted.has(record)) prune(entity.root, record);
       });
     }
+    lifecycle.capturePruned(initial);
   }
 }

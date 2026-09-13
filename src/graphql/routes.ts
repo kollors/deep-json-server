@@ -1,16 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import type { GraphQLSchema } from 'graphql';
 import mercurius from 'mercurius';
-import type { Engine } from '../engine.js';
-import { DomainError } from '../errors.js';
+import type { Engine } from '../core/engine.js';
+import { DomainError } from '../core/errors.js';
+import type { Authenticate } from '../core/lifecycle/options.js';
 import { attachResolvers, createGraphqlContext } from './resolvers.js';
-export function registerGraphqlRoutes(server: FastifyInstance, schema: GraphQLSchema, engine: Engine, path: string): void {
+/** Регистрирует обработчик GraphQL, контекст запроса и преобразование ошибок.
+ * @example После регистрации POST на заданный path выполняет запрос; прикладная ошибка попадает в errors[].extensions.code.
+ */
+export function registerGraphqlRoutes(server: FastifyInstance, schema: GraphQLSchema, engine: Engine, path: string, authenticate?: Authenticate): void {
   attachResolvers(schema, engine);
   server.register(mercurius, {
     schema,
     path,
     queryDepth: 32,
-    context: () => createGraphqlContext(engine),
+    context: (request) => ({ ...createGraphqlContext(engine), ...(authenticate ? { actor: () => authenticate(request.headers.authorization) } : {}) }),
     errorFormatter: (execution, context) => {
       const formatted = mercurius.defaultErrorFormatter(execution, context);
       formatted.response.errors = execution.errors.map((error) => {

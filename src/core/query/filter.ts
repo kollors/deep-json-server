@@ -1,3 +1,4 @@
+import { mentionsDeletedAt } from '../lifecycle/options.js';
 import type { Node } from '../model.js';
 import { isEqual, isObject } from '../utils.js';
 import { operatorsFor } from './contract.js';
@@ -6,6 +7,9 @@ import { badQuery, childrenOf } from './options.js';
 export type Predicate = (value: unknown) => boolean;
 const comparable = (value: unknown): value is string | number => typeof value === 'string' || typeof value === 'number';
 const equal = (left: unknown, right: unknown) => isEqual(left, right);
+/** Компилирует условие поля в предикат, проверяя операторы и их аргументы.
+ * @example Для строкового узла condition(node, { contains: 'ан' }, 0)('Анна') → true.
+ */
 function condition(node: Node, input: unknown, depth: number): Predicate {
   if (!isObject(input) || depth > 32) badQuery('Field filter must contain operators with depth at most 32');
   if (!node.many && (node.relation || node.base === 'object')) return compileWhere(node, input, depth);
@@ -19,7 +23,11 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
     }
     if (operand === 'element') {
       const nested = condition({ ...node, many: false }, value, depth + 1);
-      return (field) => Array.isArray(field) && (operator === 'every' ? field.every(nested) : operator === 'none' ? !field.some(nested) : field.some(nested));
+      return (field) => {
+        if (!Array.isArray(field)) return false;
+        const values = node.relation?.softDelete && !mentionsDeletedAt(value) ? field.filter((item) => isObject(item) && item.deletedAt == null) : field;
+        return operator === 'every' ? values.every(nested) : operator === 'none' ? !values.some(nested) : values.some(nested);
+      };
     }
     const values = operand === 'values' ? value : [value];
     if (!Array.isArray(values)) badQuery(`Invalid value for ${operator}`);
@@ -55,16 +63,19 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
   });
   return (value) => predicates.every((predicate) => predicate(value));
 }
-export function compileWhere(node: Node, input: unknown, depth = 0): Predicate {
+/** Компилирует условия объекта в предикат; учитывает логические операторы и фильтрацию удалённых записей.
+ * @example Для числового age: compileWhere(node, { age: { gte: 18 } })({ age: 20 }) → true.
+ */
+export function compileWhere(node: Node, input: unknown, depth = 0, defaults = true): Predicate {
   if (!isObject(input) || depth > 32) badQuery('where must be an object with depth at most 32');
   const predicates = Object.entries(input).map(([key, value]): Predicate => {
     if (key === 'and' || key === 'or') {
       if (!Array.isArray(value) || (key === 'or' && !value.length)) badQuery(`Invalid ${key}`);
-      const nested = value.map((item) => compileWhere(node, item, depth + 1));
+      const nested = value.map((item) => compileWhere(node, item, depth + 1, false));
       return (field) => (key === 'and' ? nested.every((p) => p(field)) : nested.some((p) => p(field)));
     }
     if (key === 'not') {
-      const nested = compileWhere(node, value, depth + 1);
+      const nested = compileWhere(node, value, depth + 1, false);
       return (field) => !nested(field);
     }
     const child = childrenOf(node)[key];
@@ -73,5 +84,6 @@ export function compileWhere(node: Node, input: unknown, depth = 0): Predicate {
     const nested = condition(child, value, depth + 1);
     return (field) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined);
   });
+  if (defaults && (node.relation?.softDelete || node.softDelete) && !mentionsDeletedAt(input)) predicates.push((value) => isObject(value) && value.deletedAt == null);
   return (value) => isObject(value) && predicates.every((predicate) => predicate(value));
 }

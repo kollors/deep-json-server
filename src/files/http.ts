@@ -1,5 +1,4 @@
 import { basename } from 'node:path';
-import type { OpenapiSchema } from '../types.js';
 import { type FileRecord, getFileKey, type StoredFileMetadata } from './contract.js';
 export interface FileMetadata extends FileRecord {
   downloadUrl: string;
@@ -19,7 +18,7 @@ export const FILE_ROUTES = {
 } as const;
 
 export const PATCH_BODY_LIMIT = 64 * 1024;
-export const FILE_METADATA_SCHEMA: OpenapiSchema = {
+export const FILE_METADATA_SCHEMA: Record<string, unknown> = {
   properties: {
     directory: { type: 'string' },
     downloadUrl: { format: 'uri-reference', type: 'string' },
@@ -33,15 +32,21 @@ export const FILE_METADATA_SCHEMA: OpenapiSchema = {
   type: 'object',
 };
 
-export const FILE_UPDATE_SCHEMA: OpenapiSchema = {
+export const FILE_UPDATE_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   anyOf: [{ required: ['directory'] }, { required: ['name'] }],
   properties: { directory: { type: 'string' }, name: { type: 'string' } },
   type: 'object',
 };
 
+/** Кодирует каждый сегмент пути для URL, сохраняя разделители каталогов.
+ * @example { directory: 'my photos', name: 'a.jpg' } → 'my%20photos/a.jpg'.
+ */
 const encodeFilePath = (file: StoredFileMetadata): string => getFileKey(file).split('/').map(encodeURIComponent).join('/');
 
+/** Добавляет к метаданным относительные URL просмотра, скачивания и описания файла.
+ * @example Для { directory: '', name: 'a.txt', … } поле url → '/_files/storage/a.txt'.
+ */
 export const createFileMetadata = (file: FileRecord): FileMetadata => {
   const path = encodeFilePath(file);
 
@@ -53,4 +58,7 @@ export const createFileMetadata = (file: FileRecord): FileMetadata => {
   };
 };
 
+/** Кодирует последнее имя пути для заголовка скачивания, включая апострофы.
+ * @example getDownloadName('a b.txt') → 'a%20b.txt'.
+ */
 export const getDownloadName = (name: string): string => encodeURIComponent(basename(name)).replaceAll("'", '%27');

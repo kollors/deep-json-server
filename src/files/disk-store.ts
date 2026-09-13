@@ -4,11 +4,14 @@ import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, write
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { domainError } from '../errors.js';
-import { canonicalPath } from '../paths.js';
-import { createSerialQueue, isSystemError } from '../utils.js';
+import { domainError } from '../core/errors.js';
+import { canonicalPath } from '../core/paths.js';
+import { createSerialQueue, isSystemError } from '../core/utils.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata, type StoredFileMetadata } from './contract.js';
 
+/** Создаёт преобразующий поток, который считает байты и отклоняет превышение лимита.
+ * @example Лимит 3 и поток 'abcd' → ошибка; поток 'abc' проходит без изменения.
+ */
 const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void): Transform => {
   let size = 0;
 
@@ -27,6 +30,9 @@ const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void):
   });
 };
 
+/** Проверяет существование пути через lstat; остальные ошибки файловой системы передаёт вызывающему коду.
+ * @example Отсутствующий путь → Promise<false>; существующий файл или ссылка → Promise<true>.
+ */
 const pathExists = async (path: string): Promise<boolean> => {
   try {
     await access(path);
@@ -40,12 +46,18 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
+/** Проверяет, что путь совпадает с корнем или лежит внутри него; символические ссылки не раскрывает.
+ * @example isPathInside('/tmp/a', '/tmp/a/b') → true; '/tmp/ab' → false.
+ */
 const isPathInside = (rootPath: string, targetPath: string): boolean => {
   const relativePath = relative(rootPath, targetPath);
 
   return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
 };
 
+/** Читает и проверяет массив метаданных, индексируя его по пути файла.
+ * @example Отсутствующий файл → пустая Map; две записи с одинаковым путём → ошибка.
+ */
 const readMetadata = async (metadataPath: string): Promise<Map<string, StoredFileMetadata>> => {
   let source: unknown;
 
@@ -79,6 +91,9 @@ const readMetadata = async (metadataPath: string): Promise<Map<string, StoredFil
   return files;
 };
 
+/** Сохраняет метаданные через временный файл и переименование; при ошибке удаляет временный файл.
+ * @example Map с одной записью → JSON-массив из одной записи в файле; результат Promise<void>.
+ */
 const writeMetadata = async (metadataPath: string, files: Map<string, StoredFileMetadata>): Promise<void> => {
   const temporaryPath = `${metadataPath}.${randomBytes(6).toString('hex')}.tmp`;
 
@@ -91,12 +106,18 @@ const writeMetadata = async (metadataPath: string, files: Map<string, StoredFile
   }
 };
 
+/** Проверяет, что информация о пути описывает обычный файл.
+ * @example stats.isFile() === true → undefined; каталог → ошибка.
+ */
 const assertRegularFile = (stats: { isFile(): boolean }): void => {
   if (!stats.isFile()) {
     throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
   }
 };
 
+/** Читает размер обычного файла; отсутствие или неподходящий тип пути превращает в ошибку.
+ * @example Файл из трёх байтов → Promise<3>.
+ */
 const getFileSize = async (path: string): Promise<number> => {
   try {
     const stats = await stat(path);
@@ -112,6 +133,9 @@ const getFileSize = async (path: string): Promise<number> => {
   }
 };
 
+/** Открывает дисковое хранилище с проверками путей, защитой входных файлов и последовательными изменениями.
+ * @example Каталог и файл метаданных → Promise<FileStore>; операции сохраняют байты и метаданные на диске.
+ */
 export const createDiskFileStore = async ({
   directory: sourceDirectoryPath,
   metadata: sourceMetadataPath,

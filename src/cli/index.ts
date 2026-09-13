@@ -1,11 +1,12 @@
 import process from 'node:process';
-import { configure, configureGeneration, readConfigModule } from './config.js';
-import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from './constants.js';
-import { resolveFeatures, type ServerFeatures } from './features.js';
-import { inputPaths, validateExportPaths } from './paths.js';
-import { generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from './schema.js';
-import { createConfiguredServer } from './server.js';
-import { isObject } from './utils.js';
+import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from '../core/constants.js';
+import { inputPaths, validateExportPaths } from '../core/paths.js';
+import { isObject } from '../core/utils.js';
+import { generateGraphql, writeGraphql } from '../graphql/lazy.js';
+import { generateOpenapi, writeOpenapi } from '../openapi/lazy.js';
+import { configure, configureGeneration, readConfigModule } from '../server/config.js';
+import { createConfiguredServer } from '../server/create.js';
+import { resolveFeatures, type ServerFeatures } from '../server/features.js';
 
 const HELP_TEXT = `Deep JSON Server
 
@@ -13,7 +14,8 @@ Usage:
   deep-json-server [options] <server.config.js>
   deep-json-server generate <openapi|graphql|openapi,graphql> <server.config.js>
 
-  --auth          Enable REST authentication and its OpenAPI description
+  --timestamps    Track record creation and update times
+  --soft-delete   Mark deleted records instead of removing them
   --files         Enable file routes
   --graphql       Enable the GraphQL endpoint
   --openapi       Enable the OpenAPI endpoint
@@ -23,6 +25,9 @@ Usage:
   --version, -v   Show version
 
 Files are enabled when configured. Generate writes schemas to the configured paths.`;
+/** Разбирает аргументы командной строки и запускает сервер либо экспорт; справку и версию пишет в stdout.
+ * @example runCli(['--help']) → Promise<void> и текст справки без запуска сервера.
+ */
 export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createConfiguredServer } = { createServer: createConfiguredServer }): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`${HELP_TEXT}\n`);
@@ -35,6 +40,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   const positional: string[] = [];
   const seen = new Set<string>();
   const features: ServerFeatures = {};
+  const recordFlags: { timestamps?: boolean; softDelete?: boolean } = {};
   let host: string | undefined;
   let port: number | undefined;
   for (let index = 0; index < args.length; index++) {
@@ -43,7 +49,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
       positional.push(arg);
       continue;
     }
-    if (!['--files', '--graphql', '--openapi', '--auth', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
+    if (!['--files', '--graphql', '--openapi', '--timestamps', '--soft-delete', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
     seen.add(arg);
     if (arg === '--host' || arg === '--port') {
       const value = args[++index];
@@ -53,7 +59,9 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
         if (!/^\d+$/.test(value)) throw new Error('Invalid --port');
         port = Number(value);
       }
-    } else features[arg.slice(2) as keyof ServerFeatures] = true;
+    } else if (arg === '--timestamps') recordFlags.timestamps = true;
+    else if (arg === '--soft-delete') recordFlags.softDelete = true;
+    else features[arg.slice(2) as keyof ServerFeatures] = true;
   }
   const generate = positional[0] === 'generate';
   const configPath = positional[generate ? 2 : 0];
@@ -67,13 +75,22 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   if (!isObject(serverOptions)) throw new Error('config.server must be an object');
   const overrides = { host: host ?? serverOptions.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? serverOptions.port ?? Number(process.env.PORT ?? DEFAULT_PORT) };
   const config = generate
-    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files, auth: features.auth } as {
+    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files, ...recordFlags } as {
         host: string;
         port: number;
         files?: boolean;
-        auth?: boolean;
+        timestamps?: boolean;
+        softDelete?: boolean;
       })
-    : configure({ ...source.config, server: { ...serverOptions, ...overrides } }, source.directory, source.path);
+    : configure(
+        {
+          ...source.config,
+          ...(Object.keys(recordFlags).length ? { database: { ...(isObject(source.config.database) ? source.config.database : {}), ...recordFlags } } : {}),
+          server: { ...serverOptions, ...overrides },
+        },
+        source.directory,
+        source.path,
+      );
   if (generate) {
     if (!config.database.schema) throw new Error('Generation requires an explicit model schema');
     const destinations = formats.map((format) => {
@@ -85,7 +102,9 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
     const openapi = formats.includes('openapi')
       ? await generateOpenapi(config.database.schema, {
           files: config.files != null,
-          auth: config.auth?.enabled,
+          auth: config.auth != null,
+          timestamps: config.database.timestamps,
+          softDelete: config.database.softDelete,
           host: config.server.host,
           port: config.server.port,
           pageSize: config.server.pageSize,
@@ -93,7 +112,9 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
           info: config.openapi.info,
         })
       : undefined;
-    const graphql = formats.includes('graphql') ? await generateGraphql(config.database.schema) : undefined;
+    const graphql = formats.includes('graphql')
+      ? await generateGraphql(config.database.schema, { auth: config.auth != null, timestamps: config.database.timestamps, softDelete: config.database.softDelete })
+      : undefined;
     if (openapi) {
       await writeOpenapi(openapi, config.openapi.path!);
       process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);

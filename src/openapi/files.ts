@@ -1,13 +1,16 @@
-import { FILE_ROUTES } from './http.js';
+import { FILE_ROUTES } from '../files/http.js';
 
 type OpenapiObject = Record<string, unknown>;
 
-import { json as createJsonContent, response as createResponse, ref as createSchemaReference } from '../openapi/helpers.js';
+import { json as createJsonContent, response as createResponse, ref as createSchemaReference } from './helpers.js';
 
 const createErrorResponse = (description: string): OpenapiObject => createResponse(description, createSchemaReference('Error'));
 const createParameterReference = (name: string): OpenapiObject => ({ $ref: `#/components/parameters/${name}` });
 const createRequestBody = (name: string): OpenapiObject => ({ required: true, ...createJsonContent(createSchemaReference(name)) });
 
+/** Создаёт описания HTTP-маршрутов работы с файлами.
+ * @example createFilePaths() → объект, содержащий '/_files/storage' и маршруты чтения, перемещения и удаления.
+ */
 export const createFilePaths = (): Record<string, OpenapiObject> => ({
   [`${FILE_ROUTES.download}/{path}`]: {
     get: {

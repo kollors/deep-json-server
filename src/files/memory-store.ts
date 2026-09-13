@@ -1,9 +1,12 @@
 import { Readable } from 'node:stream';
-import type { MemoryFile } from '../config.js';
-import { domainError } from '../errors.js';
-import { createSerialQueue } from '../utils.js';
+import { domainError } from '../core/errors.js';
+import { createSerialQueue } from '../core/utils.js';
+import type { MemoryFile } from './contract.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata } from './contract.js';
 
+/** Собирает поток в буфер, прекращая чтение при превышении лимита байтов.
+ * @example Поток из Buffer.from('abc') и лимит 3 → Buffer('abc'); лимит 2 → ошибка.
+ */
 const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -23,6 +26,9 @@ const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer
   return Buffer.concat(chunks);
 };
 
+/** Копирует начальные файлы в память и создаёт операции чтения и изменения.
+ * @example createMemoryFileStore([]) → FileStore; последующая загрузка сохраняется только в памяти.
+ */
 export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
   const storedFiles = new Map<string, { content: Buffer; file: FileRecord }>();
 

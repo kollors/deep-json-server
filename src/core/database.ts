@@ -2,10 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
-import type { DatabaseConfig } from './config.js';
 import { domainError } from './errors.js';
+import type { RecordOptions } from './lifecycle/options.js';
+import type { ModelSchema } from './model.js';
 import type { DatabaseData, DatabaseRecord } from './types.js';
 import { createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
+
+export type DatabaseConfig = Pick<RecordOptions, 'timestamps' | 'softDelete'> &
+  ({ data: DatabaseData; path?: never; schema?: ModelSchema | string } | { data?: never; path: string; schema?: ModelSchema | string });
 
 export interface DatabaseContainer {
   data: DatabaseData;
@@ -20,6 +24,9 @@ export interface DatabaseStore {
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
+/** Проверяет сериализуемое JSON-значение; отвергает циклы, разреженные массивы, NaN и бесконечности.
+ * @example validateJsonValue({ a: [1, null] }, 'data') → undefined; NaN → ошибка.
+ */
 export const validateJsonValue = (value: unknown, path: string, ancestors = new WeakSet<object>()): void => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return;
@@ -66,6 +73,9 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
   ancestors.delete(value);
 };
 
+/** Проверяет объект коллекций, записи и уникальность ключей; возвращает исходный объект.
+ * @example validateDatabase({ notes: [{ id: '1' }] }) → тот же объект; повторный id → ошибка.
+ */
 export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>): DatabaseData => {
   if (!isObject(data)) {
     throw new Error('База данных должна содержать JSON-объект');
@@ -111,6 +121,9 @@ export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string
   return data as DatabaseData;
 };
 
+/** Читает UTF-8 JSON-файл и проверяет, что верхний уровень является объектом.
+ * @example Файл с {"a":1} → Promise<{ a: 1 }>; файл с [] → ошибка.
+ */
 export const readJsonObjectFile = async (path: string, label: string): Promise<Record<string, unknown>> => {
   const resolvedPath = resolve(path);
   let source: string;
@@ -134,6 +147,9 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
   return value;
 };
 
+/** Читает файл и проверяет коллекции и первичные ключи.
+ * @example Файл с {"notes":[]} → Promise<{ notes: [] }>.
+ */
 export const readDatabaseFile = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'), keys);
 
 const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => {
@@ -202,10 +218,18 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
   return { database, read, update };
 };
 
-/** Creates a disk- or memory-backed database with serialized updates. */
+/** Создаёт дисковое хранилище или хранилище в памяти по настройкам.
+ * @example createDatabaseStore({ data: { notes: [] } }) → Promise<DatabaseStore>.
+ */
 export const createDatabaseStore = async (config: DatabaseConfig, keys?: Map<string, string>): Promise<DatabaseStore> =>
   config.data != null ? createMemoryDatabaseStore(config.data, keys) : createDiskDatabaseStore(config.path, keys);
 
+/** Ищет индекс записи, сравнивая строковые представления id.
+ * @example findItemIndex([{ id: 1 }], '1') → 0; пустой массив → -1.
+ */
 export const findItemIndex = (collection: DatabaseRecord[], id: unknown): number => collection.findIndex((item) => String(item.id) === String(id));
 
+/** Генерирует случайный строковый id, отсутствующий в переданной коллекции.
+ * @example createId([]) → строка из 11 символов; конкретное значение зависит от генератора случайных чисел.
+ */
 export const createId = (collection: DatabaseRecord[]): string => createUniqueId((id) => findItemIndex(collection, id) !== -1);

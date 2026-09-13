@@ -10,8 +10,11 @@ import {
   isObjectType,
   type SelectionSetNode,
 } from 'graphql';
-import type { Engine, PreparedList } from '../engine.js';
-import type { Node } from '../model.js';
+import type { Engine, PreparedList } from '../core/engine.js';
+import type { Node } from '../core/model.js';
+/** Обходит выбранные поля, фрагменты и директивы и подготавливает аргументы списков до изменения данных.
+ * @example Запрос без списков → пустая Map; выбранный список с pageSize: 0 → ошибка.
+ */
 export function preflight(info: GraphQLResolveInfo, engine: Engine): Map<FieldNode, PreparedList> {
   const prepared = new Map<FieldNode, PreparedList>();
   const root = info.operation.operation === 'mutation' ? info.schema.getMutationType()! : info.schema.getQueryType()!;

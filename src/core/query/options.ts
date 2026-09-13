@@ -14,12 +14,21 @@ export interface ListOptions {
   order?: Order[];
   pager?: Pager;
 }
+/** Выбрасывает исключение с кодом неверного запроса.
+ * @example badQuery('Unknown field') → исключение с code = 'INVALID_QUERY'.
+ */
 export function badQuery(message: string): never {
   throw domainError('INVALID_QUERY', message);
 }
+/** Возвращает поля целевой сущности для связи или собственные дочерние поля узла.
+ * @example childrenOf({ children: { name: field }, … }) → { name: field }.
+ */
 export function childrenOf(node: Node): Record<string, Node> {
   return node.relation?.root.children ?? node.children;
 }
+/** Находит узел по пути и проверяет доступность; режим scalarOnly запрещает связи и массивы.
+ * @example nodeAt(root, 'profile.name') → узел name; неизвестный путь → ошибка.
+ */
 export function nodeAt(node: Node, path: string, scalarOnly = false): Node {
   let current = node;
   const parts = pathParts(path);
@@ -32,6 +41,9 @@ export function nodeAt(node: Node, path: string, scalarOnly = false): Node {
   });
   return current;
 }
+/** Собирает пути доступных скалярных полей, пропуская массивы, связи и скрытые поля.
+ * @example Для объекта profile с полем name → ['profile.name'].
+ */
 export function sortableFields(node: Node, prefix = ''): string[] {
   return Object.entries(childrenOf(node)).flatMap(([key, child]) => {
     if (child.writeOnly || child.mixed || child.many || child.relation) return [];

@@ -1,9 +1,14 @@
-import { json, ref, response } from '../openapi/helpers.js';
-import type { OpenapiDocument, OpenapiSchema } from '../types.js';
-import { AUTH_PATHS, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH } from './contract.js';
+import { AUTH_PATHS, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH } from '../auth/contract.js';
+import { json, ref, response } from './helpers.js';
+import type { OpenapiDocument, OpenapiSchema } from './types.js';
 
 export const AUTH_SCHEMAS: Record<string, OpenapiSchema> = {
-  AuthUser: { type: 'object', additionalProperties: false, required: ['id', 'username'], properties: { id: { type: 'string' }, username: { type: 'string' } } },
+  AuthUser: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id', 'username', 'isAdmin'],
+    properties: { id: { type: 'string' }, username: { type: 'string' }, isAdmin: { type: 'boolean' } },
+  },
   AuthLoginInput: {
     type: 'object',
     additionalProperties: false,
@@ -25,7 +30,12 @@ export const AUTH_SCHEMAS: Record<string, OpenapiSchema> = {
   },
   AuthLogoutResult: { type: 'object', additionalProperties: false, required: ['success'], properties: { success: { type: 'boolean' } } },
 };
-export const AUTH_SECURITY_SCHEMES = { AuthBearer: { type: 'http', scheme: 'bearer', description: 'Session token returned by POST /auth/login. Used only by GET /auth/me and POST /auth/logout.' } };
+export const AUTH_SECURITY_SCHEMES = {
+  AuthBearer: { type: 'http', scheme: 'bearer', description: 'Session token returned by POST /auth/login. Required for record mutations, GET /auth/me and POST /auth/logout.' },
+};
+/** Создаёт описания маршрутов входа, выхода и текущего пользователя.
+ * @example authOpenapiPaths() → объект с ключами '/auth/login', '/auth/logout', '/auth/me'.
+ */
 export function authOpenapiPaths(): OpenapiDocument['paths'] {
   const unauthorized = response('Invalid credentials or expired session', ref('Error'));
   return {

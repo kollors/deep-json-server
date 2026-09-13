@@ -35,13 +35,14 @@ try {
       assert.match(await generateGraphql(schema), /itemList/);
       const facade = await createServer({
         database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } },
-        auth: { enabled: true, users: [{ id: '1', username: 'admin', passwordHash: await hashPassword('packed-test') }] },
+        auth: { users: [{ id: '1', username: 'admin', passwordHash: await hashPassword('packed-test') }] },
         graphql: { enabled: true }, server: { logger: false },
       });
       assert.match(await facade.graphql(), /itemCreate/);
       assert.equal((await facade.openapi()).openapi, '3.0.3');
       const server = facade.fastify();
-      const created = await server.inject({ method: 'POST', url: '/items', payload: { name: 'packed' } });
+      const session = await server.inject({ method: 'POST', url: '/auth/login', payload: { username: 'admin', password: 'packed-test' } });
+      const created = await server.inject({ method: 'POST', url: '/items', headers: { authorization: 'Bearer ' + session.json().accessToken }, payload: { name: 'packed' } });
       assert.equal(created.statusCode, 201, created.body);
       const queried = await server.inject({ method: 'POST', url: '/graphql', payload: { query: '{ itemList { total data { name } } }' } });
       assert.equal(queried.json().data.itemList.data[0].name, 'packed');

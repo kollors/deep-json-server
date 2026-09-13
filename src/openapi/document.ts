@@ -1,16 +1,18 @@
-import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from '../auth/openapi.js';
-import { VERSION } from '../constants.js';
+import { VERSION } from '../core/constants.js';
+import { assertApi, canonicalNode, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../core/model.js';
+import { normalizePagination } from '../core/pagination.js';
+import { operatorsFor } from '../core/query/contract.js';
+import { sortableFields } from '../core/query/options.js';
+import { capitalize, isObject } from '../core/utils.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/http.js';
-import { createFilePaths } from '../files/openapi.js';
-import { assertApi, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../model.js';
-import { normalizePagination } from '../pagination.js';
-import { operatorsFor } from '../query/contract.js';
-import { sortableFields } from '../query/options.js';
-import type { OpenapiDocument, OpenapiSchema } from '../types.js';
-import { isObject } from '../utils.js';
-
+import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from './auth.js';
+import { createFilePaths } from './files.js';
 import { json, ref, response } from './helpers.js';
+import type { OpenapiDocument, OpenapiSchema } from './types.js';
 
+/** Преобразует nullable-значения JSON Schema в представление OpenAPI 3.0, рекурсивно обрабатывая поля и элементы.
+ * @example { anyOf: [{ type: 'string' }, { type: 'null' }] } → { type: 'string', nullable: true }.
+ */
 function toOpenapi(schema: ValidationSchema): OpenapiSchema {
   if (Array.isArray(schema.anyOf) && schema.anyOf.some((v) => isObject(v) && v.type === 'null')) {
     const nonNull = schema.anyOf.find((v) => isObject(v) && v.type !== 'null') as ValidationSchema;
@@ -23,6 +25,9 @@ function toOpenapi(schema: ValidationSchema): OpenapiSchema {
   if (isObject(schema.items)) result.items = toOpenapi(schema.items);
   return result as OpenapiSchema;
 }
+/** Строит документ с маршрутами и схемами записей, включая выбранные дополнительные маршруты.
+ * @example { model, files: true } → документ с paths['/_files/storage'].
+ */
 export function buildOpenapiDocument({
   model,
   files = false,
@@ -77,7 +82,7 @@ export function buildOpenapiDocument({
     return annotateInput(toOpenapi(objectSchema(node, mode, root, (child) => relationInputSchema(child, nestedInput(child.relation as Entity, nestedMode)))), node, mode !== 'update');
   }
   function nestedInput(entity: Entity, mode: 'create' | 'replace' | 'update'): OpenapiSchema {
-    const name = `${entity.name}Nested${mode[0].toUpperCase() + mode.slice(1)}`;
+    const name = `${entity.name}Nested${capitalize(mode)}`;
     if (!reserve(name, entity.root)) return ref(name);
     const existing = writeInput(entity.root, mode === 'replace' ? 'replace' : 'update', true, mode);
     existing.properties ??= {};
@@ -89,10 +94,7 @@ export function buildOpenapiDocument({
     return ref(name);
   }
   function output(entity: Entity, node: Node): OpenapiSchema {
-    if (node.relation) {
-      entity = node.relation;
-      node = entity.root;
-    }
+    [entity, node] = canonicalNode(entity, node);
     const name = nodeName(entity, node);
     if (!reserve(name, node)) return ref(name);
     const properties: Record<string, OpenapiSchema> = {};
@@ -105,15 +107,12 @@ export function buildOpenapiDocument({
         properties[key] = Object.keys(attributes).length ? { allOf: [shape], ...attributes } : shape;
       } else properties[key] = baseField(child);
     }
-    // scope may select any subset, so response properties are intentionally optional.
+    // Выбор может содержать любую часть полей, поэтому поля ответа необязательны.
     schemas[name] = { type: 'object', additionalProperties: false, properties };
     return ref(name);
   }
   function scope(entity: Entity, node: Node, list = node.many): OpenapiSchema {
-    if (node.relation) {
-      entity = node.relation;
-      node = entity.root;
-    }
+    [entity, node] = canonicalNode(entity, node);
     const name = `${nodeName(entity, node)}${list ? 'List' : ''}Scope`;
     if (!reserve(name, node)) return ref(name);
     const fieldsName = `${nodeName(entity, node)}ScopeFields`;
@@ -138,20 +137,14 @@ export function buildOpenapiDocument({
     return ref(name);
   }
   function page(entity: Entity, node: Node): OpenapiSchema {
-    if (node.relation) {
-      entity = node.relation;
-      node = entity.root;
-    }
+    [entity, node] = canonicalNode(entity, node);
     const name = `${nodeName(entity, node)}Page`;
     if (reserve(name, node))
       schemas[name] = { type: 'object', required: ['data', 'total'], properties: { data: { type: 'array', items: output(entity, node) }, total: { type: 'integer', minimum: 0 } } };
     return ref(name);
   }
   function where(entity: Entity, node: Node): OpenapiSchema {
-    if (node.relation) {
-      entity = node.relation;
-      node = entity.root;
-    }
+    [entity, node] = canonicalNode(entity, node);
     const name = `${nodeName(entity, node)}Where`;
     if (!reserve(name, node)) return ref(name);
     const properties: Record<string, OpenapiSchema> = { and: { type: 'array', items: ref(name) }, or: { type: 'array', minItems: 1, items: ref(name) }, not: ref(name) };
@@ -185,10 +178,7 @@ export function buildOpenapiDocument({
     return ref(name);
   }
   function order(entity: Entity, node: Node): OpenapiSchema {
-    if (node.relation) {
-      entity = node.relation;
-      node = entity.root;
-    }
+    [entity, node] = canonicalNode(entity, node);
     const name = `${nodeName(entity, node)}Order`;
     if (reserve(name, node)) {
       const paths = sortableFields(node);
@@ -217,7 +207,7 @@ export function buildOpenapiDocument({
     const name = entity.name;
     const op = operationName(entity);
     for (const mode of ['create', 'replace', 'update'] as const) {
-      const key = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
+      const key = `${name}${capitalize(mode)}`;
       reserve(key, entity.root);
       schemas[key] = writeInput(entity.root, mode, true);
     }
@@ -239,8 +229,13 @@ export function buildOpenapiDocument({
         operationId,
         tags: [entity.collection],
         parameters,
-        ...(mode ? { requestBody: { required: true, ...json(ref(`${name}${mode[0].toUpperCase() + mode.slice(1)}`)) } } : {}),
-        responses: { [mode === 'create' ? 201 : 200]: response('Success', schema), ...errors },
+        ...(auth && (mode || operationId === `${op}Delete`) ? { security: [{ AuthBearer: [] }] } : {}),
+        ...(mode ? { requestBody: { required: true, ...json(ref(`${name}${capitalize(mode)}`)) } } : {}),
+        responses: {
+          [mode === 'create' ? 201 : 200]: response('Success', schema),
+          ...errors,
+          ...(auth && (mode || operationId === `${op}Delete`) ? { 401: response('Authentication required', ref('Error')), 403: response('Forbidden', ref('Error')) } : {}),
+        },
       };
     };
     paths[`/${entity.collection}`] = { get: make(`${op}List`, list, page(entity, entity.root)), post: make(`${op}Create`, shape, output(entity, entity.root), 'create') };

@@ -16,10 +16,14 @@ import {
   GraphQLSchema,
   GraphQLString,
 } from 'graphql';
-import { assertApi, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from './model.js';
-import { operatorsFor } from './query/contract.js';
-import { sortableFields } from './query/options.js';
+import { assertApi, canonicalNode, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from '../core/model.js';
+import { operatorsFor } from '../core/query/contract.js';
+import { sortableFields } from '../core/query/options.js';
+import { capitalize } from '../core/utils.js';
 
+/** Строит типы, фильтры, аргументы и операции по модели, проверяя конфликты имён.
+ * @example Модель с сущностью Note → GraphQLSchema с типом Note; повторяющееся имя типа → ошибка.
+ */
 export function buildGraphql(model: Model): GraphQLSchema {
   assertApi(model, 'graphql');
   const names = new Set(['String', 'Float', 'Int', 'Boolean', 'ID', 'Query', 'Mutation', 'Pager', 'OrderDirection']);
@@ -37,7 +41,6 @@ export function buildGraphql(model: Model): GraphQLSchema {
   const enums = new Map<Node, GraphQLEnumType>();
   const pager = new GraphQLInputObjectType({ name: 'Pager', fields: { page: { type: GraphQLInt }, pageSize: { type: GraphQLInt } } });
   const direction = new GraphQLEnumType({ name: 'OrderDirection', values: { ASC: { value: 'ASC' }, DESC: { value: 'DESC' } } });
-  const canonical = (entity: Entity, node: Node): [Entity, Node] => (node.relation ? [node.relation, node.relation.root] : [entity, node]);
   function scalar(entity: Entity, node: Node, constrained = true): GraphQLInputType & GraphQLOutputType {
     if (constrained && node.enum) {
       let type = enums.get(node);
@@ -54,7 +57,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     return node.base === 'number' ? GraphQLFloat : node.base === 'boolean' ? GraphQLBoolean : node.primary ? GraphQLID : GraphQLString;
   }
   function output(entity: Entity, node: Node): GraphQLObjectType {
-    [entity, node] = canonical(entity, node);
+    [entity, node] = canonicalNode(entity, node);
     let type = objects.get(node);
     if (type) return type;
     if (!Object.values(node.children).some((child) => !child.writeOnly)) throw new Error(`GraphQL object ${nodeName(entity, node)} must contain at least one visible field`);
@@ -85,7 +88,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     return type;
   }
   function page(entity: Entity, node: Node): GraphQLObjectType {
-    [entity, node] = canonical(entity, node);
+    [entity, node] = canonicalNode(entity, node);
     let type = pages.get(node);
     if (type) return type;
     type = new GraphQLObjectType({
@@ -96,7 +99,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     return type;
   }
   function input(entity: Entity, node: Node, mode: InputMode, root = false, nested = false): GraphQLInputObjectType {
-    const name = `${nodeName(entity, node)}${nested ? 'Nested' : ''}${mode[0].toUpperCase() + mode.slice(1)}`;
+    const name = `${nodeName(entity, node)}${nested ? 'Nested' : ''}${capitalize(mode)}`;
     const variant = `${mode}:${root}:${nested}`;
     let variants = inputs.get(node);
     if (!variants) {
@@ -129,7 +132,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     return type;
   }
   function where(entity: Entity, node: Node): GraphQLInputObjectType {
-    [entity, node] = canonical(entity, node);
+    [entity, node] = canonicalNode(entity, node);
     let type = wheres.get(node);
     if (type) return type;
     const name = reserve(`${nodeName(entity, node)}Where`);
@@ -173,7 +176,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     return type;
   }
   function order(entity: Entity, node: Node): GraphQLInputObjectType | undefined {
-    [entity, node] = canonical(entity, node);
+    [entity, node] = canonicalNode(entity, node);
     let type = orders.get(node);
     if (type) return type;
     const paths = sortableFields(node);
@@ -206,7 +209,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
       extensions: { listNode: entity.root, entity, operation: 'list' },
     };
     for (const mode of ['create', 'replace', 'update', 'delete'] as const) {
-      const operation = `${name}${mode[0].toUpperCase() + mode.slice(1)}`;
+      const operation = `${name}${capitalize(mode)}`;
       if (mutations[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
       const fields = Object.values(entity.root.children).filter((child) => writable(child, mode === 'delete' ? 'update' : mode, true));
       mutations[operation] = {

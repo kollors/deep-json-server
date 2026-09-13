@@ -19,7 +19,7 @@ const startServer = async (config) => {
   }
 };
 
-import { loadModel } from '../dist/src/model.js';
+import { loadModel } from '../dist/src/core/model.js';
 import { createOpenapi } from '../dist/src/openapi/index.js';
 
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));

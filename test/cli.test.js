@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
-import { runCli } from '../dist/src/cli.js';
+import { runCli } from '../dist/src/cli/index.js';
 
 const createFixture = async () => {
   const directoryPath = await mkdtemp(join(tmpdir(), 'deep-json-server-cli-'));

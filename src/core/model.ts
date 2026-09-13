@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { domainError } from './errors.js';
+import { AUDIT_FIELDS, DELETION_META, type RecordOptions, recordOptions } from './lifecycle/options.js';
 import { getRelationMetadata } from './relation-metadata.js';
 import type { DatabaseData, JsonValue } from './types.js';
 import { assertKnownKeys, isObject, isSafeKey, singularize, toPascalCase } from './utils.js';
@@ -29,12 +30,17 @@ export interface Field {
   onDelete?: 'restrict' | 'cascade';
 }
 export interface EntityDefinition {
+  timestamps?: boolean;
+  softDelete?: boolean;
   collection: string;
   api?: ('openapi' | 'graphql')[];
   fields: Record<string, Field>;
 }
 export type ModelSchema = Record<string, EntityDefinition>;
 export interface Node extends Field {
+  system?: boolean;
+  internal?: boolean;
+  softDelete?: boolean;
   path: string;
   base: string;
   many: boolean;
@@ -45,6 +51,8 @@ export interface Node extends Field {
   relationKey?: boolean;
 }
 export interface Entity {
+  timestamps: boolean;
+  softDelete: boolean;
   name: string;
   collection: string;
   api: ('openapi' | 'graphql')[];
@@ -53,6 +61,7 @@ export interface Entity {
   root: Node;
 }
 export interface Model {
+  options: Required<RecordOptions>;
   entities: Entity[];
   byName: Map<string, Entity>;
   byCollection: Map<string, Entity>;
@@ -89,17 +98,25 @@ const FIELD_KEYS = new Set([
   'target',
   'onDelete',
 ]);
+/** Разбивает путь по точкам и проверяет допустимость каждого имени.
+ * @example pathParts('profile.name') → ['profile', 'name']; pathParts('a..b') → ошибка.
+ */
 export const pathParts = (path: string): string[] => {
   const parts = path.split('.');
   if (parts.some((p) => !NAME.test(p) || !isSafeKey(p))) throw domainError('INVALID_INPUT', `Invalid field path: ${path}`);
   return parts;
 };
-/** Finds the nearest physical object containing a relation key. */
+/** Находит самый длинный префикс пути среди ключей объекта, учитывая границы сегментов.
+ * @example bindingFor({ a: {}, 'a.b': {} }, 'a.b.id') → 'a.b'; bindingFor({ a: {} }, 'abc.id') → undefined.
+ */
 export function bindingFor(bindings: Record<string, unknown>, path: string): string | undefined {
   let nearest: string | undefined;
   for (const prefix of Object.keys(bindings)) if ((path === prefix || path.startsWith(`${prefix}.`)) && (!nearest || prefix.length > nearest.length)) nearest = prefix;
   return nearest;
 }
+/** Проверяет, что все сегменты пути объявлены и доступны для записи, включая родительские объекты.
+ * @example Для поля name без ограничений canWriteKey(entity, 'name') → true; для первичного ключа → false.
+ */
 export function canWriteKey(entity: Entity, path: string): boolean {
   const parts = pathParts(path);
   return parts.every((_, index) => {
@@ -107,17 +124,37 @@ export function canWriteKey(entity: Entity, path: string): boolean {
     return field && !field.primary && !field.generated && !field.readOnly;
   });
 }
+/** Распознаёт обратную связь: источник совпадает с первичным ключом, а целевой путь отличается от первичного ключа цели.
+ * @example При source = 'id', target = 'authorId' и первичных ключах id → true.
+ */
 export function isReverseRelation(entity: Entity, node: Node): boolean {
   return node.source === entity.primary || (!canWriteKey(entity, node.source as string) && canWriteKey(node.relation as Entity, node.target as string));
 }
+/** Собирает значения по вложенному пути, проходя через массивы; отсутствующие значения и null пропускает.
+ * @example readPath({ rows: [{ id: 1 }, { id: 2 }] }, 'rows.id') → [1, 2].
+ */
 export const readPath = (value: unknown, path: string | string[]): unknown[] => {
   const parts = typeof path === 'string' ? pathParts(path) : path;
   if (!parts.length) return Array.isArray(value) ? value.flatMap((v) => readPath(v, [])) : value == null ? [] : [value];
   if (Array.isArray(value)) return value.flatMap((v) => readPath(v, parts));
   return isObject(value) && Object.hasOwn(value, parts[0]) ? readPath(value[parts[0]], parts.slice(1)) : [];
 };
+/** Возвращает последний сегмент пути поля.
+ * @example childName({ path: 'profile.name', … }) → 'name'.
+ */
 export const childName = (node: Node): string => node.path.split('.').at(-1) as string;
+/** Для связи возвращает целевую сущность и её корень; обычный узел сохраняет без изменений.
+ * @example canonicalNode(author, { relation: book }) → [book, book.root].
+ * @example canonicalNode(author, author.root) → [author, author.root].
+ */
+export const canonicalNode = (entity: Entity, node: Node): [Entity, Node] => (node.relation ? [node.relation, node.relation.root] : [entity, node]);
+/** Соединяет имя сущности и путь поля, заменяя точки подчёркиваниями.
+ * @example nodeName({ name: 'User', … }, { path: 'profile.name', … }) → 'User_profile_name'.
+ */
 export const nodeName = (entity: Entity, node: Node): string => (node.path ? `${entity.name}_${node.path.replaceAll('.', '_')}` : entity.name);
+/** Переводит первую букву имени сущности в нижний регистр.
+ * @example operationName({ name: 'UserProfile', … }) → 'userProfile'.
+ */
 export const operationName = (entity: Entity): string => entity.name[0].toLowerCase() + entity.name.slice(1);
 const newNode = (path: string, field: Field): Node => ({ ...field, path, base: field.type.replace(/\[\]$/, ''), many: field.type.endsWith('[]'), children: Object.create(null) });
 function addField(entity: Entity, path: string, field: Field, implicit = false): Node {
@@ -139,6 +176,24 @@ function addField(entity: Entity, path: string, field: Field, implicit = false):
   parent.children[key] = node;
   entity.fields[path] = node;
   return node;
+}
+function systemFields(entity: Entity, options: Required<RecordOptions>): void {
+  const names = [
+    ...(entity.timestamps ? ['createdAt', 'updatedAt'] : []),
+    DELETION_META,
+    ...(entity.softDelete ? ['deletedAt'] : []),
+    ...(options.auth ? ['createdById', 'updatedById', ...(entity.softDelete ? ['deletedById'] : [])] : []),
+  ];
+  entity.root.softDelete = entity.softDelete;
+  for (const name of names) {
+    if (entity.fields[name]) throw new Error(`Reserved system field ${entity.name}.${name}`);
+    const node = addField(entity, name, { type: 'string', readOnly: true, nullable: true, ...(name.endsWith('At') ? { format: 'date-time' } : {}) });
+    node.system = true;
+    if (name === DELETION_META) {
+      node.internal = true;
+      node.writeOnly = true;
+    }
+  }
 }
 function checkField(path: string, field: unknown): asserts field is Field {
   if (!isObject(field)) throw new Error(`Field ${path} must be an object`);
@@ -167,22 +222,36 @@ function checkField(path: string, field: unknown): asserts field is Field {
   if (typeof field.minimum === 'number' && typeof field.maximum === 'number' && field.minimum > field.maximum) throw new Error(`${path}: minimum exceeds maximum`);
   if (typeof field.minLength === 'number' && typeof field.maxLength === 'number' && field.minLength > field.maxLength) throw new Error(`${path}: minLength exceeds maxLength`);
 }
-export async function loadModel(source: unknown): Promise<Model | undefined> {
+/** Загружает описание из объекта или JSON-файла, проверяет поля и сопоставляет связи.
+ * @example loadModel(undefined) → Promise<undefined>; корректное описание → Promise<Model>.
+ */
+export async function loadModel(source: unknown, settings: RecordOptions = {}): Promise<Model | undefined> {
+  const options = recordOptions(settings);
   if (source === undefined) return undefined;
   const schema: unknown = typeof source === 'string' ? JSON.parse(await readFile(source, 'utf8')) : structuredClone(source);
   const ajv = createValidator();
   if (!isObject(schema) || !Object.keys(schema).length) throw new Error('Model schema must be a nonempty object');
   if ('$schema' in schema || '$info' in schema) throw new Error('Legacy $schema/$info format is no longer supported');
-  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: true };
+  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: true, options };
   for (const [name, definition] of Object.entries(schema)) {
     if (!NAME.test(name) || !isSafeKey(name) || PRIMITIVES.has(name) || !isObject(definition)) throw new Error(`Invalid model ${name}`);
-    assertKnownKeys(definition, new Set(['collection', 'api', 'fields']), name);
+    assertKnownKeys(definition, new Set(['collection', 'api', 'fields', 'timestamps', 'softDelete']), name);
     if (typeof definition.collection !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(definition.collection) || !isSafeKey(definition.collection)) throw new Error(`Invalid collection for ${name}`);
     if (model.byCollection.has(definition.collection)) throw new Error(`Duplicate collection ${definition.collection}`);
     const api = definition.api ?? ['openapi', 'graphql'];
     if (!Array.isArray(api) || api.some((v) => !['openapi', 'graphql'].includes(v)) || new Set(api).size !== api.length) throw new Error(`Invalid api for ${name}`);
     if (!isObject(definition.fields)) throw new Error(`${name}.fields must be an object`);
-    const entity: Entity = { name, collection: definition.collection, api, primary: '', fields: Object.create(null), root: newNode('', { type: 'object' }) };
+    const flags = recordOptions({ timestamps: definition.timestamps as boolean | undefined, softDelete: definition.softDelete as boolean | undefined });
+    const entity: Entity = {
+      timestamps: definition.timestamps === undefined ? options.timestamps : flags.timestamps,
+      softDelete: definition.softDelete === undefined ? options.softDelete : flags.softDelete,
+      name,
+      collection: definition.collection,
+      api,
+      primary: '',
+      fields: Object.create(null),
+      root: newNode('', { type: 'object' }),
+    };
     for (const [path, field] of Object.entries(definition.fields).sort(([a], [b]) => a.split('.').length - b.split('.').length)) {
       checkField(path, field);
       addField(entity, path, field);
@@ -193,6 +262,7 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
       }
     }
     if (!entity.primary) throw new Error(`${name}: primary key is required`);
+    systemFields(entity, options);
     entityValidators.set(entity, ajv);
     model.entities.push(entity);
     model.byName.set(name, entity);
@@ -261,18 +331,27 @@ export async function loadModel(source: unknown): Promise<Model | undefined> {
   }
   return model;
 }
+/** Определяет доступность поля для выбранного режима записи, учитывая защищённые дочерние поля.
+ * @example writable({ readOnly: true, … }, 'update') → false.
+ */
 export function writable(node: Node, mode: InputMode, relations = false): boolean {
   if (node.relation) return relations;
   if (node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
   const children = Object.values(node.children);
   return node.base !== 'object' || children.length === 0 || children.some((child) => writable(child, mode, relations));
 }
+/** Проверяет наличие явной модели и доступность выбранного формата для её связей.
+ * @example assertApi(undefined, 'graphql') → ошибка; согласованная модель → undefined.
+ */
 export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
   for (const entity of model.entities.filter((e) => e.api.includes(api)))
     for (const node of Object.values(entity.fields))
       if (node.relation && !node.relation.api.includes(api)) throw new Error(`${entity.name}.${node.path}: ${node.relation.name} does not enable ${api}`);
 }
+/** Строит схему проверки значения с ограничениями, массивом и допустимостью null.
+ * @example Для строкового узла без ограничений valueSchema(node) → { type: 'string' }.
+ */
 export function valueSchema(node: Node): ValidationSchema {
   let schema: ValidationSchema = node.base === 'object' ? objectSchema(node, 'stored') : { type: node.base };
   for (const key of ['minLength', 'maxLength', 'pattern', 'format', 'minimum', 'maximum', 'enum']) if (node[key as keyof Node] !== undefined) schema[key] = node[key as keyof Node];
@@ -281,6 +360,9 @@ export function valueSchema(node: Node): ValidationSchema {
   return schema;
 }
 export type InputMode = 'stored' | 'create' | 'replace' | 'update';
+/** Строит схему объекта для выбранного режима; при частичном обновлении корневые поля необязательны.
+ * @example Для пустого узла → { type: 'object', properties: {}, additionalProperties: false }.
+ */
 export function objectSchema(node: Node, mode: InputMode, root = false, relationSchema?: (node: Node) => ValidationSchema): ValidationSchema {
   const properties: Record<string, ValidationSchema> = {};
   const required: string[] = [];
@@ -300,6 +382,8 @@ export function objectSchema(node: Node, mode: InputMode, root = false, relation
         : valueSchema(child);
     if (child.required && !(root && mode === 'update') && !(mode !== 'stored' && child.default !== undefined) && !(relationSchema && child.relationKey)) required.push(key);
   }
+  // Сохраняем ранее записанные даты и авторов при отключении соответствующих флагов.
+  if (root && mode === 'stored') for (const name of AUDIT_FIELDS) properties[name] ??= { type: ['string', 'null'], ...(name.endsWith('At') ? { format: 'date-time' } : {}) };
   return { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) };
 }
 export function relationInputSchema(node: Node, object: ValidationSchema = { type: 'object' }): ValidationSchema {
@@ -310,6 +394,9 @@ export function relationInputSchema(node: Node, object: ValidationSchema = { typ
   return schema;
 }
 const validators = new WeakMap<Entity, Map<string, ValidateFunction>>();
+/** Проверяет запись по схеме выбранного режима и выбрасывает исключение при несоответствии.
+ * @example Обязательное строковое name: { name: 'Анна' } → undefined; { name: 2 } → ошибка.
+ */
 export function validateRecord(entity: Entity, value: unknown, mode: InputMode, relations = false): void {
   const ajv = entityValidators.get(entity) as Ajv;
   let cache = validators.get(entity);
@@ -325,16 +412,30 @@ export function validateRecord(entity: Entity, value: unknown, mode: InputMode, 
   }
   if (!validate(value)) throw domainError('INVALID_INPUT', `${entity.name}: ${ajv.errorsText(validate.errors)}`);
 }
-export function inferModel(database: DatabaseData): Model {
+/** Выводит поля и связи из значений коллекций, не меняя переданные записи.
+ * @example inferModel({ users: [{ id: '1', name: 'Анна' }] }) → модель со строковыми id и name.
+ */
+export function inferModel(database: DatabaseData, settings: RecordOptions = {}): Model {
+  const options = recordOptions(settings);
   const valueType = (value: unknown) => (isObject(value) ? 'object' : ['string', 'number', 'boolean'].includes(typeof value) ? typeof value : 'string');
-  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: false };
+  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: false, options };
   for (const [collection, records] of Object.entries(database)) {
     const name = toPascalCase(singularize(collection));
-    const entity: Entity = { name, collection, api: [], primary: 'id', fields: Object.create(null), root: newNode('', { type: 'object' }) };
+    const entity: Entity = {
+      timestamps: options.timestamps,
+      softDelete: options.softDelete,
+      name,
+      collection,
+      api: [],
+      primary: 'id',
+      fields: Object.create(null),
+      root: newNode('', { type: 'object' }),
+    };
+    systemFields(entity, options);
     const observed = new Map<string, Set<string>>();
     const scan = (record: Record<string, unknown>, prefix = '') => {
       for (const [key, value] of Object.entries(record)) {
-        if (!NAME.test(key) || !isSafeKey(key)) continue;
+        if (!NAME.test(key) || !isSafeKey(key) || (!prefix && entity.fields[key]?.system)) continue;
         const path = prefix + key;
         const sample = Array.isArray(value) ? value.find((v) => v !== null) : value;
         const base = valueType(sample);
@@ -371,7 +472,7 @@ export function inferModel(database: DatabaseData): Model {
   const resources = Object.keys(database);
   for (const entity of model.entities)
     for (const field of Object.values(entity.fields)) {
-      if (field.mixed) continue;
+      if (field.mixed || field.system) continue;
       const relation = getRelationMetadata(childName(field), resources, entity.collection);
       if (!relation) continue;
       const target = model.byCollection.get(relation.targetResource) as Entity;

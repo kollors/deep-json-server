@@ -1,5 +1,8 @@
 import type { Node } from '../model.js';
 export type Operand = 'value' | 'values' | 'comparison' | 'text' | 'element' | 'condition';
+/** Возвращает допустимые операторы и виды их аргументов для типа значения.
+ * @example Для boolean без массива → { not: 'condition', eq: 'value', ne: 'value', in: 'values' }.
+ */
 export const operatorsFor = (node: Node): Record<string, Operand> => {
   const result: Record<string, Operand> = { not: 'condition' };
   if (node.many) {

@@ -1,9 +1,12 @@
-import type { Engine, PreparedList } from '../engine.js';
-import type { Entity, Node } from '../model.js';
-import { childrenOf } from '../query/options.js';
-import { isRef, type Ref, resolveField } from '../records.js';
-import type { JsonObject, JsonValue } from '../types.js';
+import type { Engine, PreparedList } from '../core/engine.js';
+import type { Entity, Node } from '../core/model.js';
+import { childrenOf } from '../core/query/options.js';
+import { isRef, type Ref, resolveField } from '../core/records.js';
+import type { JsonObject, JsonValue } from '../core/types.js';
 import { ownScope, type RestOptions, type Scope, scopeFor, validateScope } from './options.js';
+/** Проверяет дерево выбора и заранее подготавливает фильтры, сортировку и пагинацию вложенных списков.
+ * @example Выбор без аргументов у одиночной записи → пустая Map; неверное поле → ошибка.
+ */
 export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): Map<Scope | Node, PreparedList> {
   validateScope(entity.root, options.scope, list);
   const plans = new Map<Scope | Node, PreparedList>();
@@ -19,6 +22,9 @@ export function validateRest(engine: Engine, entity: Entity, options: RestOption
   visit(entity.root, options.scope);
   return plans;
 }
+/** Строит новый объект из выбранных полей, разворачивая связи и обрабатывая вложенные списки.
+ * @example Запись { id: '1', name: 'Анна' } и выбор [{ name: true }] → { name: 'Анна' }.
+ */
 export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<Scope | Node, PreparedList>()): JsonObject {
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
@@ -38,8 +44,8 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
       } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans) : structuredClone(item))) as JsonValue;
     } else output[key] = structuredClone(value) as JsonValue;
   }
-  // Schemaless REST includes raw fields absent from the inferred model.
+  // При выведенной модели добавляем исходные поля, которые не удалось описать.
   if (!ref.context.model.explicit && scope[0]['*'] === true)
-    for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && !children[key]?.relation) output[key] = structuredClone(value);
+    for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && !children[key]?.relation && !children[key]?.writeOnly) output[key] = structuredClone(value);
   return output;
 }

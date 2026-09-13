@@ -1,9 +1,13 @@
 import type { FastifyInstance } from 'fastify';
-import type { Engine } from '../engine.js';
-import { domainError } from '../errors.js';
+import type { Engine } from '../core/engine.js';
+import { domainError } from '../core/errors.js';
+import type { Authenticate } from '../core/lifecycle/options.js';
 import { parseRestOptions } from './options.js';
 import { project, validateRest } from './projection.js';
-export function registerRestRoutes(server: FastifyInstance, engine: Engine): void {
+/** Регистрирует чтение коллекций и операции создания, замены, изменения и удаления записей.
+ * @example После регистрации GET / → { resources: [...] }; функция возвращает undefined.
+ */
+export function registerRestRoutes(server: FastifyInstance, engine: Engine, authenticate?: Authenticate): void {
   server.get('/', async () => ({ resources: engine.model.entities.map((entity) => entity.collection) }));
   for (const initial of engine.model.entities) {
     const path = `/${initial.collection}`;
@@ -35,11 +39,19 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine): voi
         method,
         url: mode === 'create' ? path : itemPath,
         handler: async (request, reply) => {
+          const actor = authenticate?.(request.headers.authorization);
           const options = parseRestOptions(request.query);
-          const result = await engine.mutate(initial, mode, (request.params as Record<string, string>)[initial.primary], request.body, (ref) => {
-            const plans = validateRest(engine, ref.entity, options);
-            return project(engine, ref, options.scope, plans);
-          });
+          const result = await engine.mutate(
+            initial,
+            mode,
+            (request.params as Record<string, string>)[initial.primary],
+            request.body,
+            (ref) => {
+              const plans = validateRest(engine, ref.entity, options);
+              return project(engine, ref, options.scope, plans);
+            },
+            actor,
+          );
           return reply.code(mode === 'create' ? 201 : 200).send(result);
         },
       });

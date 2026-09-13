@@ -1,6 +1,6 @@
 import type { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { createHttpError } from '../http/errors.js';
+import { createHttpError } from '../core/http-errors.js';
 import { type FileStore, type FileUpdate, getFileKey, getPathLocation, normalizeMimeType, validateDirectory, validateName } from './contract.js';
 import { createFileMetadata, FILE_HEADERS, FILE_ROUTES, FILE_UPDATE_SCHEMA, getDownloadName, PATCH_BODY_LIMIT } from './http.js';
 
@@ -8,6 +8,9 @@ interface FilePathParams {
   '*': string;
 }
 
+/** Декодирует строку из URL-кодировки; отсутствие или повреждённая кодировка дают ошибку 400.
+ * @example decodeHeader('a%20b', 'Name') → 'a b'; decodeHeader('%', 'Name') → ошибка.
+ */
 const decodeHeader = (value: unknown, name: string): string => {
   if (typeof value !== 'string') {
     throw createHttpError(400, `Заголовок ${name} обязателен`);
@@ -20,9 +23,18 @@ const decodeHeader = (value: unknown, name: string): string => {
   }
 };
 
+/** Декодирует и проверяет имя файла из заголовка.
+ * @example getContentName('a%20b.txt') → 'a b.txt'.
+ */
 const getContentName = (value: unknown): string => validateName(decodeHeader(value, FILE_HEADERS.name.name), `Заголовок ${FILE_HEADERS.name.name}`);
+/** Декодирует относительный каталог; отсутствующее значение заменяет пустой строкой.
+ * @example getContentDirectory(undefined) → ''; getContentDirectory('my%20photos') → 'my photos'.
+ */
 const getContentDirectory = (value: unknown): string => (value == null ? '' : validateDirectory(decodeHeader(value, FILE_HEADERS.directory.name), `Заголовок ${FILE_HEADERS.directory.name}`));
 
+/** Читает строковый логический флаг перезаписи; отсутствие означает false.
+ * @example getContentOverride('true') → true; getContentOverride(undefined) → false; 'yes' → ошибка.
+ */
 const getContentOverride = (value: unknown): boolean => {
   if (value == null || value === 'false') {
     return false;
@@ -35,13 +47,22 @@ const getContentOverride = (value: unknown): boolean => {
   throw createHttpError(400, `Заголовок ${FILE_HEADERS.override.name} должен содержать true или false`);
 };
 
+/** Извлекает и проверяет путь из параметра маршрута.
+ * @example При request.params = { '*': 'photos/a.jpg' } → 'photos/a.jpg'.
+ */
 const getRequestPath = (request: FastifyRequest): string => getFileKey(getPathLocation((request.params as FilePathParams)['*']));
 
+/** Проверяет переданные имя и каталог и возвращает только заданные значения.
+ * @example normalizeUpdate({ name: 'a.txt' }) → { name: 'a.txt' }.
+ */
 const normalizeUpdate = (body: FileUpdate): FileUpdate => ({
   ...(body.directory != null && { directory: validateDirectory(body.directory, 'Ключ body.directory') }),
   ...(body.name != null && { name: validateName(body.name, 'Ключ body.name') }),
 });
 
+/** Читает поток из хранилища и отправляет его с MIME-типом и заголовком скачивания или просмотра.
+ * @example При disposition = 'inline' ответ содержит Content-Disposition: inline и байты файла.
+ */
 const sendFile = async (store: FileStore, path: string, reply: FastifyReply, disposition: 'attachment' | 'inline') => {
   const { file, stream } = await store.get(path);
 
@@ -51,6 +72,9 @@ const sendFile = async (store: FileStore, path: string, reply: FastifyReply, dis
   return reply.send(stream);
 };
 
+/** Регистрирует обработчики загрузки, чтения, перемещения и удаления файлов.
+ * @example После регистрации GET по существующему пути → поток файла; функция возвращает undefined.
+ */
 export const registerFileRoutes = (fastify: FastifyInstance, { getStore, maxFileSize }: { getStore: () => Promise<FileStore>; maxFileSize: number }): void => {
   fastify.register(async (fileServer) => {
     const store = await getStore();
