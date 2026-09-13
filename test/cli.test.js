@@ -75,7 +75,7 @@ test('starts from config with consistent feature defaults', async () => {
       ],
     );
     assert.deepEqual(calls[0].config.database, { path: fixture.databasePath, schema: fixture.schemaPath });
-    assert.deepEqual(JSON.parse(JSON.stringify(calls[0].config.server)), fixture.config.server);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0].config.server)), { ...fixture.config.server, pageSize: 10 });
     assert.equal(calls[0].fastifyCalls, 1);
     assert.equal(calls[0].listenOptions, undefined);
     assert.equal(calls[1].config.files.directory, fixture.filesDirectoryPath);

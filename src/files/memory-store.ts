@@ -1,8 +1,10 @@
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { domainError } from '../core/errors.js';
 import { createSerialQueue } from '../core/utils.js';
 import type { MemoryFile } from './contract.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata } from './contract.js';
+import { createSizeLimiter } from './streams.js';
 
 /** Собирает поток в буфер, прекращая чтение при превышении лимита байтов.
  * @example Поток из Buffer.from('abc') и лимит 3 → Buffer('abc'); лимит 2 → ошибка.
@@ -10,20 +12,16 @@ import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getF
 const readUpload = async (stream: Readable, maxFileSize: number): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let size = 0;
-
-  for await (const chunk of stream) {
-    const buffer = Buffer.from(chunk);
-
-    size += buffer.length;
-
-    if (size > maxFileSize) {
-      throw domainError('PAYLOAD_TOO_LARGE', `Размер файла не должен превышать ${maxFileSize} байт`);
-    }
-
-    chunks.push(buffer);
-  }
-
-  return Buffer.concat(chunks);
+  await pipeline(
+    stream,
+    createSizeLimiter(maxFileSize, (value) => {
+      size = value;
+    }),
+    async (source) => {
+      for await (const chunk of source) chunks.push(Buffer.from(chunk));
+    },
+  );
+  return Buffer.concat(chunks, size);
 };
 
 /** Копирует начальные файлы в память и создаёт операции чтения и изменения.
@@ -62,11 +60,11 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
     return storedFile;
   };
 
-  const metadata = async (path: string): Promise<FileRecord> => findStoredFile(path).file;
+  const metadata = async (path: string): Promise<FileRecord> => ({ ...findStoredFile(path).file });
   const get = async (path: string): ReturnType<FileStore['get']> => {
     const storedFile = findStoredFile(path);
 
-    return { file: storedFile.file, stream: Readable.from([storedFile.content]) };
+    return { file: { ...storedFile.file }, stream: Readable.from([Buffer.from(storedFile.content)]) };
   };
 
   const upload = async ({ directory, maxFileSize, mimeType, name, override, stream }: FileUpload): ReturnType<FileStore['upload']> => {
@@ -89,7 +87,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
 
       storedFiles.set(path, { content, file });
 
-      return { created: !exists, file };
+      return { created: !exists, file: { ...file } };
     });
   };
 
@@ -106,7 +104,7 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
       storedFiles.delete(sourcePath);
       storedFiles.set(targetPath, { ...storedFile, file });
 
-      return file;
+      return { ...file };
     });
 
   const remove = (path: string): ReturnType<FileStore['remove']> =>

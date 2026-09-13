@@ -1,7 +1,8 @@
 import { type FieldNode, type GraphQLResolveInfo, type GraphQLSchema, isObjectType } from 'graphql';
 import type { Engine, PreparedList } from '../core/engine.js';
 import type { Actor } from '../core/lifecycle/options.js';
-import type { Entity, InputMode, Node } from '../core/model.js';
+import type { Entity, Node } from '../core/model.js';
+import type { MutationMode } from '../core/operations.js';
 import type { ListOptions } from '../core/query/options.js';
 import { type Context, type Ref, resolveField } from '../core/records.js';
 import { preflight } from './preflight.js';
@@ -29,13 +30,13 @@ export function attachResolvers(schema: GraphQLSchema, engine: Engine): void {
   for (const type of Object.values(schema.getTypeMap())) {
     if (!isObjectType(type)) continue;
     for (const field of Object.values(type.getFields())) {
-      const { entity, operation, node, listNode } = field.extensions as { entity?: Entity; operation?: InputMode | 'delete' | 'find' | 'list'; node?: Node; listNode?: Node };
+      const { entity, operation, node, listNode } = field.extensions as { entity?: Entity; operation?: MutationMode | 'find' | 'list'; node?: Node; listNode?: Node };
       if (entity && operation)
         field.resolve = async (_root, args, context: GraphqlContext, info) => {
           const plans = await context.prepare(info);
           if (operation === 'find') return engine.find(await context.snapshot(), entity, args[entity.primary]) ?? null;
           if (operation === 'list') return engine.list(engine.records(await context.snapshot(), entity), entity.root, args, plans.get(info.fieldNodes[0]));
-          return engine.mutate(entity, operation as 'create' | 'replace' | 'update' | 'delete', args[entity.primary], args.data ?? {}, undefined, context.actor?.());
+          return engine.mutate(entity, operation, args[entity.primary], args.data ?? {}, undefined, context.actor);
         };
       else if (node)
         field.resolve = async (ref: Ref, args: ListOptions, context: GraphqlContext, info) => {

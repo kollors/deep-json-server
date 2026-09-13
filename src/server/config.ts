@@ -1,8 +1,11 @@
 import type { AuthConfig } from '../auth/contract.js';
+import { getBoolean, getObject, getPositiveInteger, getString, normalizeAddress } from '../core/config-values.js';
+import { DEFAULT_MAX_FILE_SIZE } from '../core/constants.js';
 import type { DatabaseConfig } from '../core/database.js';
 import { recordOptions } from '../core/lifecycle/options.js';
-import { errorMessage, isPortNumber } from '../core/utils.js';
+import { errorMessage } from '../core/utils.js';
 import type { FilesConfig, MemoryFile } from '../files/contract.js';
+import { normalizeOpenapiInfo, type OpenapiInfo } from '../openapi/options.js';
 
 export type { AuthConfig } from '../auth/contract.js';
 
@@ -39,7 +42,7 @@ export interface OpenapiConfig {
   enabled?: boolean;
   endpoint?: string;
   path?: string;
-  info?: { title: string; version: string; description?: string };
+  info?: OpenapiInfo;
 }
 export interface GraphqlConfig {
   path?: string;
@@ -67,64 +70,15 @@ export interface NormalizedServerConfig {
   database: DatabaseConfig;
   files?: FilesConfig;
   auth?: AuthConfig;
-  openapi: OpenapiConfig;
-  graphql: GraphqlConfig;
-  server: ServerConfig;
-}
-
-/** Проверяет объект и обязательность значения; необязательные null и undefined пропускает.
- * @example getObject(undefined, 'data') → undefined; getObject([], 'data', true) → ошибка.
- */
-function getObject(value: unknown, path: string, required: true): Record<string, unknown>;
-function getObject(value: unknown, path: string, required?: false): Record<string, unknown> | undefined;
-function getObject(value: unknown, path: string, required = false): Record<string, unknown> | undefined {
-  if (value == null && !required) {
-    return undefined;
-  }
-
-  if (!isObject(value)) {
-    throw new Error(`Ключ ${path} должен быть JSON-объектом`);
-  }
-
-  return value;
-}
-
-/** Проверяет непустую строку, не обрезая её; необязательные null и undefined пропускает.
- * @example getString(' a ', 'name') → ' a '; getString('', 'name') → ошибка.
- */
-function getString(value: unknown, path: string, required: true): string;
-function getString(value: unknown, path: string, required?: false): string | undefined;
-function getString(value: unknown, path: string, required = false): string | undefined {
-  if (value == null && !required) {
-    return undefined;
-  }
-
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`Ключ ${path} должен содержать непустую строку`);
-  }
-
-  return value;
+  openapi: OpenapiConfig & Required<Pick<OpenapiConfig, 'enabled' | 'endpoint'>>;
+  graphql: GraphqlConfig & Required<Pick<GraphqlConfig, 'enabled' | 'endpoint'>>;
+  server: Required<ServerConfig>;
 }
 
 /** Делает заданный путь абсолютным относительно указанного каталога.
  * @example resolveConfigPath('a.json', '/tmp') → '/tmp/a.json'; undefined → undefined.
  */
 const resolveConfigPath = (value: string | undefined, directoryPath: string): string | undefined => (value == null ? undefined : resolve(directoryPath, value));
-
-/** Принимает положительное целое число или отсутствие значения.
- * @example getPositiveInteger(2, 'size') → 2; getPositiveInteger(0, 'size') → ошибка.
- */
-const getPositiveInteger = (value: unknown, path: string): number | undefined => {
-  if (value == null) {
-    return undefined;
-  }
-
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new Error(`Ключ ${path} должен быть положительным целым числом`);
-  }
-
-  return value;
-};
 
 /** Принимает объект описания или разрешает путь к нему относительно каталога.
  * @example normalizeSchema('schema.json', '/tmp') → '/tmp/schema.json'.
@@ -237,36 +191,24 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
 
   assertKnownKeys(openapi, OPENAPI_KEYS, 'config.openapi');
   assertKnownKeys(graphql, GRAPHQL_KEYS, 'config.graphql');
-  if (openapi.enabled !== undefined && typeof openapi.enabled !== 'boolean') throw new Error('config.openapi.enabled must be boolean');
+  const openapiEnabled = getBoolean(openapi.enabled, 'config.openapi.enabled') ?? false;
   const openapiEndpoint = getString(openapi.endpoint, 'config.openapi.endpoint');
   if (openapiEndpoint && !/^\/[A-Za-z][A-Za-z0-9_./-]*$/.test(openapiEndpoint)) throw new Error('Invalid OpenAPI endpoint');
-  if (graphql.enabled !== undefined && typeof graphql.enabled !== 'boolean') throw new Error('config.graphql.enabled must be boolean');
+  const graphqlEnabled = getBoolean(graphql.enabled, 'config.graphql.enabled') ?? false;
   const endpoint = getString(graphql.endpoint, 'config.graphql.endpoint');
   if (endpoint && (!/^\/[A-Za-z][A-Za-z0-9_/-]*$/.test(endpoint) || endpoint === '/')) throw new Error('Invalid GraphQL endpoint');
-  const info = getObject(openapi.info, 'config.openapi.info');
-  if (info && (typeof info.title !== 'string' || typeof info.version !== 'string')) throw new Error('OpenAPI info requires title and version');
+  const info = normalizeOpenapiInfo(openapi.info);
   assertKnownKeys(server, SERVER_KEYS, 'config.server');
 
   const openapiPath = getString(openapi.path, 'config.openapi.path');
-  const cors = server.cors;
-  const host = getString(server.host, 'config.server.host');
+  const cors = getBoolean(server.cors ?? undefined, 'config.server.cors') ?? true;
+  const { host, port } = normalizeAddress(server);
   const logger = server.logger;
   const maxFileSize = getPositiveInteger(server.maxFileSize, 'config.server.maxFileSize');
-  const maxPageSize = getPositiveInteger(server.maxPageSize, 'config.server.maxPageSize');
-  const pageSize = getPositiveInteger(server.pageSize, 'config.server.pageSize');
-  normalizePagination({ pageSize, maxPageSize });
-  const port = server.port;
-
-  if (port != null && !isPortNumber(port)) {
-    throw new Error('Ключ config.server.port должен быть целым числом от 0 до 65535');
-  }
+  const pagination = normalizePagination(server);
 
   if (logger != null && typeof logger !== 'boolean' && !isObject(logger)) {
     throw new Error('Ключ config.server.logger должен содержать boolean или JSON-объект');
-  }
-
-  if (cors != null && typeof cors !== 'boolean') {
-    throw new Error('Ключ config.server.cors должен содержать boolean');
   }
 
   return {
@@ -274,20 +216,19 @@ const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServer
     files,
     auth: normalizeAuth(config.auth, directoryPath),
     openapi: {
-      enabled: openapi.enabled as boolean | undefined,
-      endpoint: openapiEndpoint,
+      enabled: openapiEnabled,
+      endpoint: openapiEndpoint ?? '/openapi.json',
       path: resolveConfigPath(openapiPath, directoryPath),
-      ...(info && { info: copyInput(info) as OpenapiConfig['info'] }),
+      ...(info && { info }),
     },
-    graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphql.enabled as boolean | undefined, endpoint },
+    graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphqlEnabled, endpoint: endpoint ?? '/graphql' },
     server: {
-      cors: cors as boolean | undefined,
+      cors,
       host,
-      logger: logger as ServerConfig['logger'],
-      maxFileSize,
-      maxPageSize,
-      pageSize,
-      port: port as number | undefined,
+      logger: (logger ?? true) as Required<ServerConfig>['logger'],
+      maxFileSize: maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
+      ...pagination,
+      port,
     },
   };
 };

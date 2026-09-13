@@ -2,36 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { domainError } from '../core/errors.js';
 import { canonicalPath } from '../core/paths.js';
 import { createSerialQueue, isSystemError } from '../core/utils.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata, type StoredFileMetadata } from './contract.js';
+import { createSizeLimiter } from './streams.js';
 
-/** Создаёт преобразующий поток, который считает байты и отклоняет превышение лимита.
- * @example Лимит 3 и поток 'abcd' → ошибка; поток 'abc' проходит без изменения.
- */
-const createSizeLimiter = (maxFileSize: number, onSize: (size: number) => void): Transform => {
-  let size = 0;
-
-  return new Transform({
-    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      size += chunk.length;
-
-      if (size > maxFileSize) {
-        callback(domainError('PAYLOAD_TOO_LARGE', `Размер файла не должен превышать ${maxFileSize} байт`));
-        return;
-      }
-
-      onSize(size);
-      callback(null, chunk);
-    },
-  });
-};
-
-/** Проверяет существование пути через lstat; остальные ошибки файловой системы передаёт вызывающему коду.
- * @example Отсутствующий путь → Promise<false>; существующий файл или ссылка → Promise<true>.
+/** Проверяет доступность пути через access; остальные ошибки файловой системы передаёт вызывающему коду.
+ * @example Отсутствующий путь → Promise<false>; существующий доступный файл → Promise<true>; оборванная ссылка → Promise<false>.
  */
 const pathExists = async (path: string): Promise<boolean> => {
   try {

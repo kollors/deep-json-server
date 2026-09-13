@@ -3,11 +3,11 @@ import { createId, type DatabaseContainer } from '../database.js';
 import { domainError } from '../errors.js';
 import { AUDIT_FIELDS } from '../lifecycle/options.js';
 import { bindingFor, canWriteKey, type Entity, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from '../model.js';
+import type { WriteMode } from '../operations.js';
 import { keyOf, makeContext, type Ref, related, rootRef, sourceValues } from '../records.js';
 import type { JsonObject, JsonValue } from '../types.js';
 import { isEqual, isObject } from '../utils.js';
 
-type WriteMode = 'create' | 'replace' | 'update';
 interface Slot {
   object: JsonObject;
   key: string;

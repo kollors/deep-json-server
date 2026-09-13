@@ -3,6 +3,7 @@ import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { domainError } from './errors.js';
 import { AUDIT_FIELDS, DELETION_META, type RecordOptions, recordOptions } from './lifecycle/options.js';
+import type { WriteMode } from './operations.js';
 import { getRelationMetadata } from './relation-metadata.js';
 import type { DatabaseData, JsonValue } from './types.js';
 import { assertKnownKeys, isObject, isSafeKey, singularize, toPascalCase } from './utils.js';
@@ -359,7 +360,7 @@ export function valueSchema(node: Node): ValidationSchema {
   if (node.nullable) schema = { anyOf: [schema, { type: 'null' }] };
   return schema;
 }
-export type InputMode = 'stored' | 'create' | 'replace' | 'update';
+export type InputMode = 'stored' | WriteMode;
 /** Строит схему объекта для выбранного режима; при частичном обновлении корневые поля необязательны.
  * @example Для пустого узла → { type: 'object', properties: {}, additionalProperties: false }.
  */

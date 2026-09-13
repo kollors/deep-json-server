@@ -4,7 +4,7 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.7 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
+**1.0.0-alpha.8 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.7`.
+To install a specific version, use `@1.0.0-alpha.8`.
 
 ## Quick start
 
@@ -412,9 +412,9 @@ Each format needs its own output file. The command rejects destinations that wou
 
 ## Authentication
 
-The `auth` section enables REST login and protects record changes in REST and GraphQL. Reads and all file operations remain public.
+The `auth` section enables registration, login and permission checks for record changes in REST and GraphQL. Reads and all file operations remain public.
 
-Create an auth user in a separate file with `setup-auth.mjs`:
+Define the first administrator in the initial data. For example, create `auth.json` with `setup-auth.mjs`:
 
 ```js
 import { writeFile } from 'node:fs/promises';
@@ -436,17 +436,46 @@ export default {
 };
 ```
 
-Start with `npx deep-json-server server.config.js`. The presence of `auth` enables the module; omit the section to leave record changes open. Each user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`. Passwords use salted scrypt hashes. Auth users are stored separately from database collections. The file is read at startup; restart the server after editing it.
+Start with `npx deep-json-server server.config.js`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`. Passwords use salted scrypt hashes.
 
-| REST request | Input | Response |
+You can pass an array in `auth.users` instead of a path:
+
+```js
+import { hashPassword } from '@kollors/deep-json-server/auth';
+
+const password = process.env.DJS_PASSWORD;
+if (!password) throw new Error('Set DJS_PASSWORD');
+
+export default {
+  database: { data: { items: [] } },
+  auth: {
+    users: [
+      { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
+    ],
+  },
+};
+```
+
+Auth users are stored separately from database collections. With a string in `auth.users`, registration, password changes and admin status changes are saved to that JSON file through the same `lowdb` used by the main database. With an array, changes remain in an internal memory copy and disappear on restart; the original array is unchanged. This choice is independent of `database.path` or `database.data`. A file write failure leaves the user and active sessions unchanged. The file is read at startup; restart the server after editing it manually.
+
+| REST request | JSON body | Response |
 |---|---|---|
-| `POST /auth/login` | JSON `{ "username": "admin", "password": "…" }` | `{ accessToken, expiresIn, user: { id, username, isAdmin } }` |
-| `GET /auth/me` | Bearer token | `{ id, username, isAdmin }` |
-| `POST /auth/logout` | Bearer token | `{ success: true }` |
+| `POST /auth/register` | `{ "username": "anna", "password": "…" }` | `201`: `{ id, username, isAdmin: false }` |
+| `POST /auth/login` | `{ "username": "anna", "password": "…" }` | `{ accessToken, expiresIn, user: { id, username, isAdmin } }` |
+| `GET /auth/me` | — | `{ id, username, isAdmin }` |
+| `POST /auth/logout` | — | `{ success: true }` |
+| `PATCH /auth/users/:id/password` | `{ "currentPassword": "…", "newPassword": "…" }` | `{ success: true }` |
+| `PATCH /auth/users/:id/admin` | `{ "isAdmin": true }` | `{ id, username, isAdmin }` |
 
-Pass the token in `Authorization: Bearer <accessToken>`. Incorrect credentials and invalid or expired tokens return HTTP 401. Sessions are kept in memory and disappear on restart; logout revokes the supplied token. Login can return HTTP 429 when the server has too many concurrent login attempts or active sessions.
+Registration and login are public. Send `Authorization: Bearer <accessToken>` for the other methods. Registration creates an ordinary user with a generated `id`; requests cannot include `id`, `passwordHash` or `isAdmin`. Usernames are case-sensitive and unique; duplicates return `409`. A username must contain a non-whitespace character and be at most 256 characters long. Passwords must contain 1–1024 characters. Values are not trimmed. Registration does not create a session: log in afterwards.
 
-OpenAPI describes Bearer authentication for record changes, `/auth/me` and `/auth/logout`. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `generate openapi server.config.js`; the users file is not read during generation. GraphQL and OpenAPI require `database.schema`.
+Users can change only their own password by supplying `currentPassword` and `newPassword`. Administrators follow the same rule for their own password. An administrator can change an ordinary user's password with just `newPassword`. Changing another administrator's password returns `403`. A successful password change ends all sessions of the target user, including the current session when changing your own password; log in again. An incorrect current password returns `401` without changing sessions.
+
+Only administrators can change `isAdmin`. They can grant or remove another user's admin status. An administrator can remove their own status only if another administrator remains; otherwise the request returns `409`. This check accounts for concurrent requests. Existing tokens use the new permissions as soon as the change is saved, including for GraphQL mutations. An administrator may demote another administrator and then change their password as an ordinary user.
+
+Invalid or expired tokens return `401`, insufficient permissions return `403`, and an absent user for an otherwise permitted operation returns `404`. Invalid request bodies return `400`. Login, registration and password changes may return `429` when too many password computations are running; login also limits active sessions. Sessions are kept in memory and disappear on restart. Logout revokes only the supplied token.
+
+OpenAPI describes all auth routes and their Bearer token requirements. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `generate openapi server.config.js`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when changing records. GraphQL and OpenAPI require `database.schema`.
 
 ## Record dates, deletion and ownership
 

@@ -2,9 +2,10 @@ import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './constants.js';
 import type { DatabaseStore } from './database.js';
 import { domainError } from './errors.js';
 import { RecordMutation } from './lifecycle/mutation.js';
-import type { Actor } from './lifecycle/options.js';
+import type { ActorSource } from './lifecycle/options.js';
 import { type Entity, inferModel, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
 import { MutationWriter } from './mutations/write.js';
+import type { MutationMode } from './operations.js';
 import { compileWhere, type Predicate } from './query/filter.js';
 import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
@@ -111,27 +112,30 @@ export class Engine {
    */
   list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options)): Page {
     const { page, pageSize, predicate, rules } = prepared;
-    const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : [...records];
-    if (rules.length)
-      data.sort((a, b) => {
-        for (const rule of rules) {
-          const left = readPath(a.value, rule.keys)[0];
-          const right = readPath(b.value, rule.keys)[0];
-          const comparison =
-            left == null && right == null
-              ? 0
-              : left == null
-                ? 1
-                : right == null
-                  ? -1
-                  : typeof left === 'number' && typeof right === 'number'
-                    ? left - right
-                    : collator.compare(String(left), String(right));
-          if (comparison) return rule.direction === 'DESC' ? -comparison : comparison;
-        }
-        return 0;
-      });
-    return { data: data.slice((page - 1) * pageSize, page * pageSize), total: data.length };
+    const start = (page - 1) * pageSize;
+    const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : records;
+    if (!rules.length) return { data: data.slice(start, start + pageSize), total: data.length };
+    // Извлекаем ключи один раз на запись, а не при каждом сравнении сортировки.
+    const ordered = data.map((ref) => ({ ref, keys: rules.map((rule) => readPath(ref.value, rule.keys)[0]) }));
+    ordered.sort((a, b) => {
+      for (let index = 0; index < rules.length; index++) {
+        const left = a.keys[index];
+        const right = b.keys[index];
+        const comparison =
+          left == null && right == null
+            ? 0
+            : left == null
+              ? 1
+              : right == null
+                ? -1
+                : typeof left === 'number' && typeof right === 'number'
+                  ? left - right
+                  : collator.compare(String(left), String(right));
+        if (comparison) return rules[index].direction === 'DESC' ? -comparison : comparison;
+      }
+      return 0;
+    });
+    return { data: ordered.slice(start, start + pageSize).map(({ ref }) => ref), total: data.length };
   }
   /** Проверяет коллекции, значения полей и целостность активных связей.
    * @example Согласованные записи → undefined; обязательная связь без цели → исключение.
@@ -168,14 +172,16 @@ export class Engine {
   /** Выполняет одну операцию записи в транзакции, включая связи, права и подготовку ответа.
    * @example Режим update с { name: 'Анна' } → обновлённая запись; ошибка проверки → прежние данные.
    */
-  async mutate<T = Ref>(entity: Entity, mode: 'create' | 'replace' | 'update' | 'delete', key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: Actor): Promise<T> {
-    if (this.model.options.auth && !actor) throw domainError('UNAUTHENTICATED', 'Authentication required');
+  async mutate<T = Ref>(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: ActorSource): Promise<T> {
+    const currentActor = () => (typeof actor === 'function' ? actor() : actor);
+    if (this.model.options.auth && !currentActor()) throw domainError('UNAUTHENTICATED', 'Authentication required');
     if (mode !== 'delete') {
       if (!isObject(body)) throw domainError('INVALID_INPUT', 'Request body must be an object');
       if (!this.model.explicit && Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     }
-    const outcome = await this.store.update((database) => {
-      const lifecycle = new RecordMutation(database.data, this.model, actor);
+    const outcome = await this.store.update((database, before) => {
+      // Пока запрос ждал очередь, токен мог быть отозван, а права пользователя — изменены.
+      const lifecycle = new RecordMutation(database.data, this.model, currentActor(), before);
       const finish = (data: DatabaseData, record: JsonObject) => {
         const model = this.modelFor(data);
         const currentEntity = model.byCollection.get(entity.collection) as Entity;
@@ -198,13 +204,12 @@ export class Engine {
         const context = makeContext(database.data, this.model);
         const current = this.find(context, entity, key);
         if (!current) throw domainError('NOT_FOUND', 'Record not found');
-        const snapshot = structuredClone(database.data);
         lifecycle.check(entity, current.value);
         if (entity.softDelete && current.value.deletedAt != null) return finish(database.data, current.value);
         this.cascade(context, current as Ref, lifecycle);
         lifecycle.finish();
         this.validateData(database.data);
-        return finish(entity.softDelete ? database.data : snapshot, (current as Ref).value);
+        return finish(entity.softDelete ? database.data : before, (current as Ref).value);
       }
       const writer = new MutationWriter(database, this.model, mode === 'replace' ? 'replace' : 'update', (owner, record) => lifecycle.write(owner, record));
       const record = writer.write(entity, mode, key, body);
@@ -231,12 +236,20 @@ export class Engine {
     }
     const deleted = new Set<JsonObject>([initial.value]);
     const survives = (ref: Ref) => !deleted.has(ref.value) && !deleted.has(ref.root) && !Object.values(ref.bindings).some((value) => deleted.has(value));
-    const blocked: Array<{ owner: JsonObject; root: JsonObject; node: Node }> = [];
-    const owners: Array<{ ref: Ref; node: Node; targets: Ref[] }> = [];
+    type Dependency = { ref: Ref; node: Node; targets: Ref[] };
+    const owners: Dependency[] = [];
+    const dependents = new Map<JsonObject, Dependency[]>();
     const collect = (ref: Ref) => {
       for (const node of Object.values(ref.node.children)) {
-        if (node.relation) owners.push({ ref, node, targets: related(ref, node) });
-        else if (node.base === 'object') {
+        if (node.relation) {
+          const owner = { ref, node, targets: related(ref, node) };
+          owners.push(owner);
+          for (const target of owner.targets) {
+            const dependencies = dependents.get(target.value) ?? [];
+            dependencies.push(owner);
+            dependents.set(target.value, dependencies);
+          }
+        } else if (node.base === 'object') {
           const v = resolveField(ref, node);
           if (isRef(v)) collect(v);
           else if (Array.isArray(v))
@@ -250,19 +263,17 @@ export class Engine {
       this.records(context, entity)
         .filter((ref) => !entity.softDelete || ref.value.deletedAt == null)
         .forEach(collect);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const { ref, node, targets } of owners)
-        if (survives(ref) && targets.some((v) => deleted.has(v.value))) {
-          if (node.onDelete === 'cascade') {
-            deleted.add(ref.value);
-            changed = true;
-          }
-        }
+    const pending = [initial.value];
+    for (let index = 0; index < pending.length; index++) {
+      for (const { ref, node } of dependents.get(pending[index]) ?? []) {
+        if (node.onDelete !== 'cascade' || !survives(ref)) continue;
+        deleted.add(ref.value);
+        pending.push(ref.value);
+      }
     }
-    for (const { ref, node, targets } of owners) if (survives(ref) && targets.some((v) => deleted.has(v.value))) blocked.push({ owner: ref.value, root: ref.root, node });
-    if (blocked.length) throw domainError('CONFLICT', `Delete restricted by ${blocked[0].node.path}`);
+    // restrict проверяем после обхода: ссылающийся объект сам мог попасть в каскад.
+    const blocked = owners.find(({ ref, targets }) => survives(ref) && targets.some((target) => deleted.has(target.value)));
+    if (blocked) throw domainError('CONFLICT', `Delete restricted by ${blocked.node.path}`);
     lifecycle.deleteGroup(initial, deleted);
     const prune = (node: Node, record: JsonObject): void => {
       for (const [key, child] of Object.entries(node.children))

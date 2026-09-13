@@ -1,3 +1,4 @@
+import { getBoolean } from '../config-values.js';
 import { isObject } from '../utils.js';
 
 export interface RecordOptions {
@@ -9,6 +10,7 @@ export interface Actor {
   id: string;
   isAdmin?: boolean;
 }
+export type ActorSource = Actor | (() => Actor);
 export type Authenticate = (authorization: unknown) => Actor;
 export const DELETION_META = 'djsDeletion';
 export const AUDIT_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'createdById', 'updatedById', 'deletedById'] as const;
@@ -16,8 +18,7 @@ export const AUDIT_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'createdById
  * @example recordOptions({ softDelete: true }) → { timestamps: false, softDelete: true, auth: false }.
  */
 export function recordOptions(options: RecordOptions = {}): Required<RecordOptions> {
-  for (const key of ['timestamps', 'softDelete', 'auth'] as const) if (options[key] !== undefined && typeof options[key] !== 'boolean') throw new Error(`${key} must be boolean`);
-  return { timestamps: options.timestamps ?? false, softDelete: options.softDelete ?? false, auth: options.auth ?? false };
+  return { timestamps: getBoolean(options.timestamps, 'timestamps') ?? false, softDelete: getBoolean(options.softDelete, 'softDelete') ?? false, auth: getBoolean(options.auth, 'auth') ?? false };
 }
 /** Ищет условие deletedAt на текущем уровне и в логических ветках, не заходя в поля связанных объектов.
  * @example mentionsDeletedAt({ or: [{ deletedAt: { ne: null } }] }) → true; { user: { deletedAt: {} } } → false.

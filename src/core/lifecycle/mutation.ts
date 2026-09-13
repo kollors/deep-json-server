@@ -21,7 +21,6 @@ const keyOf = (entity: Entity, record: JsonObject) => JSON.stringify([entity.col
 
 /** Проверяет владельцев и заполняет поля дат и авторов внутри транзакции. */
 export class RecordMutation {
-  readonly before: DatabaseData;
   readonly now = new Date().toISOString();
   private originals = new Map<string, JsonObject>();
   private touched = new Set<string>();
@@ -29,11 +28,11 @@ export class RecordMutation {
   constructor(
     private data: DatabaseData,
     private model: Model,
-    private actor?: Actor,
+    private actor: Actor | undefined,
+    readonly before: Readonly<DatabaseData>,
   ) {
     if (model.options.auth && !actor) throw domainError('UNAUTHENTICATED', 'Authentication required');
     this.enabled = model.options.auth || model.entities.some((entity) => entity.timestamps || entity.softDelete);
-    this.before = this.enabled ? structuredClone(data) : data;
     if (!this.enabled) return;
     for (const entity of model.entities) for (const record of this.before[entity.collection] ?? []) this.originals.set(keyOf(entity, record), record);
   }

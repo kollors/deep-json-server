@@ -2,8 +2,8 @@ import process from 'node:process';
 import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from '../core/constants.js';
 import { inputPaths, validateExportPaths } from '../core/paths.js';
 import { isObject } from '../core/utils.js';
-import { generateGraphql, writeGraphql } from '../graphql/lazy.js';
-import { generateOpenapi, writeOpenapi } from '../openapi/lazy.js';
+import { writeGraphql } from '../graphql/entry.js';
+import { writeOpenapi } from '../openapi/entry.js';
 import { configure, configureGeneration, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
 import { resolveFeatures, type ServerFeatures } from '../server/features.js';
@@ -99,12 +99,12 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
       return path;
     });
     await validateExportPaths(destinations, inputPaths(source.config, source.directory, source.path));
+    const { loadModel } = await import('../core/model.js');
+    const model = await loadModel(config.database.schema, { auth: config.auth != null, timestamps: config.database.timestamps, softDelete: config.database.softDelete });
     const openapi = formats.includes('openapi')
-      ? await generateOpenapi(config.database.schema, {
+      ? (await import('../openapi/generate.js')).openapiFromModel(model, {
           files: config.files != null,
           auth: config.auth != null,
-          timestamps: config.database.timestamps,
-          softDelete: config.database.softDelete,
           host: config.server.host,
           port: config.server.port,
           pageSize: config.server.pageSize,
@@ -112,9 +112,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
           info: config.openapi.info,
         })
       : undefined;
-    const graphql = formats.includes('graphql')
-      ? await generateGraphql(config.database.schema, { auth: config.auth != null, timestamps: config.database.timestamps, softDelete: config.database.softDelete })
-      : undefined;
+    const graphql = formats.includes('graphql') ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
     if (openapi) {
       await writeOpenapi(openapi, config.openapi.path!);
       process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);

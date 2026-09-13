@@ -1,9 +1,7 @@
 import type { FastifyInstance, FastifyListenOptions } from 'fastify';
 import { AUTH_PATHS } from '../auth/contract.js';
-import { DEFAULT_HOST, DEFAULT_MAX_FILE_SIZE, DEFAULT_PORT } from '../core/constants.js';
 import { DomainError } from '../core/errors.js';
 import { domainStatus } from '../core/http-errors.js';
-import { normalizePagination } from '../core/pagination.js';
 import { inputPaths } from '../core/paths.js';
 import { errorMessage, isObject } from '../core/utils.js';
 import type { OpenapiDocument } from '../openapi/types.js';
@@ -43,10 +41,9 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
     corsHeaders['Access-Control-Allow-Headers'] = [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', ');
   }
   if (enabled.auth) corsHeaders['Access-Control-Allow-Headers'] += ', Authorization';
-  const { cors = true, logger = true, maxFileSize = DEFAULT_MAX_FILE_SIZE } = normalized.server;
-  const { pageSize, maxPageSize } = normalizePagination(normalized.server);
+  const { cors, logger, maxFileSize, pageSize, maxPageSize } = normalized.server;
   const openapi = async () =>
-    (await import('../openapi/public.js')).openapiFromModel(explicitModel, {
+    (await import('../openapi/generate.js')).openapiFromModel(explicitModel, {
       files: enabled.files,
       ...recordSettings,
       pageSize,
@@ -60,7 +57,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
     if (instance) return instance;
     const server = Fastify({ ajv: { customOptions: { coerceTypes: false, removeAdditional: false } }, logger });
     const originalListen = server.listen.bind(server);
-    const defaults = { host: normalized.server.host ?? DEFAULT_HOST, port: normalized.server.port ?? DEFAULT_PORT };
+    const defaults = { host: normalized.server.host, port: normalized.server.port };
     const listen = (optionsOrCallback?: FastifyListenOptions | ListenCallback, callback?: ListenCallback): Promise<string> | undefined => {
       if (typeof optionsOrCallback === 'function') {
         originalListen(defaults, optionsOrCallback);
@@ -93,8 +90,8 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       const model = explicitModel ?? inferModel(store.database.data, recordSettings);
       const engine = new Engine(store, model, pageSize, maxPageSize);
       engine.validateData(store.database.data);
-      const graphqlPath = normalized.graphql.endpoint ?? '/graphql';
-      const openapiPath = normalized.openapi.endpoint ?? '/openapi.json';
+      const graphqlPath = normalized.graphql.endpoint;
+      const openapiPath = normalized.openapi.endpoint;
       validateEndpoints(
         model.entities.map((entity) => entity.collection),
         [...(enabled.graphql ? [graphqlPath] : []), ...(enabled.openapi ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
@@ -130,7 +127,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
     fastify: getFastify,
     openapi,
     graphql: async () => {
-      return (await import('../graphql/public.js')).graphqlFromModel(explicitModel);
+      return (await import('../graphql/generate.js')).graphqlFromModel(explicitModel);
     },
   };
 }

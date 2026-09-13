@@ -19,7 +19,10 @@ export interface DatabaseStore {
   database: DatabaseContainer;
   path?: string;
   read(): Promise<DatabaseData>;
-  update<T>(operation: (database: DatabaseContainer) => T): Promise<T>;
+  /** Передаёт изменяемый черновик и исходные данные только для чтения; сохраняет черновик после проверки.
+   * @example update((draft, before) => { draft.data.notes = []; return before.notes.length; }) → прежнее число записей.
+   */
+  update<T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T>;
 }
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -174,13 +177,13 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
     return database.data;
   };
 
-  const update = <T>(operation: (database: DatabaseContainer) => T): Promise<T> =>
+  const update = <T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T> =>
     schedule(async () => {
       await read();
 
       await counterStore.read();
       const draft = { data: structuredClone(database.data), counters: structuredClone(counterStore.data) };
-      const result = operation(draft);
+      const result = operation(draft, database.data);
       validateDraft(draft.data, keys);
       // Reserve generated numbers first: failed data writes may leave gaps, never reused IDs.
       if (JSON.stringify(draft.counters) !== JSON.stringify(counterStore.data)) {
@@ -203,10 +206,10 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
   const schedule = createSerialQueue();
 
   const read = async () => database.data;
-  const update = <T>(operation: (database: DatabaseContainer) => T): Promise<T> =>
+  const update = <T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T> =>
     schedule(() => {
       const draft = structuredClone(database);
-      const result = operation(draft);
+      const result = operation(draft, database.data);
 
       validateDraft(draft.data, keys);
       database.data = draft.data;

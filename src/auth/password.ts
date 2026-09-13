@@ -8,6 +8,10 @@ const HASH_PATTERN = /^scrypt\$16384\$8\$5\$([0-9a-f]{32})\$([0-9a-f]{64})$/;
  * @example validPasswordHash('plain text') → false.
  */
 export const validPasswordHash = (value: unknown): value is string => typeof value === 'string' && HASH_PATTERN.test(value);
+/** Проверяет строку пароля по длине без обрезки пробелов.
+ * @example validPassword(' secret ') → true; validPassword('') → false.
+ */
+export const validPassword = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= MAX_PASSWORD_LENGTH;
 /** Вычисляет 32 байта scrypt для пароля и заданной соли.
  * @example derive('secret', Buffer.alloc(16)) → Promise<Buffer> длиной 32 байта; одинаковые входы дают одинаковый результат.
  */
@@ -19,7 +23,7 @@ const derive = (password: string, salt: Buffer): Promise<Buffer> =>
  * @example hashPassword('secret') → Promise<string> вида 'scrypt$16384$8$5$<соль>$<хеш>'; результат случаен.
  */
 export async function hashPassword(password: string): Promise<string> {
-  if (typeof password !== 'string' || !password.length || password.length > MAX_PASSWORD_LENGTH) throw new Error(`Password must contain 1..${MAX_PASSWORD_LENGTH} characters`);
+  if (!validPassword(password)) throw new Error(`Password must contain 1..${MAX_PASSWORD_LENGTH} characters`);
   const salt = randomBytes(16);
   const hash = await derive(password, salt);
   return `${PREFIX}$${salt.toString('hex')}$${hash.toString('hex')}`;

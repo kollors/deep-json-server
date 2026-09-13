@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Engine } from '../core/engine.js';
 import { domainError } from '../core/errors.js';
 import type { Authenticate } from '../core/lifecycle/options.js';
+import { MUTATIONS } from '../core/operations.js';
 import { parseRestOptions } from './options.js';
 import { project, validateRest } from './projection.js';
 /** Регистрирует чтение коллекций и операции создания, замены, изменения и удаления записей.
@@ -29,17 +30,13 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
       if (!ref) throw domainError('NOT_FOUND', 'Record not found');
       return project(engine, ref, options.scope, plans);
     });
-    for (const [method, mode] of [
-      ['POST', 'create'],
-      ['PUT', 'replace'],
-      ['PATCH', 'update'],
-      ['DELETE', 'delete'],
-    ] as const) {
+    for (const { method, mode, hasKey, status } of MUTATIONS) {
       server.route({
         method,
-        url: mode === 'create' ? path : itemPath,
+        url: hasKey ? itemPath : path,
         handler: async (request, reply) => {
-          const actor = authenticate?.(request.headers.authorization);
+          const actor = authenticate ? () => authenticate(request.headers.authorization) : undefined;
+          actor?.();
           const options = parseRestOptions(request.query);
           const result = await engine.mutate(
             initial,
@@ -52,7 +49,7 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
             },
             actor,
           );
-          return reply.code(mode === 'create' ? 201 : 200).send(result);
+          return reply.code(status).send(result);
         },
       });
     }

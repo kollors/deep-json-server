@@ -1,5 +1,6 @@
 import { VERSION } from '../core/constants.js';
 import { assertApi, canonicalNode, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../core/model.js';
+import { MUTATIONS, type Mutation, type WriteMode } from '../core/operations.js';
 import { normalizePagination } from '../core/pagination.js';
 import { operatorsFor } from '../core/query/contract.js';
 import { sortableFields } from '../core/query/options.js';
@@ -78,10 +79,10 @@ export function buildOpenapiDocument({
     }
     return schema;
   }
-  function writeInput(node: Node, mode: 'create' | 'replace' | 'update', root = false, nestedMode = mode): OpenapiSchema {
+  function writeInput(node: Node, mode: WriteMode, root = false, nestedMode = mode): OpenapiSchema {
     return annotateInput(toOpenapi(objectSchema(node, mode, root, (child) => relationInputSchema(child, nestedInput(child.relation as Entity, nestedMode)))), node, mode !== 'update');
   }
-  function nestedInput(entity: Entity, mode: 'create' | 'replace' | 'update'): OpenapiSchema {
+  function nestedInput(entity: Entity, mode: WriteMode): OpenapiSchema {
     const name = `${entity.name}Nested${capitalize(mode)}`;
     if (!reserve(name, entity.root)) return ref(name);
     const existing = writeInput(entity.root, mode === 'replace' ? 'replace' : 'update', true, mode);
@@ -206,7 +207,8 @@ export function buildOpenapiDocument({
   for (const entity of model.entities.filter((e) => e.api.includes('openapi'))) {
     const name = entity.name;
     const op = operationName(entity);
-    for (const mode of ['create', 'replace', 'update'] as const) {
+    for (const { mode, hasBody } of MUTATIONS) {
+      if (!hasBody) continue;
       const key = `${name}${capitalize(mode)}`;
       reserve(key, entity.root);
       schemas[key] = writeInput(entity.root, mode, true);
@@ -222,29 +224,34 @@ export function buildOpenapiDocument({
     const list = [selectionParameter(true)];
     const key = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...entity.fields[entity.primary], generated: undefined }) };
     const errors = { 400: response('Invalid request', ref('Error')), 404: response('Not found', ref('Error')), 409: response('Conflict', ref('Error')) };
-    const make = (operationId: string, parameters: unknown[], schema: unknown, mode?: 'create' | 'replace' | 'update') => {
+    const make = (operationId: string, parameters: unknown[], schema: unknown, mutation?: Mutation) => {
       if (operations.has(operationId)) throw new Error(`OpenAPI operation collision: ${operationId}`);
       operations.add(operationId);
       return {
         operationId,
         tags: [entity.collection],
         parameters,
-        ...(auth && (mode || operationId === `${op}Delete`) ? { security: [{ AuthBearer: [] }] } : {}),
-        ...(mode ? { requestBody: { required: true, ...json(ref(`${name}${capitalize(mode)}`)) } } : {}),
+        ...(auth && mutation ? { security: [{ AuthBearer: [] }] } : {}),
+        ...(mutation?.hasBody ? { requestBody: { required: true, ...json(ref(`${name}${capitalize(mutation.mode)}`)) } } : {}),
         responses: {
-          [mode === 'create' ? 201 : 200]: response('Success', schema),
+          [mutation?.status ?? 200]: response('Success', schema),
           ...errors,
-          ...(auth && (mode || operationId === `${op}Delete`) ? { 401: response('Authentication required', ref('Error')), 403: response('Forbidden', ref('Error')) } : {}),
+          ...(auth && mutation ? { 401: response('Authentication required', ref('Error')), 403: response('Forbidden', ref('Error')) } : {}),
         },
       };
     };
-    paths[`/${entity.collection}`] = { get: make(`${op}List`, list, page(entity, entity.root)), post: make(`${op}Create`, shape, output(entity, entity.root), 'create') };
-    paths[`/${entity.collection}/{${entity.primary}}`] = {
-      get: make(op, [key, ...shape], output(entity, entity.root)),
-      put: make(`${op}Replace`, [key, ...shape], output(entity, entity.root), 'replace'),
-      patch: make(`${op}Update`, [key, ...shape], output(entity, entity.root), 'update'),
-      delete: make(`${op}Delete`, [key, ...shape], output(entity, entity.root)),
-    };
+    const collectionPath = `/${entity.collection}`;
+    const itemPath = `${collectionPath}/{${entity.primary}}`;
+    paths[collectionPath] = { get: make(`${op}List`, list, page(entity, entity.root)) };
+    paths[itemPath] = { get: make(op, [key, ...shape], output(entity, entity.root)) };
+    for (const mutation of MUTATIONS) {
+      paths[mutation.hasKey ? itemPath : collectionPath][mutation.method.toLowerCase()] = make(
+        `${op}${capitalize(mutation.mode)}`,
+        mutation.hasKey ? [key, ...shape] : shape,
+        output(entity, entity.root),
+        mutation,
+      );
+    }
   }
   const parameters: Record<string, unknown> = {};
   if (files) {

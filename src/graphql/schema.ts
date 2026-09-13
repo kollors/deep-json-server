@@ -2,6 +2,7 @@ import {
   assertValidSchema,
   GraphQLBoolean,
   GraphQLEnumType,
+  type GraphQLFieldConfigArgumentMap,
   type GraphQLFieldConfigMap,
   GraphQLFloat,
   GraphQLID,
@@ -17,6 +18,7 @@ import {
   GraphQLString,
 } from 'graphql';
 import { assertApi, canonicalNode, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from '../core/model.js';
+import { MUTATIONS } from '../core/operations.js';
 import { operatorsFor } from '../core/query/contract.js';
 import { sortableFields } from '../core/query/options.js';
 import { capitalize } from '../core/utils.js';
@@ -208,13 +210,14 @@ export function buildGraphql(model: Model): GraphQLSchema {
       args: listArgs(entity, entity.root),
       extensions: { listNode: entity.root, entity, operation: 'list' },
     };
-    for (const mode of ['create', 'replace', 'update', 'delete'] as const) {
+    for (const { mode, hasKey, hasBody } of MUTATIONS) {
       const operation = `${name}${capitalize(mode)}`;
       if (mutations[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-      const fields = Object.values(entity.root.children).filter((child) => writable(child, mode === 'delete' ? 'update' : mode, true));
+      const args: GraphQLFieldConfigArgumentMap = { ...(hasKey ? keyArg : {}) };
+      if (hasBody && Object.values(entity.root.children).some((child) => writable(child, mode, true))) args.data = { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) };
       mutations[operation] = {
         type: output(entity, entity.root),
-        args: { ...(mode !== 'create' ? keyArg : {}), ...(mode !== 'delete' && fields.length ? { data: { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) } } : {}) },
+        args,
         extensions: { entity, operation: mode },
       };
     }

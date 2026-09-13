@@ -15,8 +15,8 @@ export async function canonicalPath(path: string): Promise<string> {
     return resolve(await canonicalPath(parent), basename(absolute));
   }
 }
-/** Собирает абсолютные пути входных файлов и счётчиков из настроек без чтения диска.
- * @example inputPaths({ database: { path: 'db.json' } }, '/tmp') → ['/tmp/db.json', '/tmp/db.json.counters.json'].
+/** Собирает пути входных файлов, счётчиков и временных файлов записи без чтения диска.
+ * @example auth.users = '/tmp/users.json' → среди защищённых путей '/tmp/users.json' и '/tmp/.users.json.tmp'.
  */
 export function inputPaths(config: { database?: unknown; files?: unknown; auth?: unknown }, directory = '.', sourcePath?: string): string[] {
   const database = isObject(config.database) ? config.database : {};
@@ -24,6 +24,9 @@ export function inputPaths(config: { database?: unknown; files?: unknown; auth?:
   const auth = isObject(config.auth) ? config.auth : {};
   const paths = [sourcePath, database.path, database.schema, files.metadata, auth.users].filter((path): path is string => typeof path === 'string');
   if (typeof database.path === 'string') paths.push(`${database.path}.counters.json`);
+  // JSONFile использует эти соседние файлы при записи; они тоже содержат защищённые данные.
+  for (const path of [database.path, typeof database.path === 'string' ? `${database.path}.counters.json` : undefined, auth.users])
+    if (typeof path === 'string') paths.push(resolve(directory, dirname(path), `.${basename(path)}.tmp`));
   return paths.map((path) => resolve(directory, path));
 }
 /** Читает идентификатор файла из устройства и inode; для отсутствующего файла возвращает исходный путь.
