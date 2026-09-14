@@ -1,3 +1,10 @@
+import { writeFile as writeFixture } from 'node:fs/promises';
+
+const writeJson = async (path, value) => {
+  await writeFixture(path, JSON.stringify(value));
+  return path;
+};
+
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +16,7 @@ const database = JSON.parse(await readFile(new URL('../examples/database.json', 
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
 const url = (path, query = {}) => `${path}?${new URLSearchParams(Object.entries(query).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))}`;
 const setup = async (t, data = database, model = schema, options = {}) => {
-  const facade = await createServer({ database: { data, schema: model }, graphql: { enabled: model !== undefined }, server: { logger: false, ...options } });
+  const facade = await createServer({ storage: 'memory', database: { source: data, schema: model }, graphql: model !== undefined ? {} : undefined, server: { logger: false, ...options } });
   const server = facade.fastify();
   t.after(() => server.close());
   return { facade, server };
@@ -26,7 +33,7 @@ const gql = async (server, query, variables) => {
   assert.equal(result.errors, undefined, JSON.stringify(result.errors));
   return result.data;
 };
-const simple = (fields) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
+const simple = (fields) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 
 test('REST scope, nested lists, relation filters and GraphQL return the same catalog', async (t) => {
   const { server } = await setup(t);
@@ -88,11 +95,11 @@ test('wildcard includes raw keys and excludes all computed relations', async (t)
 });
 
 test('schemaless REST accepts new fields, infers relations, and rejects exporters', async (t) => {
-  const facade = await createServer({ database: { data: { users: [{ id: '1' }], movies: [{ id: 'a', userId: '1', title: 'A' }] } }, server: { logger: false } });
+  const facade = await createServer({ storage: 'memory', database: { source: { users: [{ id: '1' }], movies: [{ id: 'a', userId: '1', title: 'A' }] } }, server: { logger: false } });
   const server = facade.fastify();
   t.after(() => server.close());
-  await assert.rejects(() => facade.openapi(), /explicit/);
-  await assert.rejects(() => facade.graphql(), /explicit/);
+  await assert.rejects(() => facade.openapi(), /not configured/);
+  await assert.rejects(() => facade.graphql(), /not configured/);
   assert.equal((await request(server, '/users/1', { scope: [{ movies: [{ title: true }] }] })).movies.total, 1);
   let r = await server.inject({ method: 'POST', url: '/users', payload: { anything: { nested: 42 }, tags: [true, false] } });
   assert.equal(r.statusCode, 201, r.body);
@@ -251,19 +258,21 @@ test('typed operators, stable multi-order, optional values and array predicates'
 
 test('manual username key, writeOnly and defaults behave consistently across both APIs', async (t) => {
   const model = {
-    LocalUser: {
-      collection: 'localUsers',
-      fields: {
-        username: { type: 'string', primary: true, minLength: 3 },
-        password: { type: 'string', required: true, writeOnly: true },
-        displayName: { type: 'string', default: 'Guest' },
-        active: { type: 'boolean', default: true },
-        status: { type: 'string', enum: ['new', 'verified'], default: 'new' },
-        profile: { type: 'object' },
-        'profile.name': { type: 'string', required: true },
-        'profile.age': { type: 'number', minimum: 0 },
-        token: { type: 'string', generated: 'uuid' },
-        serverNote: { type: 'string', readOnly: true, default: 'server' },
+    models: {
+      LocalUser: {
+        collection: 'localUsers',
+        fields: {
+          username: { type: 'string', primary: true, minLength: 3 },
+          password: { type: 'string', required: true, writeOnly: true },
+          displayName: { type: 'string', default: 'Guest' },
+          active: { type: 'boolean', default: true },
+          status: { type: 'string', enum: ['new', 'verified'], default: 'new' },
+          profile: { type: 'object' },
+          'profile.name': { type: 'string', required: true },
+          'profile.age': { type: 'number', minimum: 0 },
+          token: { type: 'string', generated: 'uuid' },
+          serverNote: { type: 'string', readOnly: true, default: 'server' },
+        },
       },
     },
   };
@@ -345,8 +354,10 @@ test('field constraints apply per array item and PATCH does not insert defaults'
 
 test('required and dangling relations are validated without data coercion', async (t) => {
   const model = {
-    Country: { collection: 'countries', fields: { code: { type: 'number', primary: true } } },
-    User: { collection: 'users', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, country: { type: 'Country', source: 'countryCode', required: true } } },
+    models: {
+      Country: { collection: 'countries', fields: { code: { type: 'number', primary: true } } },
+      User: { collection: 'users', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, country: { type: 'Country', source: 'countryCode', required: true } } },
+    },
   };
   const { server } = await setup(t, { countries: [{ code: 1 }], users: [] }, model);
   for (const payload of [{}, { countryCode: 2 }, { countryCode: '1' }, { countryCode: null }]) {
@@ -363,11 +374,13 @@ test('required and dangling relations are validated without data coercion', asyn
 
 test('cascade removes referring roots and embedded actors, and rolls back restrictions', async (t) => {
   const model = {
-    Country: { collection: 'countries', fields: { id: { type: 'string', primary: true } } },
-    User: { collection: 'users', fields: { id: { type: 'string', primary: true }, country: { type: 'Country', source: 'countryId', onDelete: 'cascade' } } },
-    Movie: {
-      collection: 'movies',
-      fields: { id: { type: 'string', primary: true }, actors: { type: 'object[]', required: true }, 'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade', required: true } },
+    models: {
+      Country: { collection: 'countries', fields: { id: { type: 'string', primary: true } } },
+      User: { collection: 'users', fields: { id: { type: 'string', primary: true }, country: { type: 'Country', source: 'countryId', onDelete: 'cascade' } } },
+      Movie: {
+        collection: 'movies',
+        fields: { id: { type: 'string', primary: true }, actors: { type: 'object[]', required: true }, 'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade', required: true } },
+      },
     },
   };
   const data = { countries: [{ id: '1' }], users: [{ id: 'u', countryId: '1' }], movies: [{ id: 'm', actors: [{ userId: 'u' }] }] };
@@ -377,7 +390,7 @@ test('cascade removes referring roots and embedded actors, and rolls back restri
   assert.equal((await request(server, '/users')).total, 0);
   assert.equal((await request(server, '/movies/m')).actors.total, 0);
   const restricted = structuredClone(model);
-  restricted.Movie.fields['actors.user'].onDelete = 'restrict';
+  restricted.models.Movie.fields['actors.user'].onDelete = 'restrict';
   const second = await setup(t, data, restricted);
   r = await second.server.inject({ method: 'DELETE', url: '/countries/1' });
   assert.equal(r.statusCode, 409);
@@ -387,7 +400,7 @@ test('cascade removes referring roots and embedded actors, and rolls back restri
 });
 
 test('cascade cycles terminate and preserve all-or-nothing behavior', async (t) => {
-  const model = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true }, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' } } } };
+  const model = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true }, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' } } } } };
   const { server } = await setup(
     t,
     {
@@ -408,12 +421,12 @@ test('increment reserves existing numbers across deletion, restart and concurren
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'db.json');
   await writeFile(path, JSON.stringify({ items: [{ id: 12 }] }));
-  const model = { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string' } } } };
-  let facade = await createServer({ database: { path, schema: model }, server: { logger: false } });
+  const model = { models: { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string' } } } } };
+  let facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false } });
   let server = facade.fastify();
   assert.equal((await server.inject({ method: 'DELETE', url: '/items/12' })).statusCode, 200);
   await server.close();
-  facade = await createServer({ database: { path, schema: model }, server: { logger: false }, graphql: { enabled: true } });
+  facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false }, graphql: {} });
   server = facade.fastify();
   t.after(() => server.close());
   const responses = await Promise.all(Array.from({ length: 10 }, () => server.inject({ method: 'POST', url: '/items', payload: { name: 'x' } })));
@@ -456,8 +469,9 @@ test('prototype property names cannot leak inherited values into scope or filter
 
 test('schemaless heterogeneous values are preserved rather than coerced to object shapes', async (t) => {
   const facade = await createServer({
+    storage: 'memory',
     database: {
-      data: {
+      source: {
         items: [
           { id: '1', value: 'text', mixed: [{ a: 1 }, 2] },
           { id: '2', value: { a: 1 }, mixed: [{ a: 2 }] },
@@ -476,15 +490,17 @@ test('schemaless heterogeneous values are preserved rather than coerced to objec
 
 test('cascade does not restrict surviving roots through already removed embedded ancestors', async (t) => {
   const model = {
-    User: { collection: 'users', fields: { id: { type: 'string', primary: true } } },
-    Movie: {
-      collection: 'movies',
-      fields: {
-        id: { type: 'string', primary: true },
-        actors: { type: 'object[]' },
-        'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade' },
-        'actors.details': { type: 'object' },
-        'actors.details.user': { type: 'User', source: 'actors.details.userId' },
+    models: {
+      User: { collection: 'users', fields: { id: { type: 'string', primary: true } } },
+      Movie: {
+        collection: 'movies',
+        fields: {
+          id: { type: 'string', primary: true },
+          actors: { type: 'object[]' },
+          'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade' },
+          'actors.details': { type: 'object' },
+          'actors.details.user': { type: 'User', source: 'actors.details.userId' },
+        },
       },
     },
   };

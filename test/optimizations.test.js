@@ -14,9 +14,7 @@ import { createDiskFileStore } from '../dist/src/files/disk-store.js';
 import { createMemoryFileStore } from '../dist/src/files/memory-store.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
-const schema = {
-  Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } },
-};
+const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } } } };
 const temp = async (t) => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'deep-optimization-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -24,20 +22,20 @@ const temp = async (t) => {
 };
 
 test('server config and generators apply the same option validation and defaults', async () => {
-  const normalized = normalizeServerConfig({ database: { data: {} }, server: { maxPageSize: 5 } });
+  const normalized = normalizeServerConfig({ storage: 'memory', database: { source: {} }, server: { maxPageSize: 5 } });
   assert.deepEqual(normalized.server, { cors: true, host: '127.0.0.1', logger: true, maxFileSize: 104857600, pageSize: 5, maxPageSize: 5, port: 4001 });
-  assert.equal(normalized.openapi.endpoint, '/openapi.json');
-  assert.equal(normalized.graphql.endpoint, '/graphql');
+  assert.equal(normalized.openapi, undefined);
+  assert.equal(normalized.graphql, undefined);
   for (const info of [[], {}, { title: 'API', version: '1', description: 42 }]) {
-    assert.throws(() => normalizeServerConfig({ database: { data: {} }, openapi: { info } }));
+    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: { info } }));
     await assert.rejects(() => generateOpenapi(schema, { info }));
   }
   for (const options of [{ host: '' }, { port: 65536 }, { pageSize: 0 }, { maxPageSize: Number.MAX_SAFE_INTEGER + 1 }, { pageSize: 11, maxPageSize: 10 }]) {
-    assert.throws(() => normalizeServerConfig({ database: { data: {} }, server: options }));
+    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {} }, server: options }));
     await assert.rejects(() => generateOpenapi(schema, options));
   }
   const info = { title: 'API', version: '1', description: 'Описание', 'x-meta': { owner: 'one' } };
-  const config = normalizeServerConfig({ database: { data: {} }, openapi: { info } });
+  const config = normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: { info } });
   const document = await generateOpenapi(schema, { info, maxPageSize: 5, host: '::1', port: 0 });
   info['x-meta'].owner = 'changed';
   assert.deepEqual(config.openapi.info, document.info);
@@ -50,8 +48,8 @@ test('combined CLI export reads one model and validates both formats before writ
   const directory = await temp(t);
   const schemaPath = join(directory, 'model.json');
   const configPath = join(directory, 'config.mjs');
-  const config = { database: { schema: schemaPath, timestamps: true, softDelete: true }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
-  await fs.writeFile(schemaPath, JSON.stringify(schema));
+  const config = { storage: 'file', database: { source: 'missing-db.json', schema: schemaPath }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
+  await fs.writeFile(schemaPath, JSON.stringify({ ...schema, timestamps: true, softDelete: true }));
   await fs.writeFile(configPath, `export default ${JSON.stringify(config)};`);
   const readFile = fs.readFile;
   let reads = 0;
@@ -61,7 +59,7 @@ test('combined CLI export reads one model and validates both formats before writ
   };
   syncBuiltinESMExports();
   try {
-    await runCli(['generate', 'openapi,graphql', configPath]);
+    await runCli(['--generate-only', configPath]);
     assert.equal(reads, 1);
   } finally {
     fs.readFile = readFile;
@@ -69,20 +67,20 @@ test('combined CLI export reads one model and validates both formats before writ
   }
   const originalYaml = await fs.readFile(join(directory, 'api.yaml'), 'utf8');
   const originalGraphql = await fs.readFile(join(directory, 'api.graphql'), 'utf8');
-  assert.equal(originalGraphql, `${await generateGraphql(schema, { timestamps: true, softDelete: true })}\n`);
-  await fs.writeFile(schemaPath, JSON.stringify({ Item: { ...schema.Item, api: ['openapi'] } }));
-  await assert.rejects(() => runCli(['generate', 'openapi,graphql', configPath]), /graphql/);
+  assert.equal(originalGraphql, `${await generateGraphql({ ...schema, timestamps: true, softDelete: true })}\n`);
+  await fs.writeFile(schemaPath, JSON.stringify({ models: { Item: { ...schema.models.Item, api: ['openapi'] } } }));
+  await assert.rejects(() => runCli(['--generate-only', configPath]), /graphql/);
   assert.equal(await fs.readFile(join(directory, 'api.yaml'), 'utf8'), originalYaml);
   assert.equal(await fs.readFile(join(directory, 'api.graphql'), 'utf8'), originalGraphql);
   config.openapi.info = { title: 'API', version: '1', description: 42 };
   await fs.writeFile(configPath, `export default ${JSON.stringify(config)};`);
-  await assert.rejects(() => runCli(['generate', 'openapi', configPath]), /OpenAPI info/);
+  await assert.rejects(() => runCli(['--generate-only', configPath]), /OpenAPI info/);
 });
 
 for (const softDelete of [false, true]) {
   test(`mutations preserve previous snapshots and rollback with one database copy (softDelete=${softDelete})`, async (t) => {
-    const model = await loadModel(schema, { timestamps: true, softDelete });
-    const store = await createDatabaseStore({ data: { items: [{ id: 1, name: 'one' }] } });
+    const model = await loadModel({ ...schema, timestamps: true, softDelete });
+    const store = await createDatabaseStore({ source: { items: [{ id: 1, name: 'one' }] } });
     const engine = new Engine(store, model);
     const entity = model.byName.get('Item');
     const copy = structuredClone;
@@ -123,13 +121,15 @@ for (const softDelete of [false, true]) {
 
 test('cascade follows reversed chains and cycles, checks restrict after closure and rolls back conflicts', async () => {
   const model = await loadModel({
-    Item: { ...schema.Item, fields: { ...schema.Item.fields, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' }, guard: { type: 'Item', source: 'guardId' } } },
+    models: {
+      Item: { ...schema.models.Item, fields: { ...schema.models.Item.fields, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' }, guard: { type: 'Item', source: 'guardId' } } },
+    },
   });
   const items = Array.from({ length: 200 }, (_, i) => ({ id: i + 1, name: 'chain', parentId: i + 2 }));
   items[199].parentId = 1;
   items[0].guardId = 200;
   items.push({ id: 201, name: 'blocker', guardId: 200 });
-  const store = await createDatabaseStore({ data: { items } });
+  const store = await createDatabaseStore({ source: { items } });
   const engine = new Engine(store, model);
   const entity = model.byName.get('Item');
   const before = await store.read();
@@ -143,7 +143,7 @@ test('cascade follows reversed chains and cycles, checks restrict after closure 
 
 test('list sorting preserves nulls, numeric strings, stable ties and original order', async () => {
   const model = await loadModel({
-    Item: { ...schema.Item, fields: { ...schema.Item.fields, rank: { type: 'number' }, profile: { type: 'object' }, 'profile.code': { type: 'string', nullable: true } } },
+    models: { Item: { ...schema.models.Item, fields: { ...schema.models.Item.fields, rank: { type: 'number' }, profile: { type: 'object' }, 'profile.code': { type: 'string', nullable: true } } } },
   });
   const items = [
     { id: 1, name: 'a', rank: 2, profile: { code: 'item10' } },
@@ -153,7 +153,7 @@ test('list sorting preserves nulls, numeric strings, stable ties and original or
     { id: 5, name: 'e', rank: 2, profile: { code: 'item2' } },
     { id: 6, name: 'f', rank: 2 },
   ];
-  const store = await createDatabaseStore({ data: { items } });
+  const store = await createDatabaseStore({ source: { items } });
   const engine = new Engine(store, model);
   const entity = model.byName.get('Item');
   const records = engine.records(await engine.context(), entity);

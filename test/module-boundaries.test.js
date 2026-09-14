@@ -1,3 +1,10 @@
+import { writeFile as writeFixture } from 'node:fs/promises';
+
+const writeJson = async (path, value) => {
+  await writeFixture(path, JSON.stringify(value));
+  return path;
+};
+
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -6,9 +13,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer, generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from '../dist/index.js';
 
-const model = (fields = {}) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
+const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const setup = async (t, schema, data = { items: [] }, extra = {}) => {
-  const facade = await createServer({ database: { data, schema }, server: { logger: false }, ...extra });
+  const facade = await createServer({ storage: 'memory', database: { source: data, schema }, server: { logger: false }, ...extra });
   const server = facade.fastify();
   t.after(() => server.close());
   return { server, facade };
@@ -22,13 +29,14 @@ const temp = async (t) => {
 
 test('schema generators and accessors need no database, file store or unrelated API', async (t) => {
   const dir = await temp(t);
-  const schema = { Query: { collection: 'items', fields: { id: { type: 'string', primary: true } } } };
+  const schema = { models: { Query: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
   const openapiPath = join(dir, 'out', 'schema.yaml');
   const graphqlPath = join(dir, 'out', 'schema.graphql');
   const facade = await createServer({
-    database: { path: join(dir, 'missing.json'), schema },
-    files: { data: [{ name: 'file.txt', mimeType: 'invalid', content: new Uint8Array() }] },
-    graphql: { enabled: true, path: graphqlPath },
+    storage: 'file',
+    database: { source: join(dir, 'missing.json'), schema: await writeJson(join(dir, 'missing.json') + '.schema.json', schema) },
+    files: { source: join(dir, 'missing-files') },
+    graphql: { path: graphqlPath },
     openapi: { path: openapiPath },
   });
   assert.ok((await facade.openapi()).paths['/items']);
@@ -42,12 +50,12 @@ test('schema generators and accessors need no database, file store or unrelated 
   await writeOpenapi(doc, openapiPath);
   await writeGraphql(sdl, graphqlPath);
   assert.match(await fs.readFile(graphqlPath, 'utf8'), /itemList/);
-  const brokenData = await createServer({ database: { data: { items: [{ id: '1', wrong: true }] }, schema: model() }, graphql: { path: graphqlPath } });
+  const brokenData = await createServer({ storage: 'memory', database: { source: { items: [{ id: '1', wrong: true }] }, schema: model() }, graphql: { path: graphqlPath } });
   assert.match(await brokenData.graphql(), /itemCreate/);
 });
 
 test('REST, GraphQL and files coexist with consistent parsers and error envelopes', async (t) => {
-  const { server } = await setup(t, model({ name: { type: 'string' } }), { items: [] }, { graphql: { enabled: true }, openapi: { enabled: true }, files: { data: [] } });
+  const { server } = await setup(t, model({ name: { type: 'string' } }), { items: [] }, { graphql: {}, openapi: {}, files: { source: [] } });
   const upload = await server.inject({ method: 'POST', url: '/_files/storage', headers: { 'content-name': 'one.json', 'content-type': 'application/json' }, payload: '{"raw":true}' });
   assert.equal(upload.statusCode, 201);
   assert.equal((await server.inject(upload.json().url)).body, '{"raw":true}');
@@ -61,19 +69,19 @@ test('REST, GraphQL and files coexist with consistent parsers and error envelope
   const missing = (await gql(server, 'mutation{itemDelete(id:"missing"){id}}')).json();
   assert.equal(missing.errors[0].extensions.code, 'NOT_FOUND');
   assert.ok((await gql(server, '{noSuchField}')).json().errors);
-  const specOnly = await setup(t, model(), { items: [] }, { openapi: { enabled: true, endpoint: '/spec.json' } });
+  const specOnly = await setup(t, model(), { items: [] }, { openapi: { endpoint: '/spec.json' } });
   assert.equal((await specOnly.server.inject('/spec.json')).statusCode, 200);
   assert.equal((await specOnly.server.inject('/graphql')).statusCode, 404);
 });
 
 test('API endpoints cannot shadow collections, records or one another', async () => {
   for (const extra of [
-    { graphql: { enabled: true, endpoint: '/items' } },
-    { graphql: { enabled: true, endpoint: '/items/123' } },
-    { openapi: { enabled: true, endpoint: '/items/123' } },
-    { graphql: { enabled: true, endpoint: '/api' }, openapi: { enabled: true, endpoint: '/api' } },
+    { graphql: { endpoint: '/items' } },
+    { graphql: { endpoint: '/items/123' } },
+    { openapi: { endpoint: '/items/123' } },
+    { graphql: { endpoint: '/api' }, openapi: { endpoint: '/api' } },
   ]) {
-    const f = await createServer({ database: { data: { items: [{ id: '123' }] }, schema: model() }, server: { logger: false }, ...extra });
+    const f = await createServer({ storage: 'memory', database: { source: { items: [{ id: '123' }] }, schema: model() }, server: { logger: false }, ...extra });
     const s = f.fastify();
     try {
       await assert.rejects(() => s.ready(), /conflict/);
@@ -85,7 +93,7 @@ test('API endpoints cannot shadow collections, records or one another', async ()
 
 test('field names matching operators filter correctly through objects, lists and relations', async (t) => {
   const schema = model({ profile: { type: 'object' }, 'profile.contains': { type: 'string' }, 'profile.eq': { type: 'string' }, children: { type: 'object[]' }, 'children.in': { type: 'number' } });
-  const { server } = await setup(t, schema, { items: [{ id: '1', profile: { contains: 'abc', eq: 'yes' }, children: [{ in: 3 }] }] }, { graphql: { enabled: true } });
+  const { server } = await setup(t, schema, { items: [{ id: '1', profile: { contains: 'abc', eq: 'yes' }, children: [{ in: 3 }] }] }, { graphql: {} });
   const where = { profile: { contains: { eq: 'abc' }, eq: { eq: 'yes' } }, children: { some: { in: { gte: 3 } } } };
   const rest = await server.inject(`/items?${new URLSearchParams({ scope: JSON.stringify([{ '*': true }, { where }]) })}`);
   assert.equal(rest.json().total, 1);
@@ -94,7 +102,7 @@ test('field names matching operators filter correctly through objects, lists and
 });
 
 test('GraphQL validates all selected list arguments before any mutation including variables and fragments', async (t) => {
-  const { server } = await setup(t, model({ name: { type: 'string' }, children: { type: 'object[]' }, 'children.name': { type: 'string' } }), { items: [] }, { graphql: { enabled: true } });
+  const { server } = await setup(t, model({ name: { type: 'string' }, children: { type: 'object[]' }, 'children.name': { type: 'string' } }), { items: [] }, { graphql: {} });
   const query =
     'mutation Run($size:Int!,$skip:Boolean!){ first:itemCreate(data:{name:"one",children:[{name:"a"}]}){id} second:itemCreate(data:{name:"two",children:[]}){...Shape}} fragment Shape on Item{children(pager:{pageSize:$size}) @skip(if:$skip){total data{name}}}';
   const failed = await gql(server, query, { size: 0, skip: false });
@@ -111,7 +119,12 @@ test('GraphQL introspection stays available when the database fails and internal
   const dir = await temp(t);
   const path = join(dir, 'db.json');
   await fs.writeFile(path, '{"items":[]}');
-  const { server } = await setup(t, undefined, {}, { database: { path, schema: model() }, graphql: { enabled: true }, files: { data: [] } });
+  const { server } = await setup(
+    t,
+    undefined,
+    {},
+    { storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model()) }, graphql: {}, files: { source: join(dir, 'files') } },
+  );
   await server.ready();
   await fs.writeFile(path, 'broken');
   const introspection = (await gql(server, '{__schema{queryType{name}}}')).json();
@@ -123,9 +136,9 @@ test('GraphQL introspection stays available when the database fails and internal
 });
 
 test('OpenAPI checks file operation collisions and nullable enum filters match runtime', async (t) => {
-  await assert.rejects(() => generateOpenapi({ DownloadFile: { collection: 'downloads', fields: { id: { type: 'string', primary: true } } } }, { files: true }), /operation collision/);
+  await assert.rejects(() => generateOpenapi({ models: { DownloadFile: { collection: 'downloads', fields: { id: { type: 'string', primary: true } } } } }, { files: true }), /operation collision/);
   const schema = model({ state: { type: 'string', enum: ['a', 'b'], nullable: true } });
-  const { server, facade } = await setup(t, schema, { items: [{ id: '1', state: null }] }, { graphql: { enabled: true } });
+  const { server, facade } = await setup(t, schema, { items: [{ id: '1', state: null }] }, { graphql: {}, openapi: {} });
   const doc = await facade.openapi();
   assert.deepEqual(doc.components.schemas.Item_stateFilter.properties.eq.enum, ['a', 'b', null]);
   assert.equal((await server.inject(`/items?${new URLSearchParams({ scope: JSON.stringify([{ '*': true }, { where: { state: { eq: null } } }]) })}`)).json().total, 1);
@@ -137,7 +150,7 @@ test('schemaless commits publish the inferred model and reject invalid projectio
   const dir = await temp(t);
   const path = join(dir, 'db.json');
   await fs.writeFile(path, '{"items":[]}');
-  const { server } = await setup(t, undefined, {}, { database: { path } });
+  const { server } = await setup(t, undefined, {}, { storage: 'file', database: { source: path } });
   const post = await server.inject({ method: 'POST', url: `/items?${new URLSearchParams({ scope: JSON.stringify([{ name: true }]) })}`, payload: { name: 'one' } });
   assert.equal(post.statusCode, 201);
   const id = JSON.parse(await fs.readFile(path, 'utf8')).items[0].id;
@@ -156,10 +169,10 @@ test('schemaless commits publish the inferred model and reject invalid projectio
 
 test('schemas are isolated from caller mutations and server instances', async (t) => {
   const schema = model({ state: { type: 'string', enum: ['a'], default: 'a' } });
-  const { server, facade } = await setup(t, schema, { items: [] }, { graphql: { enabled: true } });
+  const { server, facade } = await setup(t, schema, { items: [] }, { graphql: {}, openapi: {} });
   await server.ready();
-  schema.Item.fields.state.enum.push('b');
-  schema.Item.fields.state.default = 'b';
+  schema.models.Item.fields.state.enum.push('b');
+  schema.models.Item.fields.state.default = 'b';
   assert.deepEqual((await facade.openapi()).components.schemas.Item.properties.state.enum, ['a']);
   assert.equal((await server.inject({ method: 'POST', url: '/items', payload: {} })).json().state, 'a');
   assert.equal((await server.inject({ method: 'POST', url: '/items', payload: { state: 'b' } })).statusCode, 400);
@@ -176,7 +189,7 @@ test('nested read-only fields survive object replacement and produce valid Graph
     meta: { type: 'object' },
     'meta.server': { type: 'string', readOnly: true },
   });
-  const { server } = await setup(t, schema, { items: [{ id: '1', profile: { name: 'old', stamp: 'fixed' }, meta: { server: 'value' } }] }, { graphql: { enabled: true } });
+  const { server } = await setup(t, schema, { items: [{ id: '1', profile: { name: 'old', stamp: 'fixed' }, meta: { server: 'value' } }] }, { graphql: {} });
   let r = await server.inject({ method: 'PATCH', url: '/items/1', payload: { profile: { name: 'new' } } });
   assert.equal(r.statusCode, 200);
   assert.equal(r.json().profile.stamp, 'fixed');
@@ -192,7 +205,7 @@ test('nested read-only fields survive object replacement and produce valid Graph
 test('disk file reads wait for a consistent metadata and content snapshot', async (t) => {
   const dir = await temp(t);
   const metadata = join(dir, 'metadata.json');
-  const { server } = await setup(t, undefined, {}, { files: { directory: join(dir, 'files'), metadata } });
+  const { server } = await setup(t, undefined, {}, { storage: 'file', database: { source: await writeJson(join(dir, 'db.json'), { items: [] }) }, files: { source: join(dir, 'files'), metadata } });
   await server.inject({ method: 'POST', url: '/_files/storage', headers: { 'content-name': 'one.txt', 'content-type': 'text/plain' }, payload: 'old' });
   const original = fs.rename;
   let release, entered;

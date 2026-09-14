@@ -4,7 +4,7 @@
 
 JSON-сервер для имитации API: REST, GraphQL, связанные записи, загрузка файлов и экспорт схем. Поддерживает вход пользователей, права владельца и администратора, даты записей и мягкое удаление. Требуется Node.js 22 или новее.
 
-**1.0.0-alpha.8 — предварительная версия.** REST-запросы используют `scope=[поля, аргументы?]` на всех уровнях. При обновлении измените параметры запросов по примерам ниже; для перехода с 0.x также нужна новая схема моделей.
+**1.0.0-alpha.9 — предварительная версия.** При обновлении с предыдущей альфы добавьте общий `storage`, замените источники на `source`, перенесите модели под `models`, а настройки дат и удаления — в корень схемы. Модули теперь включаются наличием секций; для экспорта используйте `--generate` или `--generate-only`. Второй аргумент `createServer` удалён.
 
 ## Установка
 
@@ -12,7 +12,7 @@ JSON-сервер для имитации API: REST, GraphQL, связанные
 npm install @kollors/deep-json-server@alpha
 ```
 
-Для установки конкретной версии укажите `@1.0.0-alpha.8`.
+Для установки конкретной версии укажите `@1.0.0-alpha.9`.
 
 ## Быстрый старт
 
@@ -31,9 +31,7 @@ npm install @kollors/deep-json-server@alpha
 `server.config.js`:
 
 ```js
-export default {
-  database: { path: './database.json' },
-};
+export default { storage: 'file', database: { source: './database.json' } };
 ```
 
 ```sh
@@ -46,47 +44,53 @@ npx deep-json-server server.config.js
 
 ## Конфигурация
 
-| Ключ | Назначение |
+При `storage: 'file'` все источники и схема задаются путями, при `'memory'` — данными в памяти. Режимы нельзя смешивать. Наличие секций `auth`, `files`, `graphql` и `openapi` включает соответствующие модули; для стандартных маршрутов достаточно `graphql: {}` и `openapi: {}`.
+
+```js
+export default {
+  storage: 'file',
+  database: { source: './database.json', schema: './schema.json' },
+  auth: { source: './users.json', expiresIn: 3600 },
+  files: { source: './uploads' },
+  graphql: { path: './generated/schema.graphql' },
+  openapi: { path: './generated/openapi.yaml' },
+  server: { host: '127.0.0.1', port: 4001 },
+};
+```
+
+| Настройка | Назначение |
 |---|---|
-| `database.path` / `database.data` | Для запуска укажите один вариант: JSON-файл или объект коллекций в памяти |
-| `database.schema` | Объект моделей или путь к JSON-файлу; необязателен для REST |
-| `database.timestamps` | Добавить даты создания и изменения; по умолчанию `false` |
-| `database.softDelete` | Сохранять удалённые записи с возможностью восстановления; по умолчанию `false` |
-| `openapi.enabled` | Включить HTTP-маршрут спецификации; по умолчанию `false` |
-| `openapi.endpoint` | Путь спецификации; по умолчанию `/openapi.json` |
-| `openapi.path` | Путь экспорта YAML |
-| `openapi.info` | Необязательный объект метаданных: обязательные `title` и `version`, необязательный `description` |
-| `graphql.enabled` | Включить GraphQL HTTP API; по умолчанию `false` |
-| `graphql.endpoint` | Путь GraphQL; по умолчанию `/graphql` |
-| `graphql.path` | Путь экспорта GraphQL SDL |
-| `auth.users` | Путь к JSON-массиву учётных записей или массив в памяти |
-| `auth.expiresIn` | Срок действия сессии в секундах; по умолчанию 3600 |
+| `storage` | Обязательный режим: `file` или `memory`; общий для всех источников и схемы |
+| `database.source` | Путь к JSON базы или объект коллекций |
+| `database.schema` | Путь к JSON схемы или объект схемы; необязателен для REST |
+| `auth.source` | Путь к JSON пользователей или массив пользователей |
+| `auth.expiresIn` | Срок сессии в секундах; по умолчанию 3600 |
+| `files.source` | Каталог файлов или массив начальных файлов |
+| `files.metadata` | Только для `file`: путь JSON метаданных; по умолчанию `_database.json` внутри `files.source` |
+| `graphql.endpoint` | HTTP-маршрут; по умолчанию `/graphql` |
+| `graphql.path` | Файл для экспорта GraphQL SDL |
+| `openapi.endpoint` | HTTP-маршрут; по умолчанию `/openapi.json` |
+| `openapi.path` | Файл для экспорта OpenAPI |
+| `openapi.info` | Метаданные: обязательные `title`, `version`, необязательный `description` |
 | `server.host`, `server.port` | По умолчанию `127.0.0.1`, `4001`; CLI также читает `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | По умолчанию 10 и 100; размер по умолчанию ограничен максимумом |
-| `server.cors`, `server.logger` | По умолчанию `true`; logger также принимает настройки Fastify |
+| `server.cors`, `server.logger` | По умолчанию `true`; logger принимает также настройки Fastify |
 | `server.maxFileSize` | По умолчанию 100 МиБ |
-| `files.data` | Бинарные файлы в памяти |
-| `files.directory`, `files.metadata` | Каталог файлов и JSON метаданных; необходимы оба |
 
-Относительные пути отсчитываются от каталога конфигурационного файла. При вызове `createServer()` с объектом конфигурации — от рабочего каталога. Сервер работает с копией переданных данных в памяти и метаданных.
-
-Значение `server.port: 0` позволяет системе выбрать свободный порт. OpenAPI на HTTP-эндпоинте использует относительный адрес сервера.
+Относительные пути разрешаются от каталога файла конфигурации; при вызове `createServer(config)` — от рабочего каталога. Данные в памяти, включая схему, копируются. Порт `0` позволяет системе выбрать свободный порт.
 
 ### CLI
 
-| Флаг CLI | Действие |
+| Флаг | Действие |
 |---|---|
-| `--files` | Включить файловые маршруты; нужна секция `files` |
-| `--timestamps` | Включить даты записей глобально |
-| `--soft-delete` | Включить мягкое удаление глобально |
-| `--graphql` | Включить GraphQL API |
-| `--openapi` | Включить HTTP-маршрут OpenAPI |
+| `--generate` | Экспортировать схемы и запустить сервер |
+| `--generate-only` | Экспортировать схемы и завершить работу |
 | `--host <host>` | Адрес сервера |
 | `--port <port>` | Порт сервера |
-| `--help`, `-h` | Справка |
-| `--version`, `-v` | Версия пакета |
+| `--help, -h` | Справка |
+| `--version, -v` | Версия пакета |
 
-Приоритет адреса и порта: CLI → конфигурация → `HOST`/`PORT` → значения по умолчанию. Файловые маршруты включаются при наличии секции `files`, а вход и проверка прав — при наличии `auth`. Настройки модели могут переопределять глобальные `timestamps` и `softDelete`.
+Приоритет адреса и порта: CLI → конфигурация → `HOST`/`PORT` → значения по умолчанию. Без флагов генерации запускается только сервер. `--generate` и `--generate-only` нельзя передавать вместе.
 
 ## Схема моделей
 
@@ -94,28 +98,52 @@ npx deep-json-server server.config.js
 
 ```json
 {
-  "Country": {
-    "collection": "countries",
-    "api": ["openapi", "graphql"],
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "name": { "type": "string", "required": true },
-      "users": { "type": "User[]", "target": "countryId" }
-    }
-  },
-  "User": {
-    "collection": "users",
-    "api": ["openapi", "graphql"],
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "fullName": { "type": "string", "required": true },
-      "country": { "type": "Country", "source": "countryId" }
+  "api": [
+    "openapi",
+    "graphql"
+  ],
+  "models": {
+    "Country": {
+      "collection": "countries",
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "users": {
+          "type": "User[]",
+          "target": "countryId"
+        }
+      }
+    },
+    "User": {
+      "collection": "users",
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "fullName": {
+          "type": "string",
+          "required": true
+        },
+        "country": {
+          "type": "Country",
+          "source": "countryId"
+        }
+      }
     }
   }
 }
 ```
 
-По умолчанию `api` содержит `["openapi", "graphql"]`. Пустой массив исключает модель из экспорта и GraphQL, но REST продолжает работать. Связанные модели должны разрешать тот же формат экспорта. Имена должны быть допустимыми идентификаторами; конфликты генерируемых типов и операций вызывают ошибку. Имена `and`, `or`, `not` зарезервированы фильтрами.
+Модели находятся в `models`. В корне схемы можно задать `api`, `timestamps` и `softDelete`; у модели эти параметры переопределяют общие значения. Для `api` приоритет такой: модель → корень схемы → секции конфигурации. Массив заменяется целиком; `[]` исключает модель из GraphQL и OpenAPI, но REST продолжает работать. Явный список не включает отсутствующий модуль. Связанные модели должны разрешать тот же формат. Имена моделей должны быть допустимыми идентификаторами; конфликты типов и операций вызывают ошибку. Имена `and`, `or`, `not` зарезервированы фильтрами.
 
 | Возможность | Со схемой | Без схемы |
 |---|---|---|
@@ -252,10 +280,7 @@ const scope = [
     fullName: true,
     movies: [
       { id: true, title: true },
-      {
-        order: [{ field: 'title', direction: 'ASC' }],
-        pager: { page: 1, pageSize: 5 },
-      },
+      { order: [{ field: 'title', direction: 'ASC' }], pager: { page: 1, pageSize: 5 } },
     ],
   },
   {
@@ -346,10 +371,10 @@ mutation {
 
 ### GraphQL
 
-Укажите `database.schema` и включите `graphql.enabled: true` в конфигурации или запустите сервер с `--graphql`:
+Укажите `database.schema` и добавьте секцию `graphql: {}` в конфигурацию:
 
 ```sh
-npx deep-json-server --graphql server.config.js
+npx deep-json-server server.config.js
 ```
 
 Отправляйте запросы на `/graphql` методом POST с `Content-Type: application/json` и телом `{ "query": "…", "variables": {} }`. Путь можно изменить через `graphql.endpoint`.
@@ -386,29 +411,27 @@ query {
 
 ## OpenAPI и экспорт схем
 
-Экспорт использует OpenAPI 3.0.3. Для `scope` назначение позиций массива описано текстом; их порядок проверяет сервер.
+Экспорт использует OpenAPI 3.0.3. Добавьте `openapi: {}` и `database.schema`, чтобы получать спецификацию по HTTP на `/openapi.json`. Путь меняется через `openapi.endpoint`. Спецификацию можно открыть в Swagger UI или импортировать в API-клиент.
 
-Для получения спецификации по HTTP укажите `database.schema` и включите `openapi.enabled: true` или запустите сервер с `--openapi`. По умолчанию JSON доступен по адресу `/openapi.json`; путь задаётся в `openapi.endpoint`. Спецификацию можно открыть в отдельно установленном Swagger UI или импортировать в API-клиент.
-
-Для генерации укажите формат и файл конфигурации:
-
-```sh
-npx deep-json-server generate openapi server.config.js
-npx deep-json-server generate graphql server.config.js
-npx deep-json-server generate openapi,graphql server.config.js
-```
-
-Генерация выполняется без запуска сервера и чтения записей базы. Команда читает `database.schema` и сохраняет схемы в `openapi.path` и `graphql.path`. Флаги `enabled` управляют HTTP-маршрутами и для экспорта не требуются. Для генерации достаточно такой конфигурации:
+Для сохранения схем задайте пути экспорта:
 
 ```js
 export default {
-  database: { schema: './schema.json' },
+  storage: 'file',
+  database: { source: './database.json', schema: './schema.json' },
   openapi: { path: './generated/openapi.yaml' },
   graphql: { path: './generated/schema.graphql' },
 };
 ```
 
-Для каждого формата нужен отдельный файл. Команда отклонит путь, который перезапишет конфигурацию, базу, схему, учётные записи auth или метаданные файлов.
+```bash
+npx deep-json-server server.config.js --generate-only
+npx deep-json-server server.config.js --generate
+```
+
+`--generate-only` экспортирует и завершает работу, `--generate` после экспорта запускает сервер. Форматы определяются наличием секций. Для каждого выбранного формата обязателен свой `path`. Если секций нет, отсутствует путь или генерация завершилась ошибкой, команда возвращает ошибку и сервер не запускается.
+
+Для экспорта читается только схема. База, пользователи auth и файловое хранилище не открываются; параметры конфигурации всё равно проверяются. Схема загружается один раз, в том числе при экспорте с последующим запуском. Перед записью проверяются пути и строятся все выбранные форматы. Нельзя перезаписать конфигурацию, базу, схему, пользователей, счётчики или метаданные файлов. Ошибка записи на диск может оставить уже сохранённый файл другого формата.
 
 ## Аутентификация
 
@@ -422,23 +445,30 @@ import { hashPassword } from '@kollors/deep-json-server/auth';
 
 const password = process.env.DJS_PASSWORD;
 if (!password) throw new Error('Set DJS_PASSWORD');
-await writeFile('./auth.json', JSON.stringify([
-  { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
-], null, 2), { flag: 'wx', mode: 0o600 });
+await writeFile(
+  './auth.json',
+  JSON.stringify(
+    [{ id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true }],
+    null,
+    2,
+  ),
+  { flag: 'wx', mode: 0o600 },
+);
 ```
 
 Задайте `DJS_PASSWORD` и выполните `node setup-auth.mjs`. Добавьте файл в конфигурацию сервера:
 
 ```js
 export default {
-  database: { path: './database.json' },
-  auth: { users: './auth.json', expiresIn: 3600 },
+  storage: 'file',
+  database: { source: './database.json' },
+  auth: { source: './auth.json', expiresIn: 3600 },
 };
 ```
 
 Запустите `npx deep-json-server server.config.js`. Каждой исходной учётной записи нужны уникальный строковый `id`, уникальный `username` и `passwordHash`, созданный функцией выше. `isAdmin` по умолчанию равен `false`. Пароли хешируются через scrypt со случайной солью.
 
-В `auth.users` можно передать массив вместо пути:
+При `storage: 'memory'` передайте массив в `auth.source`:
 
 ```js
 import { hashPassword } from '@kollors/deep-json-server/auth';
@@ -447,16 +477,17 @@ const password = process.env.DJS_PASSWORD;
 if (!password) throw new Error('Set DJS_PASSWORD');
 
 export default {
-  database: { data: { items: [] } },
+  storage: 'memory',
+  database: { source: { items: [] } },
   auth: {
-    users: [
+    source: [
       { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
     ],
   },
 };
 ```
 
-Учётные записи auth хранятся отдельно от коллекций базы. При строке в `auth.users` регистрация, смена пароля и статуса сохраняются в указанный JSON-файл через тот же `lowdb`, что и основная база. При массиве изменения остаются во внутренней копии в памяти и исчезают после перезапуска; исходный массив не меняется. Выбор не зависит от `database.path` или `database.data`. Ошибка записи файла отменяет изменение и сохраняет действующие сессии. Файл читается при запуске; после ручного редактирования перезапустите сервер.
+Учётные записи auth хранятся отдельно от коллекций базы. При `storage: 'file'` регистрация, смена пароля и статуса сохраняются в файл `auth.source` через `lowdb`. При `'memory'` изменения остаются во внутренней копии и исчезают после перезапуска; исходный массив не меняется. Ошибка записи файла отменяет изменение и сохраняет действующие сессии. Файл читается при запуске; после ручного редактирования перезапустите сервер.
 
 | REST-запрос | JSON тела | Ответ |
 |---|---|---|
@@ -475,39 +506,37 @@ export default {
 
 Недействительный или истёкший токен возвращает `401`, недостаток прав — `403`, отсутствующий пользователь при разрешённой операции — `404`. Ошибки тела запроса возвращают `400`. Вход, регистрация и смена пароля могут вернуть `429` при превышении числа одновременных вычислений паролей; вход также ограничивает число активных сессий. Сессии хранятся в памяти и исчезают после перезапуска. Выход завершает только сессию переданного токена.
 
-OpenAPI описывает все маршруты auth и требования Bearer-токена. В Swagger UI токен из ответа на вход можно вставить в **Authorize**. Для экспорта схем включите auth в конфигурации и выполните `generate openapi server.config.js`; файл учётных записей при генерации не читается. Методы auth доступны через REST. В GraphQL тот же токен проверяется при изменении записей. Для GraphQL и OpenAPI нужна `database.schema`.
+OpenAPI описывает все маршруты auth и требования Bearer-токена. В Swagger UI токен из ответа на вход можно вставить в **Authorize**. Для экспорта схем включите auth в конфигурации и выполните `npx deep-json-server server.config.js --generate-only`; файл учётных записей при генерации не читается. Методы auth доступны через REST. В GraphQL тот же токен проверяется при изменении записей. Для GraphQL и OpenAPI нужна `database.schema`.
 
 ## Даты записей, удаление и владельцы
 
-Глобальные настройки задаются в `database`:
-
-```js
-export default {
-  database: {
-    path: './database.json',
-    schema: './schema.json',
-    timestamps: true,
-    softDelete: true,
-  },
-  auth: { users: './auth.json' },
-};
-```
-
-В модели можно переопределить `timestamps` и `softDelete` рядом с `collection` и `fields`. Отсутствующее значение наследуется из глобальных настроек; `true` или `false` переопределяет его. CLI имеет приоритет над глобальным конфигом, а настройки модели — над обоими. Без схемы глобальные значения действуют на все коллекции. Например, эта модель отключает даты и сохраняет удалённые записи независимо от глобальных настроек:
+Общие настройки задаются в корне схемы. В этом примере модель `Note` наследует мягкое удаление и отключает даты:
 
 ```json
 {
-  "Note": {
-    "collection": "notes",
-    "timestamps": false,
-    "softDelete": true,
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "text": { "type": "string", "required": true }
+  "timestamps": true,
+  "softDelete": true,
+  "models": {
+    "Note": {
+      "collection": "notes",
+      "timestamps": false,
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "text": {
+          "type": "string",
+          "required": true
+        }
+      }
     }
   }
 }
 ```
+
+Приоритет: модель → корень схемы → `false`. Явное `false` отключает унаследованную настройку. Без схемы даты и мягкое удаление выключены.
 
 | Поле | Когда включено | Значение |
 |---|---|---|
@@ -545,8 +574,9 @@ REST возвращает 401 при отсутствии действитель
 
 ```js
 export default {
-  database: { path: './database.json' },
-  files: { directory: './uploads', metadata: './files.json' },
+  storage: 'file',
+  database: { source: './database.json' },
+  files: { source: './uploads', metadata: './files.json' },
 };
 ```
 
@@ -556,7 +586,7 @@ export default {
 npx deep-json-server server.config.js
 ```
 
-Для временных тестов вместо этого используйте `files.data`. Каждая начальная запись содержит `name`, `mimeType`, бинарное `content` в виде `Uint8Array` и необязательный `directory`. Загруженные файлы в таком режиме остаются в памяти до завершения процесса.
+Для временных тестов выберите `storage: 'memory'` и передайте массив в `files.source`. Каждая начальная запись содержит `name`, `mimeType`, бинарное `content` в виде `Uint8Array` и необязательный `directory`. Загруженные файлы в таком режиме остаются в памяти до завершения процесса.
 
 Один файл отправляется непосредственно в теле запроса. `Content-Name` содержит URI-кодированное имя файла, `Content-Type` — его MIME-тип, а необязательный `Content-Directory` — URI-кодированный относительный путь к директории:
 
@@ -607,9 +637,9 @@ Content-Type: application/json
 }
 ```
 
-`PATCH` возвращает обновлённые метаданные со статусом `200`; если по новому пути уже существует файл, сервер возвращает `409`. `DELETE` отвечает статусом `204` без тела. Если файл не найден, любая операция по пути возвращает `404`. Пути в URL задаются относительно `files.directory`, а все возвращаемые URL — относительно адреса сервера.
+`PATCH` возвращает обновлённые метаданные со статусом `200`; если по новому пути уже существует файл, сервер возвращает `409`. `DELETE` отвечает статусом `204` без тела. Если файл не найден, любая операция по пути возвращает `404`. Пути в URL задаются относительно `files.source`, а все возвращаемые URL — относительно адреса сервера.
 
-При хранении на диске бинарный файл находится по пути `<files.directory>/<directory>/<name>`. Метаданные содержат `directory`, `mimeType` и `name`; размер сервер читает из файла, а URL формирует сам. Директории и файл метаданных создаются по мере необходимости.
+При хранении на диске бинарный файл находится по пути `<files.source>/<directory>/<name>`. Метаданные содержат `directory`, `mimeType` и `name`; размер сервер читает из файла, а URL формирует сам. Директории и файл метаданных создаются по мере необходимости.
 
 Используйте один процесс сервера для дисковой базы и файлового хранилища. Перед ручным изменением файлов или метаданных остановите его. Пути в хранилище не могут содержать символические ссылки. Загрузка и переименование не могут перезаписать базу, счётчики, схему, учётные записи auth, загруженную конфигурацию или файл метаданных.
 
@@ -629,7 +659,7 @@ await server.listen();
 
 Методы `openapi()` и `graphql()` возвращают схемы и требуют `database.schema`. `fastify()` возвращает экземпляр сервера для настройки и запуска. База и включённые сервисы инициализируются при `ready()`, `listen()` или первом `inject()`; ошибка инициализации останавливает запуск.
 
-Второй аргумент переопределяет подключение модулей, например `createServer(config, { files: false, graphql: true })`. Допустимы флаги `files`, `graphql`, `openapi` и `auth`. Для включения auth или файлов нужна соответствующая секция конфигурации; для GraphQL и OpenAPI — схема моделей.
+`createServer(config)` принимает один аргумент. Наличие секций управляет модулями так же, как при запуске через CLI. Для методов `openapi()` и `graphql()` нужна соответствующая секция. Методы возвращают схему и не записывают файлы.
 
 Эти функции доступны и через общий импорт `@kollors/deep-json-server`. Адаптеры сервера загружаются при включении. Генераторы можно использовать отдельно:
 
@@ -643,7 +673,7 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
-Оба генератора принимают `timestamps`, `softDelete` и `auth` для описания полей записей. При `{ auth: true }` OpenAPI также добавляет REST-маршруты auth и требования токена для изменения записей. Функция `hashPassword()` доступна и через общий импорт пакета.
+Отдельные генераторы принимают путь или объект схемы и не требуют конфигурации сервера. Выбранная функция задаёт формат по умолчанию; `api` в схеме и моделях может его ограничить. `timestamps` и `softDelete` берутся из схемы. Опция `{ auth: true }` добавляет поля владельца; OpenAPI также описывает маршруты auth и требования токена. `hashPassword()` доступна и через общий импорт пакета.
 
 `generateOpenapi()` также принимает `host`, `port`, `pageSize`, `maxPageSize` и `info`. Вместо пути можно передать объект схемы. Сервер и генераторы работают с собственной копией модели. Размеры страниц должны быть положительными целыми числами; `pageSize` не может превышать `maxPageSize`.
 

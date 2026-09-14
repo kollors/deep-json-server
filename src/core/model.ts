@@ -37,7 +37,25 @@ export interface EntityDefinition {
   api?: ('openapi' | 'graphql')[];
   fields: Record<string, Field>;
 }
-export type ModelSchema = Record<string, EntityDefinition>;
+export type ApiFormat = 'openapi' | 'graphql';
+export interface ModelSchema {
+  models: Record<string, EntityDefinition>;
+  api?: ApiFormat[];
+  timestamps?: boolean;
+  softDelete?: boolean;
+}
+export interface ModelOptions {
+  auth?: boolean;
+  api?: ApiFormat[];
+}
+/** Проверяет список форматов и возвращает его независимую копию.
+ * @example apiFormats(['graphql']) → ['graphql']; ['unknown'] → ошибка.
+ */
+export function apiFormats(value: unknown, fallback: ApiFormat[], label: string): ApiFormat[] {
+  if (value === undefined) return [...fallback];
+  if (!Array.isArray(value) || value.some((format) => !['openapi', 'graphql'].includes(format)) || new Set(value).size !== value.length) throw new Error(`Invalid api for ${label}`);
+  return [...value] as ApiFormat[];
+}
 export interface Node extends Field {
   system?: boolean;
   internal?: boolean;
@@ -226,21 +244,22 @@ function checkField(path: string, field: unknown): asserts field is Field {
 /** Загружает описание из объекта или JSON-файла, проверяет поля и сопоставляет связи.
  * @example loadModel(undefined) → Promise<undefined>; корректное описание → Promise<Model>.
  */
-export async function loadModel(source: unknown, settings: RecordOptions = {}): Promise<Model | undefined> {
-  const options = recordOptions(settings);
+export async function loadModel(source: unknown, settings: ModelOptions = {}): Promise<Model | undefined> {
   if (source === undefined) return undefined;
   const schema: unknown = typeof source === 'string' ? JSON.parse(await readFile(source, 'utf8')) : structuredClone(source);
   const ajv = createValidator();
   if (!isObject(schema) || !Object.keys(schema).length) throw new Error('Model schema must be a nonempty object');
-  if ('$schema' in schema || '$info' in schema) throw new Error('Legacy $schema/$info format is no longer supported');
+  assertKnownKeys(schema, new Set(['models', 'api', 'timestamps', 'softDelete']), 'schema');
+  if (!isObject(schema.models) || !Object.keys(schema.models).length) throw new Error('schema.models must be a nonempty object');
+  const options = recordOptions({ auth: settings.auth, timestamps: schema.timestamps as boolean | undefined, softDelete: schema.softDelete as boolean | undefined });
+  const defaults = apiFormats(schema.api, apiFormats(settings.api, ['openapi', 'graphql'], 'defaults'), 'schema');
   const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: true, options };
-  for (const [name, definition] of Object.entries(schema)) {
+  for (const [name, definition] of Object.entries(schema.models)) {
     if (!NAME.test(name) || !isSafeKey(name) || PRIMITIVES.has(name) || !isObject(definition)) throw new Error(`Invalid model ${name}`);
     assertKnownKeys(definition, new Set(['collection', 'api', 'fields', 'timestamps', 'softDelete']), name);
     if (typeof definition.collection !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(definition.collection) || !isSafeKey(definition.collection)) throw new Error(`Invalid collection for ${name}`);
     if (model.byCollection.has(definition.collection)) throw new Error(`Duplicate collection ${definition.collection}`);
-    const api = definition.api ?? ['openapi', 'graphql'];
-    if (!Array.isArray(api) || api.some((v) => !['openapi', 'graphql'].includes(v)) || new Set(api).size !== api.length) throw new Error(`Invalid api for ${name}`);
+    const api = apiFormats(definition.api, defaults, name);
     if (!isObject(definition.fields)) throw new Error(`${name}.fields must be an object`);
     const flags = recordOptions({ timestamps: definition.timestamps as boolean | undefined, softDelete: definition.softDelete as boolean | undefined });
     const entity: Entity = {

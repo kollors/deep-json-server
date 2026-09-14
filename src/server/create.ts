@@ -6,13 +6,13 @@ import { inputPaths } from '../core/paths.js';
 import { errorMessage, isObject } from '../core/utils.js';
 import type { OpenapiDocument } from '../openapi/types.js';
 import { configSourcePath, type DeepJsonServerConfig, type NormalizedServerConfig, normalizeServerConfig } from './config.js';
-import { resolveFeatures, type ServerFeatures, validateEndpoints } from './features.js';
+import { validateEndpoints } from './features.js';
+import { configuredModel } from './model.js';
 export interface ServerFacade {
   fastify(): FastifyInstance;
   openapi(): Promise<OpenapiDocument>;
   graphql(): Promise<string>;
 }
-export type { ServerFeatures } from './features.js';
 
 type ListenCallback = (error: Error | null, address: string) => void;
 const CORS_HEADERS = {
@@ -21,19 +21,20 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
 };
 /** Проверяет настройки и создаёт интерфейс запуска и генерации схем; сетевой порт ещё не открывает.
- * @example await createServer({ database: { data: { notes: [] } } }) → объект с fastify(), openapi(), graphql().
+ * @example await createServer({ storage: 'memory', database: { source: { notes: [] } } }) → объект с fastify(), openapi(), graphql().
  */
-export async function createServer(config: DeepJsonServerConfig, features: ServerFeatures = {}): Promise<ServerFacade> {
-  return createConfiguredServer(normalizeServerConfig(config), features);
+export async function createServer(config: DeepJsonServerConfig): Promise<ServerFacade> {
+  if (arguments.length !== 1) throw new Error('createServer accepts only a configuration object');
+  return createConfiguredServer(normalizeServerConfig(config));
 }
 /** Собирает сервер из нормализованных настроек; хранилища открываются при инициализации HTTP-экземпляра.
  * @example Нормализованные настройки → Promise<ServerFacade>; listen() затем открывает сетевой порт.
  */
-export async function createConfiguredServer(normalized: NormalizedServerConfig, features: ServerFeatures = {}): Promise<ServerFacade> {
-  const enabled = resolveFeatures(normalized, features);
-  const { loadModel, inferModel } = await import('../core/model.js');
-  const recordSettings = { timestamps: normalized.database.timestamps, softDelete: normalized.database.softDelete, auth: enabled.auth };
-  const explicitModel = await loadModel(normalized.database.schema, recordSettings);
+export async function createConfiguredServer(normalized: NormalizedServerConfig): Promise<ServerFacade> {
+  const enabled = { auth: normalized.auth !== undefined, files: normalized.files !== undefined };
+  const { inferModel } = await import('../core/model.js');
+  const recordSettings = { auth: enabled.auth };
+  const explicitModel = await configuredModel(normalized);
   const { default: Fastify } = await import('fastify');
   const corsHeaders = { ...CORS_HEADERS };
   if (enabled.files) {
@@ -42,8 +43,9 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
   }
   if (enabled.auth) corsHeaders['Access-Control-Allow-Headers'] += ', Authorization';
   const { cors, logger, maxFileSize, pageSize, maxPageSize } = normalized.server;
-  const openapi = async () =>
-    (await import('../openapi/generate.js')).openapiFromModel(explicitModel, {
+  const openapi = async () => {
+    if (!normalized.openapi) throw new Error('OpenAPI is not configured');
+    return (await import('../openapi/generate.js')).openapiFromModel(explicitModel, {
       files: enabled.files,
       ...recordSettings,
       pageSize,
@@ -52,6 +54,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       host: normalized.server.host,
       port: normalized.server.port,
     });
+  };
   let instance: FastifyInstance | undefined;
   const getFastify = (): FastifyInstance => {
     if (instance) return instance;
@@ -90,11 +93,11 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       const model = explicitModel ?? inferModel(store.database.data, recordSettings);
       const engine = new Engine(store, model, pageSize, maxPageSize);
       engine.validateData(store.database.data);
-      const graphqlPath = normalized.graphql.endpoint;
-      const openapiPath = normalized.openapi.endpoint;
+      const graphqlPath = normalized.graphql?.endpoint;
+      const openapiPath = normalized.openapi?.endpoint;
       validateEndpoints(
         model.entities.map((entity) => entity.collection),
-        [...(enabled.graphql ? [graphqlPath] : []), ...(enabled.openapi ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
+        [...(graphqlPath ? [graphqlPath] : []), ...(openapiPath ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
       );
       const auth = enabled.auth && normalized.auth ? await (await import('../auth/service.js')).createAuthService(normalized.auth) : undefined;
       if (auth) {
@@ -104,11 +107,11 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
       }
       const authenticate = auth ? (header: unknown) => auth.me(header) : undefined;
       registerRestRoutes(app, engine, authenticate);
-      if (enabled.graphql) {
+      if (graphqlPath) {
         const [{ registerGraphqlRoutes }, { buildGraphql }] = await Promise.all([import('../graphql/routes.js'), import('../graphql/schema.js')]);
         registerGraphqlRoutes(app, buildGraphql(model), engine, graphqlPath, authenticate);
       }
-      if (enabled.openapi) {
+      if (openapiPath) {
         const document = await openapi();
         document.servers = [{ url: '/' }];
         app.get(openapiPath, async () => document);
@@ -127,6 +130,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
     fastify: getFastify,
     openapi,
     graphql: async () => {
+      if (!normalized.graphql) throw new Error('GraphQL is not configured');
       return (await import('../graphql/generate.js')).graphqlFromModel(explicitModel);
     },
   };

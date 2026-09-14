@@ -1,3 +1,4 @@
+import type { Source, Storage } from '../core/storage.js';
 export interface AuthUser {
   id: string;
   username: string;
@@ -7,8 +8,8 @@ export interface AuthUserRecord extends Omit<AuthUser, 'isAdmin'> {
   isAdmin?: boolean;
   passwordHash: string;
 }
-export interface AuthConfig {
-  users: string | AuthUserRecord[];
+export interface AuthConfig<S extends Storage = Storage> {
+  source: Source<S, AuthUserRecord[]>;
   /** Session lifetime in seconds. Defaults to one hour. */
   expiresIn?: number;
 }

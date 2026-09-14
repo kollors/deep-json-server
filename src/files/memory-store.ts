@@ -32,17 +32,17 @@ export const createMemoryFileStore = (sourceFiles: MemoryFile[]): FileStore => {
 
   sourceFiles.forEach((sourceFile, index) => {
     if (!(sourceFile.content instanceof Uint8Array)) {
-      throw new Error(`Некорректная запись ${index} в config.files.data`);
+      throw new Error(`Некорректная запись ${index} в config.files.source`);
     }
 
     const file = {
-      ...normalizeStoredFileMetadata(sourceFile, `Запись ${index} в config.files.data`),
+      ...normalizeStoredFileMetadata(sourceFile, `Запись ${index} в config.files.source`),
       size: sourceFile.content.length,
     };
     const path = getFileKey(file);
 
     if (storedFiles.has(path)) {
-      throw new Error(`config.files.data содержит повторяющийся путь «${path}»`);
+      throw new Error(`config.files.source содержит повторяющийся путь «${path}»`);
     }
 
     storedFiles.set(path, { content: Buffer.from(sourceFile.content), file });

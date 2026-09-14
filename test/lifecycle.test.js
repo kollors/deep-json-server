@@ -1,3 +1,10 @@
+import { writeFile as writeFixture } from 'node:fs/promises';
+
+const writeJson = async (path, value) => {
+  await writeFixture(path, JSON.stringify(value));
+  return path;
+};
+
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,9 +21,15 @@ const users = [
   { id: 'root', username: 'admin', passwordHash, isAdmin: true },
 ];
 const item = { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } };
-const model = { Item: item };
+const model = { models: { Item: item } };
 const setup = async (t, options = {}) => {
-  const facade = await createServer({ database: { data: { items: [] }, schema: model, timestamps: true, softDelete: true }, server: { logger: false }, ...options });
+  const facade = await createServer({
+    storage: 'memory',
+    database: { source: { items: [] }, schema: { ...model, timestamps: true, softDelete: true } },
+    openapi: {},
+    server: { logger: false },
+    ...options,
+  });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();
@@ -38,7 +51,7 @@ const temp = async (t) => {
 };
 
 test('timestamps, deletion filters, singleton reads and PUT/PATCH restoration agree', async (t) => {
-  const { app, facade } = await setup(t, { graphql: { enabled: true } });
+  const { app, facade } = await setup(t, { graphql: {} });
   const created = await request(app, 'POST', '/items', { name: 'one' });
   assert.equal(created.statusCode, 201, created.body);
   const row = created.json();
@@ -79,8 +92,10 @@ test('timestamps, deletion filters, singleton reads and PUT/PATCH restoration ag
 });
 
 test('entity overrides and schemaless collections independently enable record features', async (t) => {
-  const mixed = { Item: { ...item, timestamps: false }, Plain: { ...item, collection: 'plain', softDelete: false }, Both: { ...item, collection: 'both', timestamps: false, softDelete: false } };
-  const { app } = await setup(t, { database: { schema: mixed, data: { items: [], plain: [], both: [] }, timestamps: true, softDelete: true } });
+  const mixed = {
+    models: { Item: { ...item, timestamps: false }, Plain: { ...item, collection: 'plain', softDelete: false }, Both: { ...item, collection: 'both', timestamps: false, softDelete: false } },
+  };
+  const { app } = await setup(t, { storage: 'memory', database: { schema: { ...mixed, timestamps: true, softDelete: true }, source: { items: [], plain: [], both: [] } } });
   const a = (await request(app, 'POST', '/items', { name: 'a' })).json();
   const b = (await request(app, 'POST', '/plain', { name: 'b' })).json();
   const c = (await request(app, 'POST', '/both', { name: 'c' })).json();
@@ -92,25 +107,17 @@ test('entity overrides and schemaless collections independently enable record fe
   assert.equal(c.deletedAt, undefined);
   await request(app, 'DELETE', '/plain/1');
   assert.equal((await app.inject('/plain/1')).statusCode, 404);
-  const inferred = await setup(t, { database: { data: { items: [{ id: 'old', name: 'old' }] }, timestamps: true, softDelete: true } });
-  const legacy = (await inferred.app.inject('/items/old')).json();
-  assert.equal(legacy.createdAt, null);
-  assert.equal(legacy.updatedAt, null);
-  assert.equal(legacy.deletedAt, null);
+  const inferred = await setup(t, { storage: 'memory', database: { source: { items: [{ id: 'old', name: 'old' }] } }, openapi: undefined });
   const fresh = (await request(inferred.app, 'POST', '/items', { name: 'fresh' })).json();
-  assert.ok(fresh.createdAt);
-  assert.equal((await request(inferred.app, 'PATCH', `/items/${fresh.id}`, { createdAt: null })).statusCode, 400);
+  assert.equal(fresh.createdAt, undefined);
   await request(inferred.app, 'DELETE', `/items/${fresh.id}`);
-  const output = (await inferred.app.inject(scope('/items', { deletedAt: { ne: null } }))).json();
-  assert.equal(output.total, 1);
-  assert.equal(output.data[0].djsDeletion, undefined);
+  assert.equal((await inferred.app.inject(`/items/${fresh.id}`)).statusCode, 404);
   const patched = (await request(inferred.app, 'PATCH', '/items/old', {})).json();
-  assert.equal(patched.createdAt, null);
-  assert.ok(patched.updatedAt);
+  assert.equal(patched.updatedAt, undefined);
 });
 
 test('REST and GraphQL mutations enforce ownership and audit the authenticated user', async (t) => {
-  const { app } = await setup(t, { auth: { users }, graphql: { enabled: true }, files: { data: [] } });
+  const { app } = await setup(t, { auth: { source: users }, graphql: {}, files: { source: [] } });
   const alice = await login(app, 'alice'),
     bob = await login(app, 'bob'),
     admin = await login(app, 'admin');
@@ -147,15 +154,21 @@ test('REST and GraphQL mutations enforce ownership and audit the authenticated u
 });
 
 const cascadeSchema = (extra = {}) => ({
-  Parent: { ...item, collection: 'parents' },
-  Child: { ...item, collection: 'children', ...extra, fields: { ...item.fields, parent: { type: 'Parent', source: 'parentId', required: true, onDelete: 'cascade' } } },
+  models: {
+    Parent: { ...item, collection: 'parents' },
+    Child: { ...item, collection: 'children', ...extra, fields: { ...item.fields, parent: { type: 'Parent', source: 'parentId', required: true, onDelete: 'cascade' } } },
+  },
 });
 
 test('cascade restoration survives restart, excludes earlier deletions and checks every owner', async (t) => {
   const directory = await temp(t),
     path = join(directory, 'db.json');
   await writeFile(path, '{"parents":[],"children":[]}');
-  const config = { database: { path, schema: cascadeSchema(), timestamps: true, softDelete: true }, auth: { users } };
+  const config = {
+    storage: 'file',
+    database: { source: path, schema: await writeJson(path + '.schema.json', { ...cascadeSchema(), timestamps: true, softDelete: true }) },
+    auth: { source: await writeJson(path + '.auth.json', users) },
+  };
   let { app } = await setup(t, config);
   const alice = await login(app, 'alice'),
     bob = await login(app, 'bob'),
@@ -186,7 +199,7 @@ test('cascade restoration survives restart, excludes earlier deletions and check
 });
 
 test('mixed cascades honor each entity policy and never recreate physically deleted children', async (t) => {
-  const { app } = await setup(t, { database: { data: { parents: [], children: [] }, schema: cascadeSchema({ softDelete: false }), softDelete: true } });
+  const { app } = await setup(t, { storage: 'memory', database: { source: { parents: [], children: [] }, schema: { ...cascadeSchema({ softDelete: false }), softDelete: true } } });
   await request(app, 'POST', '/parents', { name: 'p' });
   await request(app, 'POST', '/children', { name: 'c', parentId: 1 });
   const removed = await request(app, 'DELETE', '/parents/1');
@@ -198,10 +211,12 @@ test('mixed cascades honor each entity policy and never recreate physically dele
 
 test('nested object cascades restore only unchanged pruned fields', async (t) => {
   const schema = {
-    Genre: { ...item, collection: 'genres' },
-    Movie: { ...item, collection: 'movies', fields: { ...item.fields, actors: { type: 'object[]' }, 'actors.genre': { type: 'Genre', source: 'actors.genreId', onDelete: 'cascade' } } },
+    models: {
+      Genre: { ...item, collection: 'genres' },
+      Movie: { ...item, collection: 'movies', fields: { ...item.fields, actors: { type: 'object[]' }, 'actors.genre': { type: 'Genre', source: 'actors.genreId', onDelete: 'cascade' } } },
+    },
   };
-  const { app } = await setup(t, { database: { schema, data: { genres: [], movies: [] }, softDelete: true, timestamps: true } });
+  const { app } = await setup(t, { storage: 'memory', database: { schema: { ...schema, softDelete: true, timestamps: true }, source: { genres: [], movies: [] } } });
   await request(app, 'POST', '/genres', { name: 'genre' });
   await request(app, 'POST', '/movies', { name: 'movie', actors: [{ genreId: 1 }] });
   assert.equal((await request(app, 'DELETE', '/genres/1')).statusCode, 200);
@@ -216,14 +231,16 @@ test('nested object cascades restore only unchanged pruned fields', async (t) =>
 
 test('relation where applies deletion defaults at its own level including every and none', async (t) => {
   const schema = {
-    Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
-    Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number' } } },
+    models: {
+      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
+      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number' } } },
+    },
   };
   const { app } = await setup(t, {
+    storage: 'memory',
     database: {
-      schema,
-      softDelete: true,
-      data: {
+      schema: { ...schema, softDelete: true },
+      source: {
         parents: [
           { id: 1, name: 'p' },
           { id: 2, name: 'removed', deletedAt: '2026-01-01T00:00:00Z' },
@@ -234,7 +251,7 @@ test('relation where applies deletion defaults at its own level including every 
         ],
       },
     },
-    graphql: { enabled: true },
+    graphql: {},
   });
   assert.equal((await app.inject(scope('/parents', { children: { some: { deletedAt: { ne: null } } } }))).json().total, 1);
   assert.equal((await app.inject(scope('/parents', { children: { every: { name: { eq: 'a' } } } }))).json().total, 1);
@@ -247,10 +264,12 @@ test('relation where applies deletion defaults at its own level including every 
 
 test('nested writes and reverse reconnections cannot bypass ownership or forge auditing', async (t) => {
   const schema = {
-    Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
-    Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number', nullable: true } } },
+    models: {
+      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
+      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number', nullable: true } } },
+    },
   };
-  const { app } = await setup(t, { database: { schema, data: { parents: [], children: [] } }, auth: { users } });
+  const { app } = await setup(t, { storage: 'memory', database: { schema, source: { parents: [], children: [] } }, auth: { source: users } });
   const alice = await login(app, 'alice'),
     bob = await login(app, 'bob');
   const p = await request(app, 'POST', '/parents', { name: 'p', children: [{ name: 'nested' }] }, alice);
@@ -265,24 +284,26 @@ test('nested writes and reverse reconnections cannot bypass ownership or forge a
   assert.equal((await request(app, 'PATCH', '/parents/1', { children: [{ name: 'forged', createdById: 'b' }] }, alice)).statusCode, 400);
 });
 
-test('CLI, config validation and standalone generators share entity lifecycle settings', async (t) => {
+test('schema roots supply lifecycle settings for CLI and standalone generators', async (t) => {
   for (const flags of [{ timestamps: 'yes' }, { softDelete: 1 }]) {
-    assert.throws(() => normalizeServerConfig({ database: { data: {}, ...flags } }), /boolean/);
-    await assert.rejects(() => generateOpenapi(model, flags), /boolean/);
+    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, ...flags } }), /Неизвестный/);
+    await assert.rejects(() => generateOpenapi({ ...model, ...flags }), /boolean/);
   }
-  await assert.rejects(() => generateOpenapi({ Item: { ...item, timestamps: 'yes' } }), /boolean/);
-  await assert.rejects(() => generateOpenapi({ Item: { ...item, fields: { ...item.fields, createdAt: { type: 'string' } } } }, { timestamps: true }), /Reserved/);
-  assert.throws(() => normalizeServerConfig({ database: { data: {} }, auth: { enabled: true, users } }), /enabled/);
+  await assert.rejects(() => generateOpenapi({ models: { Item: { ...item, timestamps: 'yes' } } }), /boolean/);
+  await assert.rejects(() => generateOpenapi({ timestamps: true, models: { Item: { ...item, fields: { ...item.fields, createdAt: { type: 'string' } } } } }), /Reserved/);
   const directory = await temp(t),
     path = join(directory, 'config.mjs');
-  await writeFile(path, `export default ${JSON.stringify({ database: { schema: model }, auth: { users: 'missing.json' }, graphql: { path: 'schema.graphql' }, openapi: { path: 'api.yaml' } })};`);
-  await runCli(['generate', 'openapi,graphql', '--timestamps', '--soft-delete', path]);
+  const schema = { ...model, timestamps: true, softDelete: true };
+  await writeFile(
+    path,
+    `export default ${JSON.stringify({ storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, graphql: { path: 'schema.graphql' }, openapi: { path: 'api.yaml' } })};`,
+  );
+  await runCli(['--generate-only', path]);
   const sdl = await readFile(join(directory, 'schema.graphql'), 'utf8');
   assert.match(sdl, /createdAt: String/);
   assert.match(sdl, /deletedById: String/);
   assert.doesNotMatch(sdl, /djsDeletion|authLogin/);
-  await assert.rejects(() => runCli(['--auth', path]), /Неизвестный/);
-  const spec = await generateOpenapi(model, { timestamps: true, softDelete: true, auth: true, files: true });
+  const spec = await generateOpenapi(schema, { auth: true, files: true });
   for (const name of ['createdAt', 'updatedAt', 'deletedAt', 'createdById', 'updatedById', 'deletedById']) {
     assert.equal(spec.components.schemas.Item.properties[name].readOnly, true);
     assert.equal(spec.components.schemas.ItemCreate.properties[name], undefined);
@@ -294,7 +315,11 @@ test('legacy unowned records require an administrator and disabling features ret
   const dir = await temp(t),
     path = join(dir, 'db.json');
   await writeFile(path, JSON.stringify({ items: [{ id: 1, name: 'legacy' }] }));
-  const config = { database: { path, schema: model, timestamps: true, softDelete: true }, auth: { users } };
+  const config = {
+    storage: 'file',
+    database: { source: path, schema: await writeJson(path + '.schema.json', { ...model, timestamps: true, softDelete: true }) },
+    auth: { source: await writeJson(path + '.auth.json', users) },
+  };
   const { app } = await setup(t, config);
   const alice = await login(app, 'alice'),
     admin = await login(app, 'admin');
@@ -306,7 +331,7 @@ test('legacy unowned records require an administrator and disabling features ret
   assert.equal(old.json().createdAt, null);
   const original = JSON.parse(await readFile(path, 'utf8')).items[0];
   await app.close();
-  const disabled = (await createServer({ database: { path, schema: model }, server: { logger: false } })).fastify();
+  const disabled = (await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false } })).fastify();
   t.after(() => disabled.close());
   const replaced = await request(disabled, 'PUT', '/items/1', { name: 'open' });
   assert.equal(replaced.statusCode, 200, replaced.body);
@@ -319,9 +344,9 @@ test('failed restore validation and repeated DELETE retain original records', as
   const dir = await temp(t),
     path = join(dir, 'db.json');
   const schema = cascadeSchema();
-  schema.Parent.softDelete = false;
+  schema.models.Parent.softDelete = false;
   await writeFile(path, JSON.stringify({ parents: [{ id: 1, name: 'p' }], children: [{ id: 1, name: 'c', parentId: 1 }] }));
-  const { app } = await setup(t, { database: { path, schema, softDelete: true } });
+  const { app } = await setup(t, { storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', { ...schema, softDelete: true }) } });
   assert.equal((await request(app, 'DELETE', '/parents/1')).statusCode, 200);
   const before = await readFile(path, 'utf8');
   assert.equal((await request(app, 'PATCH', '/children/1', {})).statusCode, 400);

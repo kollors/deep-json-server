@@ -1,3 +1,10 @@
+import { writeFile as writeFixture } from 'node:fs/promises';
+
+const writeJson = async (path, value) => {
+  await writeFixture(path, JSON.stringify(value));
+  return path;
+};
+
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,13 +17,13 @@ import { createAuthService } from '../dist/src/auth/service.js';
 import { runCli } from '../dist/src/cli/index.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
-const schema = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } };
+const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } } };
 const password = 'Тестовый пароль';
 const users = [{ id: '1', username: 'admin', passwordHash: await hashPassword(password) }];
 const credentials = { username: 'admin', password };
 const bearer = (token) => ({ authorization: `Bearer ${token}` });
-const setup = async (t, extra = {}, features) => {
-  const facade = await createServer({ database: { data: { items: [] }, schema }, auth: { users }, server: { logger: false }, ...extra }, features);
+const setup = async (t, extra = {}) => {
+  const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra });
   const app = facade.fastify();
   t.after(() => app.close());
   return { app, facade };
@@ -72,7 +79,7 @@ test('REST sessions authenticate, expire and revoke independently without exposi
 });
 
 test('service bounds simultaneous logins, expires sessions and clears them on close', async (t) => {
-  const auth = await createAuthService({ users, expiresIn: 1 });
+  const auth = await createAuthService({ source: users, expiresIn: 1 });
   t.after(() => auth.close());
   const attempts = await Promise.allSettled(Array.from({ length: 5 }, () => auth.login(credentials)));
   assert.equal(attempts.filter((entry) => entry.status === 'fulfilled').length, 4);
@@ -88,14 +95,14 @@ test('service bounds simultaneous logins, expires sessions and clears them on cl
   auth.close();
   assert.throws(() => auth.me(`Bearer ${fresh.accessToken}`), { code: 'UNAUTHENTICATED' });
   await assert.rejects(() => auth.login(credentials), { code: 'UNAUTHENTICATED' });
-  const closing = await createAuthService({ users });
+  const closing = await createAuthService({ source: users });
   const pending = closing.login(credentials);
   closing.close();
   await assert.rejects(() => pending, { code: 'UNAUTHENTICATED' });
 });
 
 test('auth protects REST and GraphQL writes while reads and files remain open', async (t) => {
-  const { app, facade } = await setup(t, { graphql: { enabled: true }, openapi: { enabled: true }, files: { data: [] } });
+  const { app, facade } = await setup(t, { graphql: {}, openapi: {}, files: { source: [] } });
   const session = (await login(app)).json();
   assert.deepEqual((await app.inject({ url: '/auth/me', headers: bearer(session.accessToken) })).json(), session.user);
   assert.equal(await facade.graphql(), await generateGraphql(schema, { auth: true }));
@@ -132,16 +139,16 @@ test('auth protects REST and GraphQL writes while reads and files remain open', 
   assert.match(cors.headers['access-control-allow-headers'], /Content-Name/i);
 });
 
-test('disabled auth does not read credentials or install endpoints and can be overridden', async (t) => {
-  const { app, facade } = await setup(t, { auth: { users: '/missing/auth.json' }, graphql: { enabled: true } }, { auth: false });
+test('auth is enabled only by its configuration section', async (t) => {
+  const { app, facade } = await setup(t, { auth: undefined, graphql: {}, openapi: {} });
   assert.equal((await app.inject('/auth/me')).statusCode, 404);
   assert.doesNotMatch(await facade.graphql(), /authMe/);
   assert.equal((await facade.openapi()).components.securitySchemes, undefined);
-  const disabled = await setup(t, { auth: { users: '/missing/auth.json' } }, { auth: false });
+  const disabled = await setup(t, { auth: undefined });
   assert.equal((await disabled.app.inject('/auth/me')).statusCode, 404);
-  const enabled = await setup(t, { auth: { users } }, { auth: true });
+  const enabled = await setup(t, { auth: { source: users } });
   assert.equal((await login(enabled.app)).statusCode, 200);
-  const schemaless = await setup(t, { database: { data: { items: [] } } });
+  const schemaless = await setup(t, { storage: 'memory', database: { source: { items: [] } } });
   assert.equal((await login(schemaless.app)).statusCode, 200);
 });
 
@@ -159,18 +166,18 @@ test('auth schemas are optional, isolate security requirements and reject name c
   assert.equal((await generateOpenapi(schema, { auth: true })).components.schemas.AuthUser.properties.username.type, 'string');
   await assert.rejects(() => generateOpenapi(schema, { auth: 'true' }), /auth/);
   for (const name of ['AuthUser', 'AuthMe']) {
-    const model = { [name]: { ...schema.Item } };
+    const model = { models: { [name]: { ...schema.models.Item } } };
     await assert.rejects(() => generateOpenapi(model, { auth: true }), /collision/);
-    const facade = await createServer({ database: { data: { items: [] }, schema: model }, auth: { users } });
+    const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema: model }, graphql: {}, auth: { source: users } });
     assert.equal(await facade.graphql(), await generateGraphql(model, { auth: true }));
   }
-  await assert.rejects(() => generateOpenapi({ Item: { ...schema.Item, collection: 'auth' } }, { auth: true }), /collision/);
+  await assert.rejects(() => generateOpenapi({ models: { Item: { ...schema.models.Item, collection: 'auth' } } }, { auth: true }), /collision/);
 });
 
 test('auth config, credential records and route collisions fail before startup', async (t) => {
-  for (const auth of [{}, { users: 1 }, { users: '' }, { users, enabled: 'yes' }, { users, expiresIn: 0 }, { users, expiresIn: 2147483648 }, { users, typo: true }])
-    assert.throws(() => normalizeServerConfig({ database: { data: {} }, auth }), /auth/);
-  await assert.rejects(() => createServer({ database: { data: {} } }, { auth: true }), /config.auth.users/);
+  for (const auth of [{}, { source: 1 }, { source: '' }, { source: users, enabled: 'yes' }, { source: users, expiresIn: 0 }, { source: users, expiresIn: 2147483648 }, { source: users, typo: true }])
+    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {} }, auth }), /auth/);
+  await assert.rejects(() => createServer({ storage: 'memory', database: { source: {} } }, { auth: true }), /only a configuration/);
   for (const records of [
     {},
     [null],
@@ -179,8 +186,8 @@ test('auth config, credential records and route collisions fail before startup',
     [users[0], { ...users[0], id: '2' }],
     [users[0], { ...users[0], username: 'other' }],
   ])
-    await assert.rejects(() => createAuthService({ users: records }), /Auth user/);
-  for (const extra of [{ database: { data: { auth: [] } } }, { graphql: { enabled: true, endpoint: '/auth/login' } }, { openapi: { enabled: true, endpoint: '/auth/me' } }]) {
+    await assert.rejects(() => createAuthService({ source: records }), /Auth user/);
+  for (const extra of [{ storage: 'memory', database: { source: { auth: [] } } }, { graphql: { endpoint: '/auth/login' } }, { openapi: { endpoint: '/auth/me' } }]) {
     const { app } = await setup(t, extra);
     await assert.rejects(() => app.ready(), /conflict/);
   }
@@ -194,10 +201,11 @@ test('auth works independently of later database errors and protects the credent
   await writeFile(path, contents);
   await writeFile(database, '{"items":[]}');
   const { app } = await setup(t, {
-    database: { path: database, schema },
-    auth: { users: path },
-    graphql: { enabled: true },
-    files: { directory: dir, metadata: join(dir, 'files.json') },
+    storage: 'file',
+    database: { source: database, schema: await writeJson(database + '.schema.json', schema) },
+    auth: { source: path },
+    graphql: {},
+    files: { source: dir, metadata: join(dir, 'files.json') },
   });
   await app.ready();
   await writeFile(database, 'broken');
@@ -218,7 +226,13 @@ test('auth works independently of later database errors and protects the credent
 test('CLI enables auth and exports auth schemas without opening the users file', async (t) => {
   const dir = await temporary(t);
   const source = join(dir, 'server.config.mjs');
-  const config = { database: { data: { items: [] }, schema }, auth: { users: './missing-users.json' }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
+  const config = {
+    storage: 'file',
+    database: { source: join(dir, 'missing-db.json'), schema: await writeJson(join(dir, 'schema.json'), schema) },
+    auth: { source: './missing-users.json' },
+    openapi: { path: 'api.yaml' },
+    graphql: { path: 'api.graphql' },
+  };
   const save = () => writeFile(source, `export default ${JSON.stringify(config)};`);
   await save();
   let call;
@@ -228,25 +242,25 @@ test('CLI enables auth and exports auth schemas without opening the users file',
       return { fastify: () => ({ listen: async () => {}, log: { info() {} } }) };
     },
   });
-  assert.equal(call.features.auth, true);
-  assert.equal(call.normalized.auth.users, join(dir, 'missing-users.json'));
-  await runCli(['generate', 'openapi,graphql', source]);
+  assert.equal(call.normalized.auth !== undefined, true);
+  assert.equal(call.normalized.auth.source, join(dir, 'missing-users.json'));
+  await runCli(['--generate-only', source]);
   assert.ok(parse(await readFile(join(dir, 'api.yaml'), 'utf8')).paths['/auth/login']);
   assert.equal((await readFile(join(dir, 'api.graphql'), 'utf8')).trimEnd(), await generateGraphql(schema, { auth: true }));
-  const facade = await createServer({ ...config, auth: { users: '/missing/users.json' } });
+  const facade = await createServer({ ...config, auth: { source: '/missing/users.json' } });
   assert.ok((await facade.openapi()).paths['/auth/login']);
   assert.equal(await facade.graphql(), await generateGraphql(schema, { auth: true }));
-  config.auth.users = '/missing/users.json';
+  config.auth.source = '/missing/users.json';
   await save();
-  await runCli(['generate', 'graphql', source]);
+  await runCli(['--generate-only', source]);
   assert.equal((await readFile(join(dir, 'api.graphql'), 'utf8')).trimEnd(), await generateGraphql(schema, { auth: true }));
 
-  config.openapi.path = config.auth.users;
+  config.openapi.path = config.auth.source;
   await save();
-  await assert.rejects(() => runCli(['generate', 'openapi', source]), /overwrite/);
+  await assert.rejects(() => runCli(['--generate-only', source]), /overwrite/);
   delete config.auth;
   config.openapi.path = 'api.yaml';
   await save();
-  await runCli(['generate', 'openapi', source]);
+  await runCli(['--generate-only', source]);
   assert.equal(parse(await readFile(join(dir, 'api.yaml'), 'utf8')).paths['/auth/login'], undefined);
 });

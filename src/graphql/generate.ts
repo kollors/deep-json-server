@@ -1,5 +1,7 @@
-import type { RecordOptions } from '../core/lifecycle/options.js';
-export type GraphqlOptions = RecordOptions;
+import { assertKnownKeys } from '../core/utils.js';
+export interface GraphqlOptions {
+  auth?: boolean;
+}
 
 import { printSchema } from 'graphql';
 import { assertApi, loadModel, type Model, type ModelSchema } from '../core/model.js';
@@ -15,5 +17,6 @@ export function graphqlFromModel(model: Model | undefined): string {
  * @example Корректное описание сущностей → Promise<string> с SDL; некорректное → ошибка.
  */
 export async function generateGraphql(schema: ModelSchema | string, options: GraphqlOptions = {}): Promise<string> {
-  return graphqlFromModel(await loadModel(schema, options));
+  assertKnownKeys(options, new Set(['auth']), 'options');
+  return graphqlFromModel(await loadModel(schema, { auth: options.auth, api: ['graphql'] }));
 }

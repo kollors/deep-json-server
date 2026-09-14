@@ -20,7 +20,7 @@ test('persists disk CRUD when NODE_ENV is test', async () => {
         `
           import assert from 'node:assert/strict';
           const { createServer } = await import(process.argv[1]);
-          const facade = await createServer({ database: { path: process.argv[2] }, server: { logger: false } });
+          const facade = await createServer({ storage: 'file', database: { source: process.argv[2] }, server: { logger: false } });
           const server = facade.fastify();
           try {
             const created = await server.inject({ method: 'POST', url: '/items', payload: { name: 'new' } });

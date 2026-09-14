@@ -23,8 +23,8 @@ import { loadModel } from '../dist/src/core/model.js';
 import { createOpenapi } from '../dist/src/openapi/generate.js';
 
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
-const definition = (fields) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
-const facadeFor = (model, extra = {}) => createServer({ database: { data: {}, schema: model }, server: { logger: false }, ...extra });
+const definition = (fields) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
+const facadeFor = (model, extra = {}) => createServer({ storage: 'memory', database: { source: {}, schema: model }, openapi: {}, graphql: {}, server: { logger: false }, ...extra });
 function checkReferences(document) {
   const walk = (value) => {
     if (!value || typeof value !== 'object') return;
@@ -66,22 +66,24 @@ test('exports catalog without data or runtime server and resolves every referenc
 
 test('manual primary key, formats, nullable arrays, read/write fields and annotations', async () => {
   const model = {
-    LocalUser: {
-      collection: 'localUsers',
-      fields: {
-        username: { type: 'string', primary: true },
-        password: { type: 'string', writeOnly: true, required: true },
-        tags: { type: 'string[]', nullable: true, minLength: 1 },
-        profile: { type: 'object', nullable: true },
-        'profile.name': { type: 'string', description: 'Name', example: 'Alice' },
-        rows: { type: 'object[]', nullable: true },
-        'rows.flag': { type: 'boolean' },
-        created: { type: 'string', readOnly: true, default: 'server' },
-        email: { type: 'string', format: 'email' },
-        uuid: { type: 'string', format: 'uuid' },
-        stamp: { type: 'string', format: 'date-time' },
-        level: { type: 'number', enum: [1, 2] },
-        note: { type: 'string', description: 'A note', default: 'x', example: 'y' },
+    models: {
+      LocalUser: {
+        collection: 'localUsers',
+        fields: {
+          username: { type: 'string', primary: true },
+          password: { type: 'string', writeOnly: true, required: true },
+          tags: { type: 'string[]', nullable: true, minLength: 1 },
+          profile: { type: 'object', nullable: true },
+          'profile.name': { type: 'string', description: 'Name', example: 'Alice' },
+          rows: { type: 'object[]', nullable: true },
+          'rows.flag': { type: 'boolean' },
+          created: { type: 'string', readOnly: true, default: 'server' },
+          email: { type: 'string', format: 'email' },
+          uuid: { type: 'string', format: 'uuid' },
+          stamp: { type: 'string', format: 'date-time' },
+          level: { type: 'number', enum: [1, 2] },
+          note: { type: 'string', description: 'A note', default: 'x', example: 'y' },
+        },
       },
     },
   };
@@ -124,12 +126,12 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   assert.match(await readFile(graphqlPath, 'utf8'), /itemList/);
   for (const bad of [{ host: '' }, { port: -1 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
   assert.deepEqual(createOpenapi({ document: doc, port: 0 }).servers, [{ url: '/' }]);
-  model.Item.api = ['openapi'];
+  model.models.Item.api = ['openapi'];
   const only = await facadeFor(model);
   assert.ok((await only.openapi()).paths['/items']);
   await assert.rejects(() => only.graphql(), /No models/);
-  model.Item.api = [];
-  const internal = await facadeFor(model);
+  model.models.Item.api = [];
+  const internal = await facadeFor(model, { graphql: undefined });
   assert.deepEqual((await internal.openapi()).paths, {});
   const server = internal.fastify();
   assert.equal((await server.inject('/items')).statusCode, 200);
@@ -137,19 +139,21 @@ test('writes YAML and SDL to nested output paths with independent API settings',
 });
 
 test('rejects disabled API targets, operation/type collisions, and sort enum collisions', async () => {
-  const models = { A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B' } } }, B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true } } } };
+  const models = {
+    models: { A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B' } } }, B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true } } } },
+  };
   let facade = await facadeFor(models);
   await assert.rejects(() => facade.openapi(), /does not enable/);
   await assert.rejects(() => facade.graphql(), /does not enable/);
   for (const name of ['Error', 'Pager', 'ItemPage', 'ItemCreate']) {
     const model = definition({});
-    model[name] = { collection: `other${name}`, fields: { id: { type: 'string', primary: true } } };
+    model.models[name] = { collection: `other${name}`, fields: { id: { type: 'string', primary: true } } };
     facade = await facadeFor(model);
     await assert.rejects(() => facade.openapi(), /collision/);
   }
-  facade = await facadeFor({ ...definition({}), Query: { collection: 'queries', fields: { id: { type: 'string', primary: true } } } });
+  facade = await facadeFor({ models: { ...definition({}).models, Query: { collection: 'queries', fields: { id: { type: 'string', primary: true } } } } });
   await assert.rejects(() => facade.graphql(), /collision/);
-  facade = await facadeFor({ ...definition({}), ItemList: { collection: 'lists', fields: { id: { type: 'string', primary: true } } } });
+  facade = await facadeFor({ models: { ...definition({}).models, ItemList: { collection: 'lists', fields: { id: { type: 'string', primary: true } } } } });
   await assert.rejects(() => facade.graphql(), /collision/);
   await assert.rejects(() => facade.openapi(), /collision/);
   facade = await facadeFor(definition({ a_b: { type: 'string' }, a: { type: 'object' }, 'a.b': { type: 'string' } }));
@@ -197,18 +201,18 @@ test('schema validation rejects malformed declarations and removed syntax', asyn
   ];
   for (const field of invalidFields) await assert.rejects(() => loadModel(definition({ value: field })), undefined, JSON.stringify(field));
   for (const model of [
-    { Bad: { collection: 'bad', fields: {} } },
-    { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true }, other: { type: 'number', primary: true } } } },
-    { Bad: { collection: 'bad', fields: { 'nested.id': { type: 'string', primary: true } } } },
-    { Bad: { collection: 'bad', api: ['bad'], fields: {} } },
-    { Bad: { collection: 'bad', api: ['graphql', 'graphql'], fields: {} } },
-    { Bad: { collection: 'bad', fields: [] } },
-    { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true } }, extra: 1 } },
-    { Bad: { collection: '../bad', fields: {} } },
+    { models: { Bad: { collection: 'bad', fields: {} } } },
+    { models: { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true }, other: { type: 'number', primary: true } } } } },
+    { models: { Bad: { collection: 'bad', fields: { 'nested.id': { type: 'string', primary: true } } } } },
+    { models: { Bad: { collection: 'bad', api: ['bad'], fields: {} } } },
+    { models: { Bad: { collection: 'bad', api: ['graphql', 'graphql'], fields: {} } } },
+    { models: { Bad: { collection: 'bad', fields: [] } } },
+    { models: { Bad: { collection: 'bad', fields: { id: { type: 'string', primary: true } }, extra: 1 } } },
+    { models: { Bad: { collection: '../bad', fields: {} } } },
     { string: { collection: 'bad', fields: {} } },
   ])
     await assert.rejects(() => loadModel(model));
-  await assert.rejects(() => loadModel({ ...definition({}), Other: { collection: 'items', fields: { id: { type: 'string', primary: true } } } }), /Duplicate/);
+  await assert.rejects(() => loadModel({ models: { ...definition({}).models, Other: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } }), /Duplicate/);
   await assert.rejects(() => loadModel(definition({ 'bad..path': { type: 'string' } })), /path/);
   await assert.rejects(() => loadModel(definition({ a: { type: 'string' }, 'a.b': { type: 'string' } })), /contain/);
   await assert.rejects(() => loadModel(definition({ 'nested.value': { type: 'string', generated: 'uuid' } })), /root/);
@@ -216,44 +220,49 @@ test('schema validation rejects malformed declarations and removed syntax', asyn
 
 test('validates explicit keys, implicit fields, primary defaults and nullable references', async () => {
   const model = {
-    A: { collection: 'a', fields: { code: { type: 'number', primary: true }, b: { type: 'B', source: 'bCode', nullable: true } } },
-    B: { collection: 'b', fields: { code: { type: 'number', primary: true } } },
+    models: {
+      A: { collection: 'a', fields: { code: { type: 'number', primary: true }, b: { type: 'B', source: 'bCode', nullable: true } } },
+      B: { collection: 'b', fields: { code: { type: 'number', primary: true } } },
+    },
   };
   const compiled = await loadModel(model);
   assert.equal(compiled.byName.get('A').fields.bCode.type, 'number');
   assert.equal(compiled.byName.get('A').fields.bCode.nullable, true);
-  await createServer({ database: { data: { a: [{ code: 1, bCode: null }], b: [] }, schema: model }, server: { logger: false } });
+  await createServer({ storage: 'memory', database: { source: { a: [{ code: 1, bCode: null }], b: [] }, schema: model }, openapi: {}, graphql: {}, server: { logger: false } });
   const both = structuredClone(model);
-  delete both.A.fields.b.source;
+  delete both.models.A.fields.b.source;
   const loaded = await loadModel(both);
   assert.equal(loaded.byName.get('A').fields.b.source, 'code');
   assert.equal(loaded.byName.get('A').fields.b.target, 'code');
-  model.A.fields.b.target = 'unknown';
+  model.models.A.fields.b.target = 'unknown';
   await assert.rejects(() => loadModel(model), /ambiguous/);
-  model.A.fields.b.target = 'code';
-  model.A.fields.bCode = { type: 'string' };
+  model.models.A.fields.b.target = 'code';
+  model.models.A.fields.bCode = { type: 'string' };
   await assert.rejects(() => loadModel(model), /Incompatible/);
-  delete model.A.fields.bCode;
-  model.A.fields.b.default = {};
+  delete model.models.A.fields.bCode;
+  model.models.A.fields.b.default = {};
   await assert.rejects(() => loadModel(model), /relation options/);
 });
 
 test('initial database validates unknown fields, dangling references and required relations', async () => {
   const model = definition({ name: { type: 'string', required: true } });
   for (const data of [{ items: [{ id: '1' }] }, { items: [{ id: '1', name: 1 }] }, { items: [{ id: '1', name: 'x', extra: 1 }] }, { other: [] }])
-    await assert.rejects(() => startServer({ database: { data, schema: model } }));
-  const links = { ...definition({ link: { type: 'Other', source: 'otherId', required: true } }), Other: { collection: 'other', fields: { id: { type: 'string', primary: true } } } };
-  for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => startServer({ database: { data: { items: [row], other: [] }, schema: links } }));
+    await assert.rejects(() => startServer({ storage: 'memory', database: { source: data, schema: model } }));
+  const links = { models: { ...definition({ link: { type: 'Other', source: 'otherId', required: true } }).models, Other: { collection: 'other', fields: { id: { type: 'string', primary: true } } } } };
+  for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: [row], other: [] }, schema: links } }));
   const singular = {
-    ...definition({ link: { type: 'Other', source: 'code', target: 'code' }, code: { type: 'string' } }),
-    Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' } } },
+    models: {
+      ...definition({ link: { type: 'Other', source: 'code', target: 'code' }, code: { type: 'string' } }).models,
+      Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' } } },
+    },
   };
   await assert.rejects(
     () =>
       startServer({
+        storage: 'memory',
         database: {
           schema: singular,
-          data: {
+          source: {
             items: [{ id: '1', code: 'x' }],
             other: [
               { id: 'a', code: 'x' },

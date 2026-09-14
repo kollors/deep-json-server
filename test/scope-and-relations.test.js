@@ -7,22 +7,24 @@ import { preflight } from '../dist/src/graphql/preflight.js';
 const primary = { type: 'number', primary: true, generated: 'increment' };
 const url = (path, scope) => `${path}?${new URLSearchParams({ scope: JSON.stringify(scope) })}`;
 const setup = async (t, schema, data, graphql = false) => {
-  const facade = await createServer({ database: { schema, data }, graphql: { enabled: graphql }, server: { logger: false } });
+  const facade = await createServer({ storage: 'memory', database: { schema, source: data }, graphql: graphql ? {} : undefined, server: { logger: false } });
   const app = facade.fastify();
   t.after(() => app.close());
   return { app, facade };
 };
 const itemSchema = {
-  Item: {
-    collection: 'items',
-    fields: {
-      id: primary,
-      name: { type: 'string' },
-      profile: { type: 'object', nullable: true },
-      'profile.name': { type: 'string' },
-      rows: { type: 'object[]' },
-      'rows.name': { type: 'string' },
-      peers: { type: 'Item[]', source: 'peerIds' },
+  models: {
+    Item: {
+      collection: 'items',
+      fields: {
+        id: primary,
+        name: { type: 'string' },
+        profile: { type: 'object', nullable: true },
+        'profile.name': { type: 'string' },
+        rows: { type: 'object[]' },
+        'rows.name': { type: 'string' },
+        peers: { type: 'Item[]', source: 'peerIds' },
+      },
     },
   },
 };
@@ -120,9 +122,11 @@ test('scope projects objects in mixed schemaless arrays while preserving scalars
 
 test('GraphQL rejects collisions between root and nested input types in either model order', async () => {
   const models = {
-    User: { collection: 'users', fields: { id: primary, name: { type: 'string', required: true } } },
-    UserNested: { collection: 'userNesteds', fields: { id: primary, unrelated: { type: 'string' } } },
-    Holder: { collection: 'holders', fields: { id: primary, users: { type: 'User[]', source: 'userIds' } } },
+    models: {
+      User: { collection: 'users', fields: { id: primary, name: { type: 'string', required: true } } },
+      UserNested: { collection: 'userNesteds', fields: { id: primary, unrelated: { type: 'string' } } },
+      Holder: { collection: 'holders', fields: { id: primary, users: { type: 'User[]', source: 'userIds' } } },
+    },
   };
   for (const schema of [models, Object.fromEntries(Object.entries(models).reverse())]) await assert.rejects(() => generateGraphql(schema), /GraphQL type name collision: UserNested/);
 });
@@ -150,8 +154,10 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
     { type: 'string', generated: 'uuid' },
   ]) {
     const schema = {
-      Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string' }, code, children: { type: 'Child[]', source: 'code', target: 'parentCode' } } },
-      Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+      models: {
+        Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string' }, code, children: { type: 'Child[]', source: 'code', target: 'parentCode' } } },
+        Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+      },
     };
     const { app } = await setup(t, schema, { parents: [{ id: 1, name: 'old', code: 'P' }], children: [{ id: 1, parentCode: 'P' }] }, true);
     const path = url('/parents/1', [{ '*': true, children: [{ id: true }] }]);
@@ -175,8 +181,10 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
 
 test('required reverse relations with custom keys cannot be cleared', async (t) => {
   const schema = {
-    Parent: { collection: 'parents', fields: { id: primary, code: { type: 'string', readOnly: true }, children: { type: 'Child[]', source: 'code', target: 'parentCode', required: true } } },
-    Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+    models: {
+      Parent: { collection: 'parents', fields: { id: primary, code: { type: 'string', readOnly: true }, children: { type: 'Child[]', source: 'code', target: 'parentCode', required: true } } },
+      Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+    },
   };
   const { app } = await setup(t, schema, { parents: [{ id: 1, code: 'P' }], children: [{ id: 1, parentCode: 'P' }] });
   for (const payload of [{}, { children: [] }]) {
@@ -189,8 +197,10 @@ test('required reverse relations with custom keys cannot be cleared', async (t) 
 
 test('transaction key indexes see earlier creates and do not outlive rolled back writes', async (t) => {
   const schema = {
-    User: { collection: 'users', fields: { id: primary, name: { type: 'string' } } },
-    Holder: { collection: 'holders', fields: { id: primary, first: { type: 'User', source: 'firstId' }, second: { type: 'User', source: 'secondId' } } },
+    models: {
+      User: { collection: 'users', fields: { id: primary, name: { type: 'string' } } },
+      Holder: { collection: 'holders', fields: { id: primary, first: { type: 'User', source: 'firstId' }, second: { type: 'User', source: 'secondId' } } },
+    },
   };
   const { app } = await setup(t, schema, { users: [], holders: [{ id: 1 }] });
   const mutate = (payload) => app.inject({ method: 'PATCH', url: '/holders/1', payload });

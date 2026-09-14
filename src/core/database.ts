@@ -3,13 +3,15 @@ import { resolve } from 'node:path';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import { domainError } from './errors.js';
-import type { RecordOptions } from './lifecycle/options.js';
 import type { ModelSchema } from './model.js';
+import type { Source, Storage } from './storage.js';
 import type { DatabaseData, DatabaseRecord } from './types.js';
 import { createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
 
-export type DatabaseConfig = Pick<RecordOptions, 'timestamps' | 'softDelete'> &
-  ({ data: DatabaseData; path?: never; schema?: ModelSchema | string } | { data?: never; path: string; schema?: ModelSchema | string });
+export interface DatabaseConfig<S extends Storage = Storage> {
+  source: Source<S, DatabaseData>;
+  schema?: Source<S, ModelSchema>;
+}
 
 export interface DatabaseContainer {
   data: DatabaseData;
@@ -222,10 +224,10 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
 };
 
 /** Создаёт дисковое хранилище или хранилище в памяти по настройкам.
- * @example createDatabaseStore({ data: { notes: [] } }) → Promise<DatabaseStore>.
+ * @example createDatabaseStore({ source: { notes: [] } }) → Promise<DatabaseStore>.
  */
 export const createDatabaseStore = async (config: DatabaseConfig, keys?: Map<string, string>): Promise<DatabaseStore> =>
-  config.data != null ? createMemoryDatabaseStore(config.data, keys) : createDiskDatabaseStore(config.path, keys);
+  typeof config.source === 'string' ? createDiskDatabaseStore(config.source, keys) : createMemoryDatabaseStore(config.source, keys);
 
 /** Ищет индекс записи, сравнивая строковые представления id.
  * @example findItemIndex([{ id: 1 }], '1') → 0; пустой массив → -1.

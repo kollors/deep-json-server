@@ -1,3 +1,10 @@
+import { writeFile as writeFixture } from 'node:fs/promises';
+
+const writeJson = async (path, value) => {
+  await writeFixture(path, JSON.stringify(value));
+  return path;
+};
+
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -20,7 +27,7 @@ const users = [
   { id: 'alice', username: 'alice', passwordHash },
   { id: 'bob', username: 'bob', passwordHash },
 ];
-const schema = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } };
+const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } } };
 const header = (token) => ({ authorization: `Bearer ${token}` });
 const request = (app, method, url, payload, token) => app.inject({ method, url, ...(payload === undefined ? {} : { payload }), ...(token ? { headers: header(token) } : {}) });
 const login = async (app, username, secret = password) => {
@@ -38,14 +45,14 @@ const temporary = async (t) => {
   return directory;
 };
 const setup = async (t, extra = {}) => {
-  const facade = await createServer({ database: { data: { items: [] }, schema }, auth: { users }, server: { logger: false }, ...extra });
+  const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();
   return app;
 };
 const service = async (t, records = users) => {
-  const auth = await createAuthService({ users: records });
+  const auth = await createAuthService({ source: records });
   t.after(() => auth.close());
   return auth;
 };
@@ -73,7 +80,7 @@ const holdPassword = (t, value) => {
 
 test('registration is public, creates ordinary users and keeps memory input isolated', async (t) => {
   const source = structuredClone(users);
-  const app = await setup(t, { auth: { users: source } });
+  const app = await setup(t, { auth: { source: source } });
   const created = await request(app, 'POST', '/auth/register', { username: 'new-user', password });
   assert.equal(created.statusCode, 201, created.body);
   assert.equal(created.headers['cache-control'], 'no-store');
@@ -99,7 +106,7 @@ test('registration is public, creates ordinary users and keeps memory input isol
   ])
     assert.equal((await request(app, 'POST', '/auth/register', payload)).statusCode, 400);
   assert.deepEqual(source, users);
-  const restarted = await setup(t, { auth: { users: source } });
+  const restarted = await setup(t, { auth: { source: source } });
   assert.equal((await request(restarted, 'POST', '/auth/login', { username: 'new-user', password })).statusCode, 401);
 });
 
@@ -137,7 +144,7 @@ test('password permissions distinguish self, ordinary users and other admins and
 });
 
 test('admin changes apply to existing REST and GraphQL tokens and allow demotion followed by password reset', async (t) => {
-  const app = await setup(t, { graphql: { enabled: true } });
+  const app = await setup(t, { graphql: {} });
   const root = await login(app, 'root');
   const bob = await login(app, 'bob');
   const peer = await login(app, 'peer');
@@ -188,7 +195,12 @@ test('file users persist registration, roles and passwords across restart and re
   const directory = await temporary(t);
   const path = join(directory, 'auth.json');
   await fs.writeFile(path, JSON.stringify(users));
-  const app = await setup(t, { auth: { users: path }, files: { directory, metadata: join(directory, 'files.json') } });
+  const app = await setup(t, {
+    storage: 'file',
+    database: { source: await writeJson(path + '.db.json', { items: [] }), schema: await writeJson(path + '.schema.json', schema) },
+    auth: { source: path },
+    files: { source: directory, metadata: join(directory, 'files.json') },
+  });
   for (const name of ['auth.json', '.auth.json.tmp']) {
     const response = await app.inject({ method: 'POST', url: '/_files/storage', headers: { 'content-name': name, 'content-type': 'text/plain', 'content-override': 'true' }, payload: 'overwrite' });
     assert.equal(response.statusCode, 400, response.body);
@@ -213,18 +225,12 @@ test('file users persist registration, roles and passwords across restart and re
   assert.throws(() => reopened.me(`Bearer ${root}`), { code: 'UNAUTHENTICATED' });
 });
 
-test('memory auth changes do not write the main database file', async (t) => {
+test('all storage sources obey the same global mode', async (t) => {
   const directory = await temporary(t);
   const path = join(directory, 'database.json');
-  const original = '{"items":[]}';
-  await fs.writeFile(path, original);
-  const app = await setup(t, { database: { path, schema } });
-  const root = await login(app, 'root');
-  assert.equal((await request(app, 'POST', '/auth/register', { username: 'memory', password })).statusCode, 201);
-  assert.equal((await setAdmin(app, root, 'bob', true)).statusCode, 200);
-  assert.equal((await changePassword(app, root, 'alice', 'new-alice')).statusCode, 200);
-  assert.equal(await fs.readFile(path, 'utf8'), original);
-  assert.deepEqual((await fs.readdir(directory)).sort(), ['database.json']);
+  await fs.writeFile(path, '{"items":[]}');
+  await assert.rejects(() => setup(t, { storage: 'memory', database: { source: path, schema } }), /memory storage/);
+  await assert.rejects(() => setup(t, { storage: 'file', database: { source: path }, auth: { source: users }, graphql: undefined, openapi: undefined }), /config.auth.source/);
 });
 
 test('failed temporary writes preserve the original file, users and sessions, and the queue recovers', async (t) => {
@@ -232,7 +238,11 @@ test('failed temporary writes preserve the original file, users and sessions, an
   const path = join(directory, 'auth.json');
   const original = JSON.stringify(users);
   await fs.writeFile(path, original);
-  const app = await setup(t, { auth: { users: path } });
+  const app = await setup(t, {
+    storage: 'file',
+    database: { source: await writeJson(path + '.db.json', { items: [] }), schema: await writeJson(path + '.schema.json', schema) },
+    auth: { source: path },
+  });
   const root = await login(app, 'root');
   const alice = await login(app, 'alice');
   const writeFile = fs.writeFile;
@@ -307,7 +317,7 @@ test('queued record mutations recheck auth instead of keeping the original admin
   const root = await tokenFor(auth, 'root');
   const peer = await tokenFor(auth, 'peer');
   const model = await loadModel(schema, { auth: true });
-  const store = await createDatabaseStore({ data: { items: [{ id: 'one', name: 'before', createdById: 'alice' }] } });
+  const store = await createDatabaseStore({ source: { items: [{ id: 'one', name: 'before', createdById: 'alice' }] } });
   const engine = new Engine(store, model);
   const entered = Promise.withResolvers();
   const released = Promise.withResolvers();

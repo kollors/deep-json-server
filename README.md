@@ -4,7 +4,7 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.8 is a prerelease.** REST queries use `scope=[fields, arguments?]` at every level. When upgrading from an earlier version, update query parameters using the examples below; upgrading from 0.x also requires the new model schema.
+**1.0.0-alpha.9 is a prerelease.** When upgrading from the previous alpha, add `storage`, use `source` for data sources, move definitions under `models`, and move timestamps and soft deletion settings to the schema root. Configuration sections now enable modules; use `--generate` or `--generate-only` for exports. The second `createServer` argument has been removed.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.8`.
+To install a specific version, use `@1.0.0-alpha.9`.
 
 ## Quick start
 
@@ -31,9 +31,7 @@ Create two files in the same directory.
 `server.config.js`:
 
 ```js
-export default {
-  database: { path: './database.json' },
-};
+export default { storage: 'file', database: { source: './database.json' } };
 ```
 
 ```sh
@@ -46,47 +44,53 @@ Add a [model schema](#model-schema) to define relations and validation. See [que
 
 ## Configuration
 
+With `storage: 'file'`, all sources and the schema are paths. With `'memory'`, they are in-memory data. Modes cannot be mixed. The presence of `auth`, `files`, `graphql` and `openapi` enables those modules; `graphql: {}` and `openapi: {}` use the default endpoints.
+
+```js
+export default {
+  storage: 'file',
+  database: { source: './database.json', schema: './schema.json' },
+  auth: { source: './users.json', expiresIn: 3600 },
+  files: { source: './uploads' },
+  graphql: { path: './generated/schema.graphql' },
+  openapi: { path: './generated/openapi.yaml' },
+  server: { host: '127.0.0.1', port: 4001 },
+};
+```
+
 | Setting | Meaning |
 |---|---|
-| `database.path` / `database.data` | Choose one to start the server: a JSON file or an in-memory collection object |
-| `database.schema` | Model object or JSON schema-file path; optional for REST |
-| `database.timestamps` | Add creation and update times; default `false` |
-| `database.softDelete` | Mark records as deleted and allow restoration; default `false` |
-| `openapi.enabled` | Enable the specification endpoint; default `false` |
-| `openapi.endpoint` | Specification path; default `/openapi.json` |
-| `openapi.path` | YAML export destination |
-| `openapi.info` | Optional metadata object: required `title` and `version`, optional `description` |
-| `graphql.enabled` | Enable GraphQL HTTP endpoint; default `false` |
-| `graphql.endpoint` | Endpoint path; default `/graphql` |
-| `graphql.path` | GraphQL SDL export destination |
-| `auth.users` | Path to a JSON array of auth users, or an in-memory array |
+| `storage` | Required: `file` or `memory`; applies to all sources and the schema |
+| `database.source` | Database JSON path or collection object |
+| `database.schema` | Schema JSON path or schema object; optional for REST |
+| `auth.source` | Users JSON path or user array |
 | `auth.expiresIn` | Session lifetime in seconds; default 3600 |
+| `files.source` | Files directory or initial file array |
+| `files.metadata` | For `file` only: metadata JSON path; defaults to `_database.json` inside `files.source` |
+| `graphql.endpoint` | HTTP endpoint; default `/graphql` |
+| `graphql.path` | GraphQL SDL export destination |
+| `openapi.endpoint` | HTTP endpoint; default `/openapi.json` |
+| `openapi.path` | OpenAPI export destination |
+| `openapi.info` | Metadata: required `title` and `version`, optional `description` |
 | `server.host`, `server.port` | Defaults `127.0.0.1`, `4001`; CLI also reads `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | Defaults 10 and 100; default size is capped by the maximum |
 | `server.cors`, `server.logger` | Default `true`; logger also accepts Fastify logger options |
 | `server.maxFileSize` | Default 100 MiB |
-| `files.data` | In-memory binary files |
-| `files.directory`, `files.metadata` | Disk storage directory and metadata JSON file; both required |
 
-Relative paths resolve from the configuration file's directory. When passing a configuration object to `createServer()`, paths resolve from the working directory. The server works with a copy of in-memory input and metadata.
-
-Set `server.port` to `0` to let the operating system choose an available port. The OpenAPI endpoint uses a relative server URL.
+Relative paths resolve from the configuration file directory, or from the working directory with `createServer(config)`. In-memory data, including the schema, is copied. Port `0` lets the system choose an available port.
 
 ### CLI
 
-| CLI flag | Action |
+| Flag | Action |
 |---|---|
-| `--files` | Enable file routes; requires `files` configuration |
-| `--timestamps` | Enable record timestamps globally |
-| `--soft-delete` | Enable soft deletion globally |
-| `--graphql` | Enable the GraphQL API |
-| `--openapi` | Enable the OpenAPI endpoint |
+| `--generate` | Export schemas, then start the server |
+| `--generate-only` | Export schemas and exit |
 | `--host <host>` | Server address |
 | `--port <port>` | Server port |
-| `--help`, `-h` | Show help |
-| `--version`, `-v` | Show package version |
+| `--help, -h` | Help |
+| `--version, -v` | Package version |
 
-Host and port priority: CLI → configuration → `HOST`/`PORT` → defaults. The `files` section enables file routes; `auth` enables login and permission checks. Model settings can override global `timestamps` and `softDelete` values.
+Address precedence: CLI → configuration → `HOST`/`PORT` → defaults. Without generation flags, only the server starts. `--generate` and `--generate-only` are mutually exclusive.
 
 ## Model schema
 
@@ -94,28 +98,52 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 
 ```json
 {
-  "Country": {
-    "collection": "countries",
-    "api": ["openapi", "graphql"],
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "name": { "type": "string", "required": true },
-      "users": { "type": "User[]", "target": "countryId" }
-    }
-  },
-  "User": {
-    "collection": "users",
-    "api": ["openapi", "graphql"],
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "fullName": { "type": "string", "required": true },
-      "country": { "type": "Country", "source": "countryId" }
+  "api": [
+    "openapi",
+    "graphql"
+  ],
+  "models": {
+    "Country": {
+      "collection": "countries",
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "users": {
+          "type": "User[]",
+          "target": "countryId"
+        }
+      }
+    },
+    "User": {
+      "collection": "users",
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "fullName": {
+          "type": "string",
+          "required": true
+        },
+        "country": {
+          "type": "Country",
+          "source": "countryId"
+        }
+      }
     }
   }
 }
 ```
 
-`api` defaults to `["openapi", "graphql"]`. `[]` excludes the model from both exports and GraphQL, while REST remains available. Related models must enable the same export format. Names must be valid identifiers and generated type/operation names must not collide. `and`, `or`, `not` are reserved filter names.
+Model definitions belong in `models`. The schema root can define `api`, `timestamps` and `softDelete`; a model can override each setting. API precedence is model → schema root → configuration sections. Arrays replace the inherited value; `[]` excludes a model from GraphQL and OpenAPI while REST remains available. An explicit list does not activate an absent module. Related models must allow the same format. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
 
 | Capability | With schema | Without schema |
 |---|---|---|
@@ -252,10 +280,7 @@ const scope = [
     fullName: true,
     movies: [
       { id: true, title: true },
-      {
-        order: [{ field: 'title', direction: 'ASC' }],
-        pager: { page: 1, pageSize: 5 },
-      },
+      { order: [{ field: 'title', direction: 'ASC' }], pager: { page: 1, pageSize: 5 } },
     ],
   },
   {
@@ -346,10 +371,10 @@ mutation {
 
 ### GraphQL
 
-Set `database.schema` and enable `graphql.enabled: true` in the configuration, or start the server with `--graphql`:
+Set `database.schema` and add `graphql: {}` to the configuration:
 
 ```sh
-npx deep-json-server --graphql server.config.js
+npx deep-json-server server.config.js
 ```
 
 Send requests to `/graphql` using POST with `Content-Type: application/json` and a body of `{ "query": "…", "variables": {} }`. Change the path through `graphql.endpoint`.
@@ -386,29 +411,27 @@ Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`,
 
 ## OpenAPI and schema exports
 
-Exports use OpenAPI 3.0.3. The purpose of each `scope` array position is described in text; the server validates their order.
+Exports use OpenAPI 3.0.3. Add `openapi: {}` and `database.schema` to serve the specification at `/openapi.json`. Change the route with `openapi.endpoint`. Open the document in Swagger UI or import it into an API client.
 
-To serve the specification over HTTP, set `database.schema` and enable `openapi.enabled: true`, or start the server with `--openapi`. The JSON document is available at `/openapi.json` by default; change the path through `openapi.endpoint`. Open it in a separately installed Swagger UI or import it into an API client.
-
-To generate schemas, specify the format and configuration file:
-
-```sh
-npx deep-json-server generate openapi server.config.js
-npx deep-json-server generate graphql server.config.js
-npx deep-json-server generate openapi,graphql server.config.js
-```
-
-Generation runs without starting the server or reading database records. The command reads `database.schema` and writes schemas to `openapi.path` and `graphql.path`. The `enabled` flags control HTTP endpoints and are not required for exports. A configuration for generation only can contain:
+Set output paths to save schemas:
 
 ```js
 export default {
-  database: { schema: './schema.json' },
+  storage: 'file',
+  database: { source: './database.json', schema: './schema.json' },
   openapi: { path: './generated/openapi.yaml' },
   graphql: { path: './generated/schema.graphql' },
 };
 ```
 
-Each format needs its own output file. The command rejects destinations that would overwrite the configuration, database, schema, auth users or file metadata.
+```bash
+npx deep-json-server server.config.js --generate-only
+npx deep-json-server server.config.js --generate
+```
+
+`--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `path`. Missing sections, missing destinations or generation errors fail the command before server startup.
+
+Export reads only the schema. Database records, auth users and file storage are not opened; configuration values are still validated. The schema is loaded once, including when export is followed by startup. All destinations and selected schemas are checked before writing. Outputs cannot overwrite the configuration, database, schema, users, counters or file metadata. A disk write failure can leave an already saved file from another format.
 
 ## Authentication
 
@@ -422,23 +445,30 @@ import { hashPassword } from '@kollors/deep-json-server/auth';
 
 const password = process.env.DJS_PASSWORD;
 if (!password) throw new Error('Set DJS_PASSWORD');
-await writeFile('./auth.json', JSON.stringify([
-  { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
-], null, 2), { flag: 'wx', mode: 0o600 });
+await writeFile(
+  './auth.json',
+  JSON.stringify(
+    [{ id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true }],
+    null,
+    2,
+  ),
+  { flag: 'wx', mode: 0o600 },
+);
 ```
 
 Set `DJS_PASSWORD` and run `node setup-auth.mjs`. Add the file to your server configuration:
 
 ```js
 export default {
-  database: { path: './database.json' },
-  auth: { users: './auth.json', expiresIn: 3600 },
+  storage: 'file',
+  database: { source: './database.json' },
+  auth: { source: './auth.json', expiresIn: 3600 },
 };
 ```
 
 Start with `npx deep-json-server server.config.js`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`. Passwords use salted scrypt hashes.
 
-You can pass an array in `auth.users` instead of a path:
+With `storage: 'memory'`, pass an array in `auth.source`:
 
 ```js
 import { hashPassword } from '@kollors/deep-json-server/auth';
@@ -447,16 +477,17 @@ const password = process.env.DJS_PASSWORD;
 if (!password) throw new Error('Set DJS_PASSWORD');
 
 export default {
-  database: { data: { items: [] } },
+  storage: 'memory',
+  database: { source: { items: [] } },
   auth: {
-    users: [
+    source: [
       { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
     ],
   },
 };
 ```
 
-Auth users are stored separately from database collections. With a string in `auth.users`, registration, password changes and admin status changes are saved to that JSON file through the same `lowdb` used by the main database. With an array, changes remain in an internal memory copy and disappear on restart; the original array is unchanged. This choice is independent of `database.path` or `database.data`. A file write failure leaves the user and active sessions unchanged. The file is read at startup; restart the server after editing it manually.
+Auth users are stored separately from database collections. With `storage: 'file'`, registration, password changes and admin changes are saved to `auth.source` through `lowdb`. With `'memory'`, changes stay in an internal copy and disappear on restart; the original array is unchanged. A file write failure leaves users and sessions unchanged. The file is read at startup; restart after manual edits.
 
 | REST request | JSON body | Response |
 |---|---|---|
@@ -475,39 +506,37 @@ Only administrators can change `isAdmin`. They can grant or remove another user'
 
 Invalid or expired tokens return `401`, insufficient permissions return `403`, and an absent user for an otherwise permitted operation returns `404`. Invalid request bodies return `400`. Login, registration and password changes may return `429` when too many password computations are running; login also limits active sessions. Sessions are kept in memory and disappear on restart. Logout revokes only the supplied token.
 
-OpenAPI describes all auth routes and their Bearer token requirements. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `generate openapi server.config.js`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when changing records. GraphQL and OpenAPI require `database.schema`.
+OpenAPI describes all auth routes and their Bearer token requirements. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when changing records. GraphQL and OpenAPI require `database.schema`.
 
 ## Record dates, deletion and ownership
 
-Configure defaults in `database`:
-
-```js
-export default {
-  database: {
-    path: './database.json',
-    schema: './schema.json',
-    timestamps: true,
-    softDelete: true,
-  },
-  auth: { users: './auth.json' },
-};
-```
-
-Each model can override `timestamps` and `softDelete` beside `collection` and `fields`. An omitted setting inherits the global value; `true` or `false` overrides it. CLI flags override global configuration, and model settings take priority over both. Without a schema, global settings apply to every collection. This model disables timestamps and keeps deleted records regardless of the global settings:
+Set defaults at the schema root. Here `Note` inherits soft deletion and disables timestamps:
 
 ```json
 {
-  "Note": {
-    "collection": "notes",
-    "timestamps": false,
-    "softDelete": true,
-    "fields": {
-      "id": { "type": "string", "primary": true, "generated": "uuid" },
-      "text": { "type": "string", "required": true }
+  "timestamps": true,
+  "softDelete": true,
+  "models": {
+    "Note": {
+      "collection": "notes",
+      "timestamps": false,
+      "fields": {
+        "id": {
+          "type": "string",
+          "primary": true,
+          "generated": "uuid"
+        },
+        "text": {
+          "type": "string",
+          "required": true
+        }
+      }
     }
   }
 }
 ```
+
+Precedence: model → schema root → `false`. Explicit `false` disables an inherited setting. Without a schema, timestamps and soft deletion are disabled.
 
 | Field | Enabled by | Meaning |
 |---|---|---|
@@ -545,8 +574,9 @@ Files are available through REST and documented in OpenAPI. Add storage to the c
 
 ```js
 export default {
-  database: { path: './database.json' },
-  files: { directory: './uploads', metadata: './files.json' },
+  storage: 'file',
+  database: { source: './database.json' },
+  files: { source: './uploads', metadata: './files.json' },
 };
 ```
 
@@ -556,7 +586,7 @@ Start the server:
 npx deep-json-server server.config.js
 ```
 
-For temporary tests, use `files.data` instead. Each initial record contains `name`, `mimeType`, binary `content` as a `Uint8Array`, and an optional `directory`. Uploaded files then remain in memory until the process exits.
+For temporary tests, choose `storage: 'memory'` and pass an array in `files.source`. Each initial record contains `name`, `mimeType`, binary `content` as a `Uint8Array`, and an optional `directory`. Uploaded files then remain in memory until the process exits.
 
 Upload one file directly as the request body. `Content-Name` contains the URI-encoded file name, `Content-Type` contains its MIME type, and the optional `Content-Directory` contains the URI-encoded relative directory:
 
@@ -607,9 +637,9 @@ Content-Type: application/json
 }
 ```
 
-`PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.directory`, and all returned URLs are relative to the server origin.
+`PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.source`, and all returned URLs are relative to the server origin.
 
-In disk mode, the binary is stored at `<files.directory>/<directory>/<name>`. Metadata stores `directory`, `mimeType` and `name`; the server reads the size from the file and builds its URLs. Directories and the metadata file are created when needed.
+In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata stores `directory`, `mimeType` and `name`; the server reads the size from the file and builds its URLs. Directories and the metadata file are created when needed.
 
 Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, auth users, loaded configuration or metadata file.
 
@@ -629,7 +659,7 @@ await server.listen();
 
 The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup.
 
-The second argument overrides module settings, for example `createServer(config, { files: false, graphql: true })`. Supported flags are `files`, `graphql`, `openapi` and `auth`. Enabling auth or files requires the corresponding configuration section; GraphQL and OpenAPI require a model schema.
+`createServer(config)` takes one argument. Configuration sections control modules exactly as in the CLI. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
 
 The root import `@kollors/deep-json-server` also provides these functions. Server adapters load when enabled. Generators can be used independently:
 
@@ -643,7 +673,7 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
-Both generators accept `timestamps`, `softDelete` and `auth` options for the record fields. With `{ auth: true }`, OpenAPI also includes REST auth routes and mutation security requirements. `hashPassword()` is also available from the root package.
+Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; schema and model `api` settings can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
 `generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 

@@ -28,11 +28,7 @@ const withDiskServer = async (run) => {
 
   await writeFile(databasePath, JSON.stringify({ items: [{ id: '1' }] }));
 
-  const facade = await createServer({
-    database: { path: databasePath },
-    files: { directory: filesPath, metadata: metadataPath },
-    server: { logger: false },
-  });
+  const facade = await createServer({ storage: 'file', database: { source: databasePath }, files: { source: filesPath, metadata: metadataPath }, server: { logger: false } });
   const server = facade.fastify();
 
   try {
@@ -79,12 +75,7 @@ test('rejects overwriting a directory without moving its files or metadata', asy
 
 test('rejects registered paths replaced externally with directories', async () => {
   await withDiskServer(async ({ filesPath, metadataPath, server }) => {
-    const upload = await server.inject({
-      headers: { 'content-name': 'file.txt', 'content-type': 'text/plain' },
-      method: 'POST',
-      payload: 'original',
-      url: '/_files/storage',
-    });
+    const upload = await server.inject({ headers: { 'content-name': 'file.txt', 'content-type': 'text/plain' }, method: 'POST', payload: 'original', url: '/_files/storage' });
 
     assert.equal(upload.statusCode, 201);
     const file = upload.json();
@@ -114,12 +105,7 @@ test('rejects registered paths replaced externally with directories', async () =
 
 test('rejects unknown file PATCH fields without renaming the file or changing metadata', async () => {
   await withDiskServer(async ({ filesPath, metadataPath, server }) => {
-    const upload = await server.inject({
-      headers: { 'content-name': 'original.txt', 'content-type': 'text/plain' },
-      method: 'POST',
-      payload: 'original',
-      url: '/_files/storage',
-    });
+    const upload = await server.inject({ headers: { 'content-name': 'original.txt', 'content-type': 'text/plain' }, method: 'POST', payload: 'original', url: '/_files/storage' });
 
     assert.equal(upload.statusCode, 201, upload.body);
     const file = upload.json();
@@ -166,12 +152,7 @@ test('does not follow symbolic links outside disk storage', async () => {
 
 test('keeps file routes independent from an invalid resource database', async () => {
   await withDiskServer(async ({ databasePath, server }) => {
-    const uploadResponse = await server.inject({
-      headers: { 'content-name': 'file.txt', 'content-type': 'text/plain' },
-      method: 'POST',
-      payload: 'content',
-      url: '/_files/storage',
-    });
+    const uploadResponse = await server.inject({ headers: { 'content-name': 'file.txt', 'content-type': 'text/plain' }, method: 'POST', payload: 'content', url: '/_files/storage' });
 
     await writeFile(databasePath, '{ invalid json');
 
@@ -192,12 +173,7 @@ test('restores an overwritten file when metadata persistence fails', async () =>
     await rm(metadataPath);
     await mkdir(metadataPath);
 
-    const overwriteResponse = await server.inject({
-      headers: { ...headers, 'content-override': 'true' },
-      method: 'POST',
-      payload: 'replacement',
-      url: '/_files/storage',
-    });
+    const overwriteResponse = await server.inject({ headers: { ...headers, 'content-override': 'true' }, method: 'POST', payload: 'replacement', url: '/_files/storage' });
     const contentResponse = await server.inject({ method: 'GET', url: uploadResponse.json().url });
 
     assert.equal(overwriteResponse.statusCode, 500);
@@ -228,8 +204,9 @@ test('does not hold the mutation queue while reading an upload stream', async ()
 
 test('rejects an oversized duplicate before reading its body', async () => {
   const facade = await createServer({
-    database: { data: { items: [] } },
-    files: { data: [{ content: new Uint8Array([1]), mimeType: 'application/octet-stream', name: 'existing.bin' }] },
+    storage: 'memory',
+    database: { source: { items: [] } },
+    files: { source: [{ content: new Uint8Array([1]), mimeType: 'application/octet-stream', name: 'existing.bin' }] },
     server: { logger: false, maxFileSize: 1 },
   });
   const server = facade.fastify();
@@ -250,8 +227,9 @@ test('rejects an oversized duplicate before reading its body', async () => {
 
 test('supports update and delete in memory and validates stored MIME types', async () => {
   const config = {
-    database: { data: { items: [] } },
-    files: { data: [{ content: new Uint8Array([1]), directory: 'old', mimeType: 'image/jpeg', name: 'file.jpg' }] },
+    storage: 'memory',
+    database: { source: { items: [] } },
+    files: { source: [{ content: new Uint8Array([1]), directory: 'old', mimeType: 'image/jpeg', name: 'file.jpg' }] },
     server: { logger: false },
   };
   const facade = await createServer(config);
@@ -268,11 +246,14 @@ test('supports update and delete in memory and validates stored MIME types', asy
     await server.close();
   }
 
-  await assert.rejects(() => startServer({ database: { data: { items: [] } }, files: { data: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }), /mimeType.*MIME-тип/);
+  await assert.rejects(
+    () => startServer({ storage: 'memory', database: { source: { items: [] } }, files: { source: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }),
+    /mimeType.*MIME-тип/,
+  );
 });
 
 test('rejects file names that are not portable across supported platforms', async () => {
-  const facade = await createServer({ database: { data: { items: [] } }, files: { data: [] }, server: { logger: false } });
+  const facade = await createServer({ storage: 'memory', database: { source: { items: [] } }, files: { source: [] }, server: { logger: false } });
   const server = facade.fastify();
 
   try {
@@ -287,16 +268,11 @@ test('rejects file names that are not portable across supported platforms', asyn
 });
 
 test('does not initialize disk file storage when only OpenAPI is generated', async () => {
-  const rootPath = await mkdtemp(join(tmpdir(), 'deep-json-server-openapi-only-'));
+  const rootPath = await mkdtemp(join(tmpdir(), 'deep-json-server-export-'));
   const filesPath = join(rootPath, 'files');
-  const facade = await createServer(
-    {
-      database: { data: { items: [] }, schema: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } },
-      files: { directory: filesPath, metadata: join(rootPath, 'metadata.json') },
-    },
-    { files: true },
-  );
-
+  const schemaPath = join(rootPath, 'schema.json');
+  await writeFile(schemaPath, JSON.stringify({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } }));
+  const facade = await createServer({ storage: 'file', database: { source: join(rootPath, 'missing.json'), schema: schemaPath }, files: { source: filesPath }, openapi: {} });
   try {
     await facade.openapi();
     await assert.rejects(() => access(filesPath), { code: 'ENOENT' });

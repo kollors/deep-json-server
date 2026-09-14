@@ -57,8 +57,9 @@ const withServer = async (run, data = fixture, schemaConfig, serverOptions = {})
   }
 
   const serverFacade = await createServer({
-    database: { path: databasePath, schema: schemaPath },
-    files: serverOptions.files === true ? { directory: filesDirectoryPath, metadata: filesMetadataPath } : undefined,
+    storage: 'file',
+    database: { source: databasePath, schema: schemaPath },
+    files: serverOptions.files === true ? { source: filesDirectoryPath, metadata: filesMetadataPath } : undefined,
     server: { ...options, logger: false },
   });
   const server = serverFacade.fastify();
@@ -89,12 +90,7 @@ test('uploads, reads, moves, downloads and deletes binary files', async () => {
       const storedMetadata = JSON.parse(await readFile(filesMetadataPath, 'utf8'));
       const storedContent = await readFile(join(filesDirectoryPath, 'posters', 'Крёстный отец.jpg'));
       const attachmentResponse = await server.inject({ method: 'GET', url: uploadedFile.downloadUrl });
-      const updateResponse = await server.inject({
-        headers: { 'content-type': 'application/json' },
-        method: 'PATCH',
-        payload: { directory: 'archive', name: 'godfather.jpg' },
-        url: uploadedFile.url,
-      });
+      const updateResponse = await server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: { directory: 'archive', name: 'godfather.jpg' }, url: uploadedFile.url });
       const updatedFile = updateResponse.json();
       const oldLocationResponse = await server.inject({ method: 'GET', url: uploadedFile.url });
       const updatedContentResponse = await server.inject({ method: 'GET', url: updatedFile.url });
@@ -172,12 +168,7 @@ test('reads file size from disk and validates move destinations', async () => {
       await writeFile(join(filesDirectoryPath, 'files', 'first.txt'), 'externally changed');
 
       const metadataResponse = await server.inject({ method: 'GET', url: firstFile.metadataUrl });
-      const conflictResponse = await server.inject({
-        headers: { 'content-type': 'application/json' },
-        method: 'PATCH',
-        payload: { name: 'second.txt' },
-        url: firstFile.url,
-      });
+      const conflictResponse = await server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: { name: 'second.txt' }, url: firstFile.url });
       const invalidResponses = await Promise.all([
         server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: {}, url: firstFile.url }),
         server.inject({ headers: { 'content-type': 'application/json' }, method: 'PATCH', payload: { unknown: true }, url: firstFile.url }),
@@ -248,7 +239,7 @@ test('validates file headers, size and optional feature state', async () => {
 });
 
 test('can disable CORS routes and response headers', async () => {
-  const facade = await createServer({ database: { data: { items: [{ id: '1' }] } }, server: { cors: false, logger: false } });
+  const facade = await createServer({ storage: 'memory', database: { source: { items: [{ id: '1' }] } }, server: { cors: false, logger: false } });
   const server = facade.fastify();
 
   try {
@@ -311,16 +302,19 @@ test('rejects missing files, unsafe resources and malformed or ambiguous records
   const databasePath = join(directory, 'database.json');
 
   try {
-    await assert.rejects(() => startServer({ database: { path: databasePath }, server: { logger: false } }), /не найден/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false } }), /не найден/);
 
     for (const data of [[], { items: {} }, { items: [null] }, { items: [{ name: 'Missing ID' }] }, { items: [{ id: true }] }, { items: [{ id: 1 }, { id: '1' }] }, { 'bad/name': [] }]) {
       await writeFile(databasePath, JSON.stringify(data));
-      await assert.rejects(() => startServer({ database: { path: databasePath }, server: { logger: false } }));
+      await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false } }));
     }
 
-    await assert.rejects(() => startServer({ database: { data: { items: [] }, path: databasePath } }), /ровно один/);
-    await assert.rejects(() => startServer({ database: { data: { items: [] } }, files: { data: [], directory: 'files', metadata: 'files.json' } }), /либо config\.files\.data/);
-    await assert.rejects(() => startServer({ database: { data: { items: [] } }, files: { data: [{ content: 'invalid', mimeType: 'text/plain', name: 'file.txt' }] } }), /config\.files\.data/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: { items: [] } } }), /config.database.source/);
+    await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: [] } }, files: { source: 'files' } }), /memory storage/);
+    await assert.rejects(
+      () => startServer({ storage: 'memory', database: { source: { items: [] } }, files: { source: [{ content: 'invalid', mimeType: 'text/plain', name: 'file.txt' }] } }),
+      /config\.files\.source/,
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
@@ -334,15 +328,15 @@ test('rejects values that cannot be represented in JSON', async () => {
   for (const value of [1n, undefined, () => undefined, Symbol('value'), Number.NaN, Number.POSITIVE_INFINITY, new Date(), cyclicRecord]) {
     const data = value === cyclicRecord ? { items: [value] } : { items: [{ id: '1', value }] };
 
-    await assert.rejects(() => startServer({ database: { data }, server: { logger: false } }), /JSON|конечное число|обычный JSON-объект|циклическую ссылку/);
+    await assert.rejects(() => startServer({ storage: 'memory', database: { source: data }, server: { logger: false } }), /structured data|JSON|конечное число|обычный JSON-объект|циклическую ссылку/);
   }
 
-  await assert.rejects(() => startServer({ database: { data: { items: Array(1) } }, server: { logger: false } }), /разреженные массивы/);
+  await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: Array(1) } }, server: { logger: false } }), /разреженные массивы/);
 });
 
 test('validates feature switches before initializing the server', async () => {
-  await assert.rejects(() => createServer({ database: { data: { items: [] } } }, { files: 'false' }), /features/);
-  await assert.rejects(() => createServer({ database: { data: { items: [] } } }, { unknown: true }), /features/);
+  await assert.rejects(() => createServer({ storage: 'memory', database: { source: { items: [] } } }, { files: 'false' }), /only a configuration/);
+  await assert.rejects(() => createServer({ storage: 'memory', database: { source: { items: [] } } }, { unknown: true }), /only a configuration/);
 });
 
 test('starts on an ephemeral port and validates server options', async () => {
@@ -355,8 +349,9 @@ test('starts on an ephemeral port and validates server options', async () => {
 
   try {
     const serverFacade = await createServer({
-      database: { path: databasePath },
-      files: { directory: filesDirectoryPath, metadata: filesMetadataPath },
+      storage: 'file',
+      database: { source: databasePath },
+      files: { source: filesDirectoryPath, metadata: filesMetadataPath },
       server: { host: '127.0.0.1', logger: false, port: 0 },
     });
     const server = serverFacade.fastify();
@@ -376,11 +371,17 @@ test('starts on an ephemeral port and validates server options', async () => {
     assert.equal(uploadResponse.status, 201);
     assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), filePayload);
     await server.close();
-    await assert.rejects(() => startServer({ database: { path: databasePath }, server: { logger: false, port: -1 } }), /config\.server\.port/);
-    await assert.rejects(() => startServer({ database: { path: databasePath }, server: { logger: false, maxPageSize: 0 } }), /maxPageSize/);
-    await assert.rejects(() => startServer({ database: { path: databasePath }, server: { logger: false, maxFileSize: 0 } }), /maxFileSize/);
-    await assert.rejects(() => startServer({ database: { path: databasePath }, files: { directory: '', metadata: filesMetadataPath }, server: { logger: false } }), /config\.files\.directory/);
-    await assert.rejects(() => startServer({ database: { path: databasePath }, files: { directory: filesDirectoryPath }, server: { logger: false } }), /config\.files\.metadata/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false, port: -1 } }), /config\.server\.port/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false, maxPageSize: 0 } }), /maxPageSize/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false, maxFileSize: 0 } }), /maxFileSize/);
+    await assert.rejects(
+      () => startServer({ storage: 'file', database: { source: databasePath }, files: { source: '', metadata: filesMetadataPath }, server: { logger: false } }),
+      /config\.files\.source/,
+    );
+    await assert.rejects(
+      () => startServer({ storage: 'file', database: { source: databasePath }, files: { source: filesDirectoryPath, metadata: '' }, server: { logger: false } }),
+      /config\.files\.metadata/,
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

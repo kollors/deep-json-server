@@ -1,3 +1,4 @@
+import type { Storage } from '../core/storage.js';
 import { errorMessage } from '../core/utils.js';
 export interface MemoryFile {
   content: Uint8Array;
@@ -5,7 +6,7 @@ export interface MemoryFile {
   mimeType: string;
   name: string;
 }
-export type FilesConfig = { data: MemoryFile[]; directory?: never; metadata?: never } | { data?: never; directory: string; metadata: string };
+export type FilesConfig<S extends Storage = Storage> = S extends 'file' ? { source: string; metadata?: string } : { source: MemoryFile[]; metadata?: never };
 
 import type { Readable } from 'node:stream';
 import { domainError } from '../core/errors.js';

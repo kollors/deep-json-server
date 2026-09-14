@@ -11,7 +11,7 @@ import { Engine } from '../dist/src/core/engine.js';
 import { configure, readConfigModule } from '../dist/src/server/config.js';
 import { createConfiguredServer } from '../dist/src/server/create.js';
 
-const model = (fields = {}) => ({ Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } });
+const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const temporary = async (t) => {
   const path = await mkdtemp(join(tmpdir(), 'deep-alpha3-'));
   t.after(() => rm(path, { recursive: true, force: true }));
@@ -30,7 +30,7 @@ const gql = (app, query) => app.inject({ method: 'POST', url: '/graphql', payloa
 test('file uploads and moves preserve database, counters, schema and config inputs', async (t) => {
   const directory = await temporary(t);
   const sourcePath = join(directory, 'server.config.mjs');
-  const config = { database: { path: 'db.json', schema: 'model.json' }, files: { directory: '.', metadata: 'files.json' }, server: { logger: false } };
+  const config = { storage: 'file', database: { source: 'db.json', schema: 'model.json' }, files: { source: '.', metadata: 'files.json' }, server: { logger: false } };
   const contents = {
     'db.json': JSON.stringify({ items: [{ id: '1' }] }),
     'db.json.counters.json': '{}',
@@ -51,7 +51,9 @@ test('file uploads and moves preserve database, counters, schema and config inpu
     assert.equal(await readFile(join(directory, name), 'utf8'), content);
   }
   assert.equal((await app.inject('/items/1')).json().id, '1');
-  const conflicting = (await createServer({ database: { path: join(directory, 'db.json') }, files: { directory, metadata: join(directory, 'db.json') }, server: { logger: false } })).fastify();
+  const conflicting = (
+    await createServer({ storage: 'file', database: { source: join(directory, 'db.json') }, files: { source: directory, metadata: join(directory, 'db.json') }, server: { logger: false } })
+  ).fastify();
   try {
     await assert.rejects(() => conflicting.ready(), /protected/);
   } finally {
@@ -60,7 +62,9 @@ test('file uploads and moves preserve database, counters, schema and config inpu
   assert.equal(await readFile(join(directory, 'db.json'), 'utf8'), contents['db.json']);
   const alias = join(directory, 'storage-alias');
   await symlink(directory, alias);
-  const aliased = (await createServer({ database: { data: { items: [] } }, files: { directory: alias, metadata: join(directory, 'files.json') }, server: { logger: false } })).fastify();
+  const aliased = (
+    await createServer({ storage: 'file', database: { source: join(directory, 'db.json') }, files: { source: alias, metadata: join(directory, 'files.json') }, server: { logger: false } })
+  ).fastify();
   t.after(() => aliased.close());
   const originalMetadata = await readFile(join(directory, 'files.json'), 'utf8');
   const response = await aliased.inject({
@@ -73,19 +77,19 @@ test('file uploads and moves preserve database, counters, schema and config inpu
   assert.equal(await readFile(join(directory, 'files.json'), 'utf8'), originalMetadata);
 });
 
-test('generation accepts schema-only config and rejects colliding destinations before writes', async (t) => {
+test('generation reads only the schema and rejects colliding destinations before writes', async (t) => {
   const directory = await temporary(t);
   const source = join(directory, 'config.mjs');
   const schemaPath = join(directory, 'model.json');
   await writeFile(schemaPath, JSON.stringify(model()));
-  const config = { database: { schema: 'model.json' }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
-  const run = async (value, formats = 'openapi,graphql') => {
+  const config = { storage: 'file', database: { source: 'missing-db.json', schema: 'model.json' }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
+  const run = async (value) => {
     await writeFile(source, `export default ${JSON.stringify(value)};`);
-    return runCli(['generate', formats, source]);
+    return runCli(['--generate-only', source]);
   };
   await run(config);
   assert.match(await readFile(join(directory, 'api.graphql'), 'utf8'), /itemList/);
-  await run({ ...config, files: 'ignored by GraphQL', server: { port: 'ignored by GraphQL' } }, 'graphql');
+  await assert.rejects(() => run({ ...config, openapi: undefined, files: 'invalid' }), /config.files/);
   const original = await readFile(join(directory, 'api.yaml'), 'utf8');
   await assert.rejects(() => run({ ...config, graphql: { path: 'api.yaml' } }), /different/);
   assert.equal(await readFile(join(directory, 'api.yaml'), 'utf8'), original);
@@ -112,7 +116,7 @@ test('pagination and info snapshots agree across public generators and the serve
   ])
     await assert.rejects(() => generateOpenapi(schema, options));
   const info = { title: 'Original', version: '1' };
-  const { facade, app } = await setup(t, { database: { schema, data: { items: [] } }, openapi: { enabled: true, info }, server: { maxPageSize: 5, port: 0 } });
+  const { facade, app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } }, openapi: { info }, server: { maxPageSize: 5, port: 0 } });
   info.title = 'Changed';
   const fromFacade = await facade.openapi();
   const fromEndpoint = (await app.inject('/openapi.json')).json();
@@ -123,7 +127,7 @@ test('pagination and info snapshots agree across public generators and the serve
 
 test('listen preserves configured host when overriding only the port in promise and callback forms', async (t) => {
   for (const callback of [false, true]) {
-    const { app } = await setup(t, { database: { data: { items: [] } }, server: { host: '127.0.0.2', port: 4001 } });
+    const { app } = await setup(t, { storage: 'memory', database: { source: { items: [] } }, server: { host: '127.0.0.2', port: 4001 } });
     const address = callback ? await new Promise((resolve, reject) => app.listen({ port: 0 }, (error, result) => (error ? reject(error) : resolve(result)))) : await app.listen({ port: 0 });
     assert.match(address, /^http:\/\/127\.0\.0\.2:/);
   }
@@ -131,7 +135,7 @@ test('listen preserves configured host when overriding only the port in promise 
 
 test('nested field lookups reject inherited names and empty objects remain writable in REST', async (t) => {
   const schema = model({ profile: { type: 'object' }, 'profile.name': { type: 'string' }, settings: { type: 'object' } });
-  const { app } = await setup(t, { database: { schema, data: { items: [] } } });
+  const { app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } } });
   const created = await app.inject({ method: 'POST', url: '/items', payload: { settings: {}, profile: { name: 'A' } } });
   assert.equal(created.statusCode, 201, created.body);
   assert.deepEqual(created.json().settings, {});
@@ -164,8 +168,9 @@ test('OpenAPI preserves annotations on objects and relations', async () => {
 
 test('GraphQL prepares each selected list once and REST reuses nested plans', async (t) => {
   const { app } = await setup(t, {
-    database: { schema: model({ rows: { type: 'object[]' }, 'rows.name': { type: 'string' } }), data: { items: Array.from({ length: 10 }, (_, i) => ({ id: String(i), rows: [{ name: 'x' }] })) } },
-    graphql: { enabled: true },
+    storage: 'memory',
+    database: { schema: model({ rows: { type: 'object[]' }, 'rows.name': { type: 'string' } }), source: { items: Array.from({ length: 10 }, (_, i) => ({ id: String(i), rows: [{ name: 'x' }] })) } },
+    graphql: {},
   });
   const original = Engine.prototype.prepareOptions;
   let calls = 0;
@@ -192,7 +197,7 @@ test('GraphQL prepares each selected list once and REST reuses nested plans', as
 });
 
 test('inferred relation indexes use collections rather than singular model names', async (t) => {
-  const { app } = await setup(t, { database: { data: { user: [{ id: '1', name: 'A' }], users: [{ id: '1', name: 'B' }], links: [{ id: '1', userId: '1', usersId: '1' }] } } });
+  const { app } = await setup(t, { storage: 'memory', database: { source: { user: [{ id: '1', name: 'A' }], users: [{ id: '1', name: 'B' }], links: [{ id: '1', userId: '1', usersId: '1' }] } } });
   for (const scope of [[{ user: [{ name: true }], users: [{ name: true }] }], [{ users: [{ name: true }], user: [{ name: true }] }]]) {
     const result = (await app.inject(url('/links/1', { scope: scope }))).json();
     assert.deepEqual(result, { user: { name: 'A' }, users: { name: 'B' } });
@@ -206,7 +211,7 @@ test('mixed schemaless shapes preserve projected data and never expose internal 
     { id: '3', tagId: 't', profile: 'scalar' },
   ];
   for (const items of [mixed, [...mixed].reverse()]) {
-    const { app } = await setup(t, { database: { data: { items, tags: [{ id: 't' }], privateNotes: [{ id: 'p', text: 'fixture' }] } } });
+    const { app } = await setup(t, { storage: 'memory', database: { source: { items, tags: [{ id: 't' }], privateNotes: [{ id: 'p', text: 'fixture' }] } } });
     const result = await app.inject(url('/items/1', { scope: [{ profile: [{ name: true }] }] }));
     assert.equal(result.statusCode, 200, result.body);
     assert.deepEqual(result.json(), { profile: { data: [{ name: 'A' }], total: 1 } });
@@ -239,10 +244,10 @@ test('public imports and REST startup do not load unrelated API runtimes', async
       const mode = ${JSON.stringify(mode)};
       const entry = mode === 'openapi' ? './dist/src/openapi/entry.js' : mode === 'graphql' ? './dist/src/graphql/entry.js' : './dist/index.js';
       const api = await import(entry);
-      const schema = { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } };
+      const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
       if (mode === 'openapi') await api.generateOpenapi(schema, { auth: true });
       if (mode === 'graphql') await api.generateGraphql(schema);
-      if (mode === 'rest') { const app = (await api.createServer({ database: { data: { items: [] } }, server: { logger: false } })).fastify(); await app.ready(); await app.close(); }
+      if (mode === 'rest') { const app = (await api.createServer({ storage: 'memory', database: { source: { items: [] } }, server: { logger: false } })).fastify(); await app.ready(); await app.close(); }
       console.log(JSON.stringify([...loaded]));
     `,
       ],

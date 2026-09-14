@@ -1,5 +1,6 @@
 import { getBoolean, normalizeAddress } from '../core/config-values.js';
 import { assertApi, loadModel, type Model, type ModelSchema } from '../core/model.js';
+import { assertKnownKeys } from '../core/utils.js';
 import { buildOpenapiDocument } from './document.js';
 import { normalizeOpenapiInfo, type OpenapiOptions } from './options.js';
 import type { OpenapiDocument } from './types.js';
@@ -17,7 +18,8 @@ export function openapiFromModel(model: Model | undefined, options: OpenapiOptio
  * @example Корректное описание → Promise<OpenapiDocument> с openapi: '3.0.3'.
  */
 export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions = {}): Promise<OpenapiDocument> {
-  return openapiFromModel(await loadModel(schema, options), options);
+  assertKnownKeys(options, new Set(['auth', 'files', 'host', 'port', 'pageSize', 'maxPageSize', 'info']), 'options');
+  return openapiFromModel(await loadModel(schema, { auth: options.auth, api: ['openapi'] }), options);
 }
 
 /** Строит HTTP-адрес, оборачивая IPv6 в квадратные скобки; нулевой порт даёт относительный адрес.

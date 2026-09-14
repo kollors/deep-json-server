@@ -11,8 +11,6 @@ export function normalizeOpenapiInfo(value: unknown): OpenapiInfo | undefined {
 }
 
 export interface OpenapiOptions {
-  timestamps?: boolean;
-  softDelete?: boolean;
   auth?: boolean;
   files?: boolean;
   host?: string;

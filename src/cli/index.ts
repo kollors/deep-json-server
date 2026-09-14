@@ -4,29 +4,62 @@ import { inputPaths, validateExportPaths } from '../core/paths.js';
 import { isObject } from '../core/utils.js';
 import { writeGraphql } from '../graphql/entry.js';
 import { writeOpenapi } from '../openapi/entry.js';
-import { configure, configureGeneration, readConfigModule } from '../server/config.js';
+import { configure, type NormalizedServerConfig, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
-import { resolveFeatures, type ServerFeatures } from '../server/features.js';
+import { configuredModel } from '../server/model.js';
 
 const HELP_TEXT = `Deep JSON Server
 
 Usage:
   deep-json-server [options] <server.config.js>
-  deep-json-server generate <openapi|graphql|openapi,graphql> <server.config.js>
 
-  --timestamps    Track record creation and update times
-  --soft-delete   Mark deleted records instead of removing them
-  --files         Enable file routes
-  --graphql       Enable the GraphQL endpoint
-  --openapi       Enable the OpenAPI endpoint
-  --host <host>   Server address
-  --port <port>   Server port
-  --help, -h      Show help
-  --version, -v   Show version
+  --generate       Export configured schemas, then start the server
+  --generate-only  Export configured schemas and exit
+  --host <host>    Server address
+  --port <port>    Server port
+  --help, -h       Show help
+  --version, -v    Show version
 
-Files are enabled when configured. Generate writes schemas to the configured paths.`;
-/** Разбирает аргументы командной строки и запускает сервер либо экспорт; справку и версию пишет в stdout.
- * @example runCli(['--help']) → Promise<void> и текст справки без запуска сервера.
+Modules and export formats are selected by configuration sections.
+Generate flags are mutually exclusive and require output paths.`;
+
+/** Проверяет все назначения, строит обе схемы и только затем сохраняет файлы.
+ * @example Секции openapi и graphql с path → два файла; нет path → ошибка до записи.
+ */
+async function generate(config: NormalizedServerConfig, source: Record<string, unknown>, directory: string, sourcePath: string): Promise<void> {
+  if (!config.openapi && !config.graphql) throw new Error('Generation requires an openapi or graphql section');
+  const outputs: string[] = [];
+  for (const format of ['openapi', 'graphql'] as const) {
+    if (!config[format]) continue;
+    const path = config[format].path;
+    if (!path) throw new Error(`Укажите config.${format}.path`);
+    outputs.push(path);
+  }
+  await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
+  const model = await configuredModel(config);
+  const openapi = config.openapi
+    ? (await import('../openapi/generate.js')).openapiFromModel(model, {
+        files: config.files !== undefined,
+        auth: config.auth !== undefined,
+        host: config.server.host,
+        port: config.server.port,
+        pageSize: config.server.pageSize,
+        maxPageSize: config.server.maxPageSize,
+        info: config.openapi.info,
+      })
+    : undefined;
+  const graphql = config.graphql ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
+  if (openapi && config.openapi?.path) {
+    await writeOpenapi(openapi, config.openapi.path);
+    process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);
+  }
+  if (graphql && config.graphql?.path) {
+    await writeGraphql(graphql, config.graphql.path);
+    process.stdout.write(`GraphQL: ${config.graphql.path}\n`);
+  }
+}
+/** Разбирает флаги, выполняет экспорт по секциям конфигурации и при необходимости запускает сервер.
+ * @example runCli(['--generate-only', 'config.mjs']) → файлы схем без открытия порта.
  */
 export async function runCli(args = process.argv.slice(2), services: { createServer: typeof createConfiguredServer } = { createServer: createConfiguredServer }): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
@@ -39,8 +72,6 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   }
   const positional: string[] = [];
   const seen = new Set<string>();
-  const features: ServerFeatures = {};
-  const recordFlags: { timestamps?: boolean; softDelete?: boolean } = {};
   let host: string | undefined;
   let port: number | undefined;
   for (let index = 0; index < args.length; index++) {
@@ -49,7 +80,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
       positional.push(arg);
       continue;
     }
-    if (!['--files', '--graphql', '--openapi', '--timestamps', '--soft-delete', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
+    if (!['--generate', '--generate-only', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
     seen.add(arg);
     if (arg === '--host' || arg === '--port') {
       const value = args[++index];
@@ -59,71 +90,25 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
         if (!/^\d+$/.test(value)) throw new Error('Invalid --port');
         port = Number(value);
       }
-    } else if (arg === '--timestamps') recordFlags.timestamps = true;
-    else if (arg === '--soft-delete') recordFlags.softDelete = true;
-    else features[arg.slice(2) as keyof ServerFeatures] = true;
-  }
-  const generate = positional[0] === 'generate';
-  const configPath = positional[generate ? 2 : 0];
-  if (!configPath) throw new Error('Укажите путь к файлу конфигурации');
-  if (positional.length !== (generate ? 3 : 1)) throw new Error('Можно указать только один файл конфигурации');
-  const formats = generate ? positional[1].split(',') : [];
-  if (generate && (formats.some((format) => !['openapi', 'graphql'].includes(format)) || new Set(formats).size !== formats.length)) throw new Error('Invalid generation format');
-  if (generate && (features.graphql || features.openapi)) throw new Error('Endpoint flags are only available when starting the server');
-  const source = await readConfigModule(configPath);
-  const serverOptions = generate && !formats.includes('openapi') ? {} : (source.config.server ?? {});
-  if (!isObject(serverOptions)) throw new Error('config.server must be an object');
-  const overrides = { host: host ?? serverOptions.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? serverOptions.port ?? Number(process.env.PORT ?? DEFAULT_PORT) };
-  const config = generate
-    ? configureGeneration(source.config, formats, source.directory, source.path, { ...overrides, files: features.files, ...recordFlags } as {
-        host: string;
-        port: number;
-        files?: boolean;
-        timestamps?: boolean;
-        softDelete?: boolean;
-      })
-    : configure(
-        {
-          ...source.config,
-          ...(Object.keys(recordFlags).length ? { database: { ...(isObject(source.config.database) ? source.config.database : {}), ...recordFlags } } : {}),
-          server: { ...serverOptions, ...overrides },
-        },
-        source.directory,
-        source.path,
-      );
-  if (generate) {
-    if (!config.database.schema) throw new Error('Generation requires an explicit model schema');
-    const destinations = formats.map((format) => {
-      const path = config[format as 'openapi' | 'graphql'].path;
-      if (!path) throw new Error(`Укажите config.${format}.path`);
-      return path;
-    });
-    await validateExportPaths(destinations, inputPaths(source.config, source.directory, source.path));
-    const { loadModel } = await import('../core/model.js');
-    const model = await loadModel(config.database.schema, { auth: config.auth != null, timestamps: config.database.timestamps, softDelete: config.database.softDelete });
-    const openapi = formats.includes('openapi')
-      ? (await import('../openapi/generate.js')).openapiFromModel(model, {
-          files: config.files != null,
-          auth: config.auth != null,
-          host: config.server.host,
-          port: config.server.port,
-          pageSize: config.server.pageSize,
-          maxPageSize: config.server.maxPageSize,
-          info: config.openapi.info,
-        })
-      : undefined;
-    const graphql = formats.includes('graphql') ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
-    if (openapi) {
-      await writeOpenapi(openapi, config.openapi.path!);
-      process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);
     }
-    if (graphql) {
-      await writeGraphql(graphql, config.graphql.path!);
-      process.stdout.write(`GraphQL: ${config.graphql.path}\n`);
-    }
-    return;
   }
-  const server = (await services.createServer(config, resolveFeatures(config, features))).fastify();
-  await server.listen();
-  server.log.info('Deep JSON Server started');
+  if (seen.has('--generate') && seen.has('--generate-only')) throw new Error('--generate and --generate-only are mutually exclusive');
+  if (!positional.length) throw new Error('Укажите путь к файлу конфигурации');
+  if (positional.length !== 1) throw new Error('Можно указать только один файл конфигурации');
+  const source = await readConfigModule(positional[0]);
+  const server = source.config.server ?? {};
+  if (!isObject(server)) throw new Error('config.server must be an object');
+  const config = configure(
+    {
+      ...source.config,
+      server: { ...server, host: host ?? server.host ?? process.env.HOST ?? DEFAULT_HOST, port: port ?? server.port ?? Number(process.env.PORT ?? DEFAULT_PORT) },
+    },
+    source.directory,
+    source.path,
+  );
+  if (seen.has('--generate') || seen.has('--generate-only')) await generate(config, source.config, source.directory, source.path);
+  if (seen.has('--generate-only')) return;
+  const app = (await services.createServer(config)).fastify();
+  await app.listen();
+  app.log.info('Deep JSON Server started');
 }

@@ -78,7 +78,7 @@ export class AuthStore {
 /** Загружает массив из файла или памяти и подключает запись в тот же источник.
  * @example Массив → хранилище в памяти; 'users.json' → чтение и сохранение JSON-массива через JSONFile.
  */
-export async function createAuthStore(source: AuthConfig['users']): Promise<AuthStore> {
+export async function createAuthStore(source: AuthConfig['source']): Promise<AuthStore> {
   const file = typeof source === 'string' ? new JSONFile<StoredUser[]>(source) : undefined;
   const records = file ? await file.read() : source;
   if (file && records === null) throw new Error(`Auth users file not found: ${source}`);

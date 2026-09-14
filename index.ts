@@ -8,7 +8,6 @@ export { generateGraphql, writeGraphql } from './src/graphql/entry.js';
 export type { OpenapiOptions } from './src/openapi/entry.js';
 export { generateOpenapi, writeOpenapi } from './src/openapi/entry.js';
 export type { OpenapiDocument } from './src/openapi/types.js';
-export type { DatabaseConfig, DeepJsonServerConfig, FilesConfig, GraphqlConfig, MemoryFile, OpenapiConfig, ServerConfig } from './src/server/config.js';
+export type { DatabaseConfig, DeepJsonServerConfig, FilesConfig, GraphqlConfig, MemoryFile, OpenapiConfig, ServerConfig, Storage } from './src/server/config.js';
 export type { ServerFacade } from './src/server/create.js';
 export { createServer } from './src/server/create.js';
-export type { ServerFeatures } from './src/server/features.js';

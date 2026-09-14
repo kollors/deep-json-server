@@ -1,52 +1,29 @@
+import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type { FastifyServerOptions } from 'fastify';
 import type { AuthConfig } from '../auth/contract.js';
 import { getBoolean, getObject, getPositiveInteger, getString, normalizeAddress } from '../core/config-values.js';
 import { DEFAULT_MAX_FILE_SIZE } from '../core/constants.js';
 import type { DatabaseConfig } from '../core/database.js';
-import { recordOptions } from '../core/lifecycle/options.js';
-import { errorMessage } from '../core/utils.js';
-import type { FilesConfig, MemoryFile } from '../files/contract.js';
+import type { ModelSchema } from '../core/model.js';
+import { normalizePagination } from '../core/pagination.js';
+import type { Storage } from '../core/storage.js';
+import { assertKnownKeys, errorMessage, isObject } from '../core/utils.js';
+import type { FilesConfig } from '../files/contract.js';
 import { normalizeOpenapiInfo, type OpenapiInfo } from '../openapi/options.js';
 
 export type { AuthConfig } from '../auth/contract.js';
-
-import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type { FastifyServerOptions } from 'fastify';
-import type { ModelSchema } from '../core/model.js';
-import { normalizePagination } from '../core/pagination.js';
-import type { DatabaseData } from '../core/types.js';
-import { assertKnownKeys, isObject } from '../core/utils.js';
-
-const CONFIG_KEYS = new Set(['database', 'files', 'openapi', 'graphql', 'server', 'auth']);
-const DATABASE_KEYS = new Set(['data', 'path', 'schema', 'timestamps', 'softDelete']);
-const FILES_KEYS = new Set(['data', 'directory', 'metadata']);
-const OPENAPI_KEYS = new Set(['path', 'info', 'enabled', 'endpoint']);
-const GRAPHQL_KEYS = new Set(['path', 'enabled', 'endpoint']);
-const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
-let configImportIndex = 0;
-/** Глубоко копирует структурированные данные и оборачивает ошибку неподдерживаемого значения.
- * @example copyInput({ a: [1] }) → независимая копия { a: [1] }; функция в значении → ошибка.
- */
-const copyInput = <T>(value: T): T => {
-  try {
-    return structuredClone(value);
-  } catch (error) {
-    throw new Error('Input must contain JSON data or binary file content', { cause: error });
-  }
-};
-
-export type DatabaseSchema = ModelSchema;
 export type { DatabaseConfig } from '../core/database.js';
+export type { Storage } from '../core/storage.js';
 export type { FilesConfig, MemoryFile } from '../files/contract.js';
+export type DatabaseSchema = ModelSchema;
 export interface OpenapiConfig {
-  enabled?: boolean;
   endpoint?: string;
   path?: string;
   info?: OpenapiInfo;
 }
 export interface GraphqlConfig {
   path?: string;
-  enabled?: boolean;
   endpoint?: string;
 }
 export interface ServerConfig {
@@ -58,185 +35,117 @@ export interface ServerConfig {
   pageSize?: number;
   port?: number;
 }
-export interface DeepJsonServerConfig {
-  database: DatabaseConfig;
-  files?: FilesConfig;
-  auth?: AuthConfig;
-  openapi?: OpenapiConfig;
-  graphql?: GraphqlConfig;
-  server?: ServerConfig;
-}
+export type DeepJsonServerConfig = {
+  [S in Storage]: {
+    storage: S;
+    database: DatabaseConfig<S>;
+    files?: FilesConfig<S>;
+    auth?: AuthConfig<S>;
+    openapi?: OpenapiConfig;
+    graphql?: GraphqlConfig;
+    server?: ServerConfig;
+  };
+}[Storage];
 export interface NormalizedServerConfig {
+  storage: Storage;
   database: DatabaseConfig;
   files?: FilesConfig;
   auth?: AuthConfig;
-  openapi: OpenapiConfig & Required<Pick<OpenapiConfig, 'enabled' | 'endpoint'>>;
-  graphql: GraphqlConfig & Required<Pick<GraphqlConfig, 'enabled' | 'endpoint'>>;
+  openapi?: OpenapiConfig & { endpoint: string };
+  graphql?: GraphqlConfig & { endpoint: string };
   server: Required<ServerConfig>;
 }
+const CONFIG_KEYS = new Set(['storage', 'database', 'files', 'auth', 'openapi', 'graphql', 'server']);
+const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
+let configImportIndex = 0;
 
-/** Делает заданный путь абсолютным относительно указанного каталога.
- * @example resolveConfigPath('a.json', '/tmp') → '/tmp/a.json'; undefined → undefined.
+/** Проверяет секцию и её допустимые ключи; undefined означает отсутствие секции.
+ * @example section({}, 'auth', []) → {}; section(null, 'auth', []) → ошибка.
  */
-const resolveConfigPath = (value: string | undefined, directoryPath: string): string | undefined => (value == null ? undefined : resolve(directoryPath, value));
-
-/** Принимает объект описания или разрешает путь к нему относительно каталога.
- * @example normalizeSchema('schema.json', '/tmp') → '/tmp/schema.json'.
+function section(value: unknown, name: string, keys: string[]): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  const object = getObject(value, `config.${name}`, true);
+  assertKnownKeys(object, new Set(keys), `config.${name}`);
+  return object;
+}
+/** Проверяет путь либо начальные данные в соответствии с общим режимом хранения.
+ * @example source('db.json', 'file', 'database.source', '/tmp') → '/tmp/db.json'.
  */
-const normalizeSchema = (schema: unknown, directoryPath: string): DatabaseSchema | string | undefined => {
-  if (schema == null) {
-    return undefined;
+function source(value: unknown, storage: Storage, name: string, directory: string, array = false): unknown {
+  if (storage === 'file') return resolve(directory, getString(value, `config.${name}`, true));
+  if (array ? !Array.isArray(value) : !isObject(value)) throw new Error(`config.${name} must contain ${array ? 'an array' : 'an object'} for memory storage`);
+  try {
+    return structuredClone(value);
+  } catch (error) {
+    throw new Error(`config.${name} must contain structured data`, { cause: error });
   }
-
-  if (typeof schema === 'string') {
-    return resolve(directoryPath, getString(schema, 'config.database.schema', true));
-  }
-
-  return getObject(schema, 'config.database.schema', true) as DatabaseSchema;
-};
-
-/** Проверяет выбор между файлом и данными в памяти, разрешает пути и копирует данные.
- * @example { path: 'db.json' } с каталогом /tmp → path: '/tmp/db.json'; одновременно data и path → ошибка.
+}
+/** Проверяет секции настроек и возвращает независимые данные с абсолютными путями.
+ * @example { storage: 'file', database: { source: 'db.json' } } → абсолютный database.source.
  */
-const normalizeDatabase = (value: unknown, directoryPath: string): DatabaseConfig => {
-  const database = getObject(value, 'config.database', true);
-
-  assertKnownKeys(database, DATABASE_KEYS, 'config.database');
-
-  const hasData = database.data != null;
-  const hasPath = database.path != null;
-
-  if (hasData === hasPath) {
-    throw new Error('Укажите ровно один из ключей config.database.path и config.database.data');
-  }
-
-  const schema = normalizeSchema(database.schema, directoryPath);
-  recordOptions({ timestamps: database.timestamps as boolean | undefined, softDelete: database.softDelete as boolean | undefined });
-  const flags = {
-    ...(database.timestamps !== undefined ? { timestamps: database.timestamps as boolean } : {}),
-    ...(database.softDelete !== undefined ? { softDelete: database.softDelete as boolean } : {}),
-  };
-
-  if (hasData) {
-    return { data: copyInput(getObject(database.data, 'config.database.data', true)) as DatabaseData, schema, ...flags };
-  }
-
-  return { path: resolve(directoryPath, getString(database.path, 'config.database.path', true)), schema, ...flags };
-};
-
-/** Проверяет выбор между файлами в памяти и дисковым хранилищем, разрешает пути.
- * @example normalizeFiles(undefined, '/tmp') → undefined; { data: [] } → { data: [] }.
- */
-const normalizeFiles = (value: unknown, directoryPath: string): FilesConfig | undefined => {
-  const files = getObject(value, 'config.files');
-
-  if (files == null) {
-    return undefined;
-  }
-
-  assertKnownKeys(files, FILES_KEYS, 'config.files');
-
-  const hasData = files.data != null;
-  const hasDiskStorage = files.directory != null || files.metadata != null;
-
-  if (hasData === hasDiskStorage) {
-    throw new Error('Укажите либо config.files.data, либо пару config.files.directory и config.files.metadata');
-  }
-
-  if (hasData) {
-    if (!Array.isArray(files.data)) {
-      throw new Error('Ключ config.files.data должен содержать массив');
-    }
-
-    return { data: copyInput(files.data) as MemoryFile[] };
-  }
-
-  return {
-    directory: resolve(directoryPath, getString(files.directory, 'config.files.directory', true)),
-    metadata: resolve(directoryPath, getString(files.metadata, 'config.files.metadata', true)),
-  };
-};
-
-/** Проверяет источник учётных записей и срок сессии; массив копирует, путь делает абсолютным.
- * @example { users: 'users.json' } с каталогом /tmp → users: '/tmp/users.json'.
- */
-const normalizeAuth = (value: unknown, directory: string): AuthConfig | undefined => {
-  const auth = getObject(value, 'config.auth');
-  if (!auth) return undefined;
-  assertKnownKeys(auth, new Set(['users', 'expiresIn']), 'config.auth');
-  if (typeof auth.users !== 'string' && !Array.isArray(auth.users)) throw new Error('config.auth.users must be a file path or user array');
-  const expiresIn = getPositiveInteger(auth.expiresIn, 'config.auth.expiresIn');
-  if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
-  return {
-    users: typeof auth.users === 'string' ? resolve(directory, getString(auth.users, 'config.auth.users', true)) : (copyInput(auth.users) as AuthConfig['users']),
-    expiresIn,
-  };
-};
-
-/** Проверяет секции настроек и возвращает нормализованный объект с абсолютными путями.
- * @example { database: { path: 'db.json' } } с каталогом /tmp → database.path: '/tmp/db.json'.
- */
-const normalizeConfig = (config: unknown, directoryPath = '.'): NormalizedServerConfig => {
-  if (!isObject(config)) {
-    throw new Error('Конфигурация сервера должна содержать JSON-объект');
-  }
-
+function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfig {
+  const config = getObject(value, 'config', true);
   assertKnownKeys(config, CONFIG_KEYS, 'config');
-
-  const database = normalizeDatabase(config.database, directoryPath);
-  const files = normalizeFiles(config.files, directoryPath);
-  const openapi = getObject(config.openapi, 'config.openapi') ?? {};
-  const graphql = getObject(config.graphql, 'config.graphql') ?? {};
-  const server = getObject(config.server, 'config.server') ?? {};
-
-  assertKnownKeys(openapi, OPENAPI_KEYS, 'config.openapi');
-  assertKnownKeys(graphql, GRAPHQL_KEYS, 'config.graphql');
-  const openapiEnabled = getBoolean(openapi.enabled, 'config.openapi.enabled') ?? false;
-  const openapiEndpoint = getString(openapi.endpoint, 'config.openapi.endpoint');
-  if (openapiEndpoint && !/^\/[A-Za-z][A-Za-z0-9_./-]*$/.test(openapiEndpoint)) throw new Error('Invalid OpenAPI endpoint');
-  const graphqlEnabled = getBoolean(graphql.enabled, 'config.graphql.enabled') ?? false;
-  const endpoint = getString(graphql.endpoint, 'config.graphql.endpoint');
-  if (endpoint && (!/^\/[A-Za-z][A-Za-z0-9_/-]*$/.test(endpoint) || endpoint === '/')) throw new Error('Invalid GraphQL endpoint');
-  const info = normalizeOpenapiInfo(openapi.info);
-  assertKnownKeys(server, SERVER_KEYS, 'config.server');
-
-  const openapiPath = getString(openapi.path, 'config.openapi.path');
-  const cors = getBoolean(server.cors ?? undefined, 'config.server.cors') ?? true;
-  const { host, port } = normalizeAddress(server);
-  const logger = server.logger;
-  const maxFileSize = getPositiveInteger(server.maxFileSize, 'config.server.maxFileSize');
-  const pagination = normalizePagination(server);
-
-  if (logger != null && typeof logger !== 'boolean' && !isObject(logger)) {
-    throw new Error('Ключ config.server.logger должен содержать boolean или JSON-объект');
+  if (config.storage !== 'file' && config.storage !== 'memory') throw new Error("config.storage must be 'file' or 'memory'");
+  const storage = config.storage;
+  const database = section(config.database, 'database', ['source', 'schema']);
+  if (!database) throw new Error('config.database is required');
+  const normalizedDatabase: DatabaseConfig = {
+    source: source(database.source, storage, 'database.source', directory) as DatabaseConfig['source'],
+    ...(database.schema !== undefined ? { schema: source(database.schema, storage, 'database.schema', directory) as DatabaseConfig['schema'] } : {}),
+  };
+  const files = section(config.files, 'files', storage === 'file' ? ['source', 'metadata'] : ['source']);
+  const normalizedFiles: FilesConfig | undefined =
+    files === undefined
+      ? undefined
+      : storage === 'file'
+        ? {
+            source: source(files.source, storage, 'files.source', directory) as string,
+            metadata:
+              files.metadata === undefined
+                ? resolve(directory, getString(files.source, 'config.files.source', true), '_database.json')
+                : resolve(directory, getString(files.metadata, 'config.files.metadata', true)),
+          }
+        : { source: source(files.source, storage, 'files.source', directory, true) as FilesConfig<'memory'>['source'] };
+  const auth = section(config.auth, 'auth', ['source', 'expiresIn']);
+  let normalizedAuth: AuthConfig | undefined;
+  if (auth) {
+    const expiresIn = getPositiveInteger(auth.expiresIn, 'config.auth.expiresIn');
+    if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
+    normalizedAuth = { source: source(auth.source, storage, 'auth.source', directory, true) as AuthConfig['source'], expiresIn };
   }
-
+  const openapi = section(config.openapi, 'openapi', ['path', 'info', 'endpoint']);
+  const graphql = section(config.graphql, 'graphql', ['path', 'endpoint']);
+  if ((openapi || graphql) && normalizedDatabase.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
+  const exportPath = (value: unknown, name: string) => (value === undefined ? undefined : resolve(directory, getString(value, name, true)));
+  const openapiEndpoint = getString(openapi?.endpoint, 'config.openapi.endpoint') ?? '/openapi.json';
+  const graphqlEndpoint = getString(graphql?.endpoint, 'config.graphql.endpoint') ?? '/graphql';
+  if (!/^\/[A-Za-z][A-Za-z0-9_./-]*$/.test(openapiEndpoint)) throw new Error('Invalid OpenAPI endpoint');
+  if (!/^\/[A-Za-z][A-Za-z0-9_/-]*$/.test(graphqlEndpoint)) throw new Error('Invalid GraphQL endpoint');
+  const server = getObject(config.server, 'config.server') ?? {};
+  assertKnownKeys(server, SERVER_KEYS, 'config.server');
+  const logger = server.logger;
+  if (logger != null && typeof logger !== 'boolean' && !isObject(logger)) throw new Error('config.server.logger must be boolean or an object');
   return {
-    database,
-    files,
-    auth: normalizeAuth(config.auth, directoryPath),
-    openapi: {
-      enabled: openapiEnabled,
-      endpoint: openapiEndpoint ?? '/openapi.json',
-      path: resolveConfigPath(openapiPath, directoryPath),
-      ...(info && { info }),
-    },
-    graphql: { path: resolveConfigPath(getString(graphql.path, 'config.graphql.path'), directoryPath), enabled: graphqlEnabled, endpoint: endpoint ?? '/graphql' },
+    storage,
+    database: normalizedDatabase,
+    files: normalizedFiles,
+    auth: normalizedAuth,
+    openapi: openapi ? { endpoint: openapiEndpoint, path: exportPath(openapi.path, 'config.openapi.path'), info: normalizeOpenapiInfo(openapi.info) } : undefined,
+    graphql: graphql ? { endpoint: graphqlEndpoint, path: exportPath(graphql.path, 'config.graphql.path') } : undefined,
     server: {
-      cors,
-      host,
+      ...normalizeAddress(server),
+      ...normalizePagination(server),
+      cors: getBoolean(server.cors, 'config.server.cors') ?? true,
       logger: (logger ?? true) as Required<ServerConfig>['logger'],
-      maxFileSize: maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
-      ...pagination,
-      port,
+      maxFileSize: getPositiveInteger(server.maxFileSize, 'config.server.maxFileSize') ?? DEFAULT_MAX_FILE_SIZE,
     },
   };
-};
-
-/** Проверяет настройки и разрешает относительные пути, не читая содержимое файлов.
- * @example При directoryPath = '/tmp' путь './db.json' → '/tmp/db.json'.
+}
+/** Нормализует объект конфигурации без чтения содержимого файлов.
+ * @example Путь './db.json' с directory = '/tmp' → '/tmp/db.json'.
  */
-export const normalizeServerConfig = (config: DeepJsonServerConfig, directoryPath?: string): NormalizedServerConfig => normalizeConfig(config, directoryPath);
+export const normalizeServerConfig = (config: DeepJsonServerConfig, directory?: string): NormalizedServerConfig => normalizeConfig(config, directory);
 
 /** Загружает default-экспорт ES-модуля, обходя кеш повторного импорта; выполняет код модуля.
  * @example Файл /tmp/config.mjs с export default {} → { config: {}, directory: '/tmp', path: '/tmp/config.mjs' }.
@@ -276,39 +185,4 @@ export function configure(config: unknown, directory: string, sourcePath?: strin
   const normalized = normalizeConfig(config, directory);
   if (sourcePath) sourcePaths.set(normalized, sourcePath);
   return normalized;
-}
-/** Выбирает настройки для указанных форматов экспорта и подставляет пустые данные вместо чтения базы.
- * @example formats = ['graphql'] → настройки генерации GraphQL с database.data = {}.
- */
-export function configureGeneration(
-  source: Record<string, unknown>,
-  formats: string[],
-  directory: string,
-  sourcePath: string,
-  overrides: { host?: string; port?: number; files?: boolean; timestamps?: boolean; softDelete?: boolean },
-): NormalizedServerConfig {
-  assertKnownKeys(source, CONFIG_KEYS, 'config');
-  const database = getObject(source.database, 'config.database', true);
-  if (database.schema === undefined) throw new Error('Generation requires an explicit model schema');
-  const openapi = formats.includes('openapi');
-  const server = openapi ? (getObject(source.server, 'config.server') ?? {}) : {};
-  return configure(
-    {
-      database: { data: {}, schema: database.schema, timestamps: overrides.timestamps ?? database.timestamps, softDelete: overrides.softDelete ?? database.softDelete },
-      auth: source.auth != null ? { users: [] } : undefined,
-      openapi: openapi ? source.openapi : undefined,
-      graphql: formats.includes('graphql') ? source.graphql : undefined,
-      files: openapi && (overrides.files || source.files != null) ? { data: [] } : undefined,
-      server: openapi
-        ? {
-            host: overrides.host ?? server.host,
-            port: overrides.port ?? server.port,
-            pageSize: server.pageSize,
-            maxPageSize: server.maxPageSize,
-          }
-        : {},
-    },
-    directory,
-    sourcePath,
-  );
 }

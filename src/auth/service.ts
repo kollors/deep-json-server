@@ -205,5 +205,5 @@ export class AuthService {
  * @example createAuthService({ users: [] }) → Promise<AuthService>; повторяющиеся id → ошибка.
  */
 export async function createAuthService(config: AuthConfig): Promise<AuthService> {
-  return new AuthService(await createAuthStore(config.users), config.expiresIn ?? DEFAULT_SESSION_SECONDS);
+  return new AuthService(await createAuthStore(config.source), config.expiresIn ?? DEFAULT_SESSION_SECONDS);
 }
