@@ -230,8 +230,8 @@ test('CLI enables auth and exports auth schemas without opening the users file',
     storage: 'file',
     database: { source: join(dir, 'missing-db.json'), schema: await writeJson(join(dir, 'schema.json'), schema) },
     auth: { source: './missing-users.json' },
-    openapi: { path: 'api.yaml' },
-    graphql: { path: 'api.graphql' },
+    openapi: { target: 'api.yaml' },
+    graphql: { target: 'api.graphql' },
   };
   const save = () => writeFile(source, `export default ${JSON.stringify(config)};`);
   await save();
@@ -255,11 +255,11 @@ test('CLI enables auth and exports auth schemas without opening the users file',
   await runCli(['--generate-only', source]);
   assert.equal((await readFile(join(dir, 'api.graphql'), 'utf8')).trimEnd(), await generateGraphql(schema, { auth: true }));
 
-  config.openapi.path = config.auth.source;
+  config.openapi.target = config.auth.source;
   await save();
   await assert.rejects(() => runCli(['--generate-only', source]), /overwrite/);
   delete config.auth;
-  config.openapi.path = 'api.yaml';
+  config.openapi.target = 'api.yaml';
   await save();
   await runCli(['--generate-only', source]);
   assert.equal(parse(await readFile(join(dir, 'api.yaml'), 'utf8')).paths['/auth/login'], undefined);

@@ -4,7 +4,7 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**1.0.0-alpha.9 is a prerelease.** When upgrading from the previous alpha, add `storage`, use `source` for data sources, move definitions under `models`, and move timestamps and soft deletion settings to the schema root. Configuration sections now enable modules; use `--generate` or `--generate-only` for exports. The second `createServer` argument has been removed.
+**Breaking changes: 1.0.0-alpha.10.** Configuration and schema formats have changed. See [Configuration](#configuration) and [Model schema](#model-schema) for current examples.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.9`.
+To install a specific version, use `@1.0.0-alpha.10`.
 
 ## Quick start
 
@@ -44,7 +44,7 @@ Add a [model schema](#model-schema) to define relations and validation. See [que
 
 ## Configuration
 
-With `storage: 'file'`, all sources and the schema are paths. With `'memory'`, they are in-memory data. Modes cannot be mixed. The presence of `auth`, `files`, `graphql` and `openapi` enables those modules; `graphql: {}` and `openapi: {}` use the default endpoints.
+With `storage: 'file'`, all sources and the schema are paths. With `'memory'`, they are in-memory data. Modes cannot be mixed. The presence of `auth`, `files`, `graphql` and `openapi` enables those modules. `graphql: {}` and `openapi: {}` enable only the HTTP endpoints at their defaults; add `target` to export a schema.
 
 ```js
 export default {
@@ -52,8 +52,8 @@ export default {
   database: { source: './database.json', schema: './schema.json' },
   auth: { source: './users.json', expiresIn: 3600 },
   files: { source: './uploads' },
-  graphql: { path: './generated/schema.graphql' },
-  openapi: { path: './generated/openapi.yaml' },
+  graphql: { target: './generated/schema.graphql' },
+  openapi: { target: './generated/openapi.yaml' },
   server: { host: '127.0.0.1', port: 4001 },
 };
 ```
@@ -66,11 +66,11 @@ export default {
 | `auth.source` | Users JSON path or user array |
 | `auth.expiresIn` | Session lifetime in seconds; default 3600 |
 | `files.source` | Files directory or initial file array |
-| `files.metadata` | For `file` only: metadata JSON path; defaults to `_database.json` inside `files.source` |
+| `files.metadata` | For `file` only: metadata JSON path; defaults to `.files.json` inside `files.source` |
 | `graphql.endpoint` | HTTP endpoint; default `/graphql` |
-| `graphql.path` | GraphQL SDL export destination |
+| `graphql.target` | GraphQL SDL export destination |
 | `openapi.endpoint` | HTTP endpoint; default `/openapi.json` |
-| `openapi.path` | OpenAPI export destination |
+| `openapi.target` | OpenAPI export destination |
 | `openapi.info` | Metadata: required `title` and `version`, optional `description` |
 | `server.host`, `server.port` | Defaults `127.0.0.1`, `4001`; CLI also reads `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | Defaults 10 and 100; default size is capped by the maximum |
@@ -211,6 +211,110 @@ Every supplied direct relation key must point to an existing record. `required: 
 - `cascade`: delete the referring record. For `User.country`, deleting the country deletes its users. For `Movie.actors.user`, deleting the user removes matching actor elements and retains the movie.
 
 Cascading deletion runs as one operation, including cyclic relations. A validation failure cancels the entire operation. `onDelete` rules also apply to explicitly declared reverse relations; account for both rules when defining both directions.
+
+## Example database
+
+```json
+{
+  "countries": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Ардения"
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Велория"
+    }
+  ],
+  "genres": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Криминал",
+      "parentIds": []
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Гангстер",
+      "parentIds": ["1"]
+    },
+    {
+      "id": "3",
+      "isArchived": false,
+      "name": "Драма",
+      "parentIds": []
+    },
+    {
+      "id": "4",
+      "isArchived": false,
+      "name": "Комедия",
+      "parentIds": []
+    }
+  ],
+  "movies": [
+    {
+      "actors": [
+        {
+          "genreIds": ["2", "3"],
+          "id": "movie-1-actor-1",
+          "userId": "1"
+        },
+        {
+          "genreIds": ["3"],
+          "id": "movie-1-actor-2",
+          "userId": "2"
+        }
+      ],
+      "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
+      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
+      "id": "1",
+      "isArchived": false,
+      "publisherIds": ["2"],
+      "title": "Тени Ардении"
+    },
+    {
+      "actors": [],
+      "coverSrc": "https://example.com/covers/northern-star.jpg",
+      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
+      "id": "2",
+      "isArchived": false,
+      "publisherIds": ["1"],
+      "title": "Полночь в «Северной звезде»"
+    }
+  ],
+  "publishers": [
+    {
+      "id": "1",
+      "isArchived": false,
+      "name": "Northlight Studio"
+    },
+    {
+      "id": "2",
+      "isArchived": false,
+      "name": "Aurora Pictures"
+    }
+  ],
+  "users": [
+    {
+      "bornAt": "1988-03-14",
+      "countryId": "1",
+      "fullName": "Мира Волкова",
+      "id": "1",
+      "isArchived": false
+    },
+    {
+      "bornAt": "1991-11-02",
+      "countryId": "2",
+      "fullName": "Леон Ветров",
+      "id": "2",
+      "isArchived": false
+    }
+  ]
+}
+```
 
 ## Queries and responses
 
@@ -419,8 +523,8 @@ Set output paths to save schemas:
 export default {
   storage: 'file',
   database: { source: './database.json', schema: './schema.json' },
-  openapi: { path: './generated/openapi.yaml' },
-  graphql: { path: './generated/schema.graphql' },
+  openapi: { target: './generated/openapi.yaml' },
+  graphql: { target: './generated/schema.graphql' },
 };
 ```
 
@@ -429,9 +533,9 @@ npx deep-json-server server.config.js --generate-only
 npx deep-json-server server.config.js --generate
 ```
 
-`--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `path`. Missing sections, missing destinations or generation errors fail the command before server startup.
+`--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `target`. Missing sections, missing targets or generation errors fail the command before server startup.
 
-Export reads only the schema. Database records, auth users and file storage are not opened; configuration values are still validated. The schema is loaded once, including when export is followed by startup. All destinations and selected schemas are checked before writing. Outputs cannot overwrite the configuration, database, schema, users, counters or file metadata. A disk write failure can leave an already saved file from another format.
+Export does not open the database, user records or files. Every selected `target` is checked before writing and cannot overwrite the configuration, database, schema, users, counters or file metadata.
 
 ## Authentication
 
@@ -487,7 +591,7 @@ export default {
 };
 ```
 
-Auth users are stored separately from database collections. With `storage: 'file'`, registration, password changes and admin changes are saved to `auth.source` through `lowdb`. With `'memory'`, changes stay in an internal copy and disappear on restart; the original array is unchanged. A file write failure leaves users and sessions unchanged. The file is read at startup; restart after manual edits.
+Auth users are stored separately from the database. In file mode, changes are saved to `auth.source`; in memory mode, they disappear on restart. The supplied user array is not modified. Restart the server after editing the file manually.
 
 | REST request | JSON body | Response |
 |---|---|---|
@@ -576,7 +680,7 @@ Files are available through REST and documented in OpenAPI. Add storage to the c
 export default {
   storage: 'file',
   database: { source: './database.json' },
-  files: { source: './uploads', metadata: './files.json' },
+  files: { source: './uploads' },
 };
 ```
 
@@ -639,7 +743,7 @@ Content-Type: application/json
 
 `PATCH` returns the updated metadata with status `200`; if a file already exists at the new path, the server returns `409`. `DELETE` returns `204` without a response body. A missing file returns `404` on every path-based operation. File paths in URLs are relative to `files.source`, and all returned URLs are relative to the server origin.
 
-In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata stores `directory`, `mimeType` and `name`; the server reads the size from the file and builds its URLs. Directories and the metadata file are created when needed.
+In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata defaults to `<files.source>/.files.json`; set `files.metadata` for another location. Directories and the metadata file are created when needed.
 
 Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, auth users, loaded configuration or metadata file.
 
@@ -676,110 +780,6 @@ await writeGraphql(sdl, './generated/schema.graphql');
 Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; schema and model `api` settings can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
 `generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
-
-## Example database
-
-```json
-{
-  "countries": [
-    {
-      "id": "1",
-      "isArchived": false,
-      "name": "Ардения"
-    },
-    {
-      "id": "2",
-      "isArchived": false,
-      "name": "Велория"
-    }
-  ],
-  "genres": [
-    {
-      "id": "1",
-      "isArchived": false,
-      "name": "Криминал",
-      "parentIds": []
-    },
-    {
-      "id": "2",
-      "isArchived": false,
-      "name": "Гангстер",
-      "parentIds": ["1"]
-    },
-    {
-      "id": "3",
-      "isArchived": false,
-      "name": "Драма",
-      "parentIds": []
-    },
-    {
-      "id": "4",
-      "isArchived": false,
-      "name": "Комедия",
-      "parentIds": []
-    }
-  ],
-  "movies": [
-    {
-      "actors": [
-        {
-          "genreIds": ["2", "3"],
-          "id": "movie-1-actor-1",
-          "userId": "1"
-        },
-        {
-          "genreIds": ["3"],
-          "id": "movie-1-actor-2",
-          "userId": "2"
-        }
-      ],
-      "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
-      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
-      "id": "1",
-      "isArchived": false,
-      "publisherIds": ["2"],
-      "title": "Тени Ардении"
-    },
-    {
-      "actors": [],
-      "coverSrc": "https://example.com/covers/northern-star.jpg",
-      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
-      "id": "2",
-      "isArchived": false,
-      "publisherIds": ["1"],
-      "title": "Полночь в «Северной звезде»"
-    }
-  ],
-  "publishers": [
-    {
-      "id": "1",
-      "isArchived": false,
-      "name": "Northlight Studio"
-    },
-    {
-      "id": "2",
-      "isArchived": false,
-      "name": "Aurora Pictures"
-    }
-  ],
-  "users": [
-    {
-      "bornAt": "1988-03-14",
-      "countryId": "1",
-      "fullName": "Мира Волкова",
-      "id": "1",
-      "isArchived": false
-    },
-    {
-      "bornAt": "1991-11-02",
-      "countryId": "2",
-      "fullName": "Леон Ветров",
-      "id": "2",
-      "isArchived": false
-    }
-  ]
-}
-```
 
 ## Data storage
 

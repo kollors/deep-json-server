@@ -36,8 +36,8 @@ test('schema generators and accessors need no database, file store or unrelated 
     storage: 'file',
     database: { source: join(dir, 'missing.json'), schema: await writeJson(join(dir, 'missing.json') + '.schema.json', schema) },
     files: { source: join(dir, 'missing-files') },
-    graphql: { path: graphqlPath },
-    openapi: { path: openapiPath },
+    graphql: { target: graphqlPath },
+    openapi: { target: openapiPath },
   });
   assert.ok((await facade.openapi()).paths['/items']);
   await assert.rejects(() => fs.access(openapiPath), { code: 'ENOENT' });
@@ -50,7 +50,7 @@ test('schema generators and accessors need no database, file store or unrelated 
   await writeOpenapi(doc, openapiPath);
   await writeGraphql(sdl, graphqlPath);
   assert.match(await fs.readFile(graphqlPath, 'utf8'), /itemList/);
-  const brokenData = await createServer({ storage: 'memory', database: { source: { items: [{ id: '1', wrong: true }] }, schema: model() }, graphql: { path: graphqlPath } });
+  const brokenData = await createServer({ storage: 'memory', database: { source: { items: [{ id: '1', wrong: true }] }, schema: model() }, graphql: { target: graphqlPath } });
   assert.match(await brokenData.graphql(), /itemCreate/);
 });
 

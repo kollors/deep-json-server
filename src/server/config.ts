@@ -19,11 +19,11 @@ export type { FilesConfig, MemoryFile } from '../files/contract.js';
 export type DatabaseSchema = ModelSchema;
 export interface OpenapiConfig {
   endpoint?: string;
-  path?: string;
+  target?: string;
   info?: OpenapiInfo;
 }
 export interface GraphqlConfig {
-  path?: string;
+  target?: string;
   endpoint?: string;
 }
 export interface ServerConfig {
@@ -103,7 +103,7 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
             source: source(files.source, storage, 'files.source', directory) as string,
             metadata:
               files.metadata === undefined
-                ? resolve(directory, getString(files.source, 'config.files.source', true), '_database.json')
+                ? resolve(directory, getString(files.source, 'config.files.source', true), '.files.json')
                 : resolve(directory, getString(files.metadata, 'config.files.metadata', true)),
           }
         : { source: source(files.source, storage, 'files.source', directory, true) as FilesConfig<'memory'>['source'] };
@@ -114,8 +114,8 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
     if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
     normalizedAuth = { source: source(auth.source, storage, 'auth.source', directory, true) as AuthConfig['source'], expiresIn };
   }
-  const openapi = section(config.openapi, 'openapi', ['path', 'info', 'endpoint']);
-  const graphql = section(config.graphql, 'graphql', ['path', 'endpoint']);
+  const openapi = section(config.openapi, 'openapi', ['target', 'info', 'endpoint']);
+  const graphql = section(config.graphql, 'graphql', ['target', 'endpoint']);
   if ((openapi || graphql) && normalizedDatabase.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
   const exportPath = (value: unknown, name: string) => (value === undefined ? undefined : resolve(directory, getString(value, name, true)));
   const openapiEndpoint = getString(openapi?.endpoint, 'config.openapi.endpoint') ?? '/openapi.json';
@@ -131,8 +131,8 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
     database: normalizedDatabase,
     files: normalizedFiles,
     auth: normalizedAuth,
-    openapi: openapi ? { endpoint: openapiEndpoint, path: exportPath(openapi.path, 'config.openapi.path'), info: normalizeOpenapiInfo(openapi.info) } : undefined,
-    graphql: graphql ? { endpoint: graphqlEndpoint, path: exportPath(graphql.path, 'config.graphql.path') } : undefined,
+    openapi: openapi ? { endpoint: openapiEndpoint, target: exportPath(openapi.target, 'config.openapi.target'), info: normalizeOpenapiInfo(openapi.info) } : undefined,
+    graphql: graphql ? { endpoint: graphqlEndpoint, target: exportPath(graphql.target, 'config.graphql.target') } : undefined,
     server: {
       ...normalizeAddress(server),
       ...normalizePagination(server),

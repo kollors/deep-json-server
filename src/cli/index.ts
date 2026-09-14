@@ -21,19 +21,19 @@ Usage:
   --version, -v    Show version
 
 Modules and export formats are selected by configuration sections.
-Generate flags are mutually exclusive and require output paths.`;
+Generate flags are mutually exclusive and require output targets.`;
 
 /** Проверяет все назначения, строит обе схемы и только затем сохраняет файлы.
- * @example Секции openapi и graphql с path → два файла; нет path → ошибка до записи.
+ * @example Секции openapi и graphql с target → два файла; нет target → ошибка до записи.
  */
 async function generate(config: NormalizedServerConfig, source: Record<string, unknown>, directory: string, sourcePath: string): Promise<void> {
   if (!config.openapi && !config.graphql) throw new Error('Generation requires an openapi or graphql section');
   const outputs: string[] = [];
   for (const format of ['openapi', 'graphql'] as const) {
     if (!config[format]) continue;
-    const path = config[format].path;
-    if (!path) throw new Error(`Укажите config.${format}.path`);
-    outputs.push(path);
+    const target = config[format].target;
+    if (!target) throw new Error(`Укажите config.${format}.target`);
+    outputs.push(target);
   }
   await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
   const model = await configuredModel(config);
@@ -49,13 +49,13 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
       })
     : undefined;
   const graphql = config.graphql ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
-  if (openapi && config.openapi?.path) {
-    await writeOpenapi(openapi, config.openapi.path);
-    process.stdout.write(`OpenAPI: ${config.openapi.path}\n`);
+  if (openapi && config.openapi?.target) {
+    await writeOpenapi(openapi, config.openapi.target);
+    process.stdout.write(`OpenAPI: ${config.openapi.target}\n`);
   }
-  if (graphql && config.graphql?.path) {
-    await writeGraphql(graphql, config.graphql.path);
-    process.stdout.write(`GraphQL: ${config.graphql.path}\n`);
+  if (graphql && config.graphql?.target) {
+    await writeGraphql(graphql, config.graphql.target);
+    process.stdout.write(`GraphQL: ${config.graphql.target}\n`);
   }
 }
 /** Разбирает флаги, выполняет экспорт по секциям конфигурации и при необходимости запускает сервер.

@@ -114,8 +114,8 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   const openapiPath = join(directory, 'out', 'api.yaml');
   const graphqlPath = join(directory, 'out', 'api.graphql');
   const facade = await facadeFor(model, {
-    openapi: { path: openapiPath, info: { title: 'Example', version: 'alpha', description: 'Shared schema' } },
-    graphql: { path: graphqlPath },
+    openapi: { target: openapiPath, info: { title: 'Example', version: 'alpha', description: 'Shared schema' } },
+    graphql: { target: graphqlPath },
     server: { host: '::1', port: 9000, logger: false },
   });
   await writeOpenapi(await facade.openapi(), openapiPath);

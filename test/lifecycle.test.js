@@ -296,7 +296,7 @@ test('schema roots supply lifecycle settings for CLI and standalone generators',
   const schema = { ...model, timestamps: true, softDelete: true };
   await writeFile(
     path,
-    `export default ${JSON.stringify({ storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, graphql: { path: 'schema.graphql' }, openapi: { path: 'api.yaml' } })};`,
+    `export default ${JSON.stringify({ storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, graphql: { target: 'schema.graphql' }, openapi: { target: 'api.yaml' } })};`,
   );
   await runCli(['--generate-only', path]);
   const sdl = await readFile(join(directory, 'schema.graphql'), 'utf8');

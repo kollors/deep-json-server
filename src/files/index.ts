@@ -8,7 +8,7 @@ import { createMemoryFileStore } from './memory-store.js';
  */
 export const createFileStore = async (config: FilesConfig, protectedPaths: string[] = []): Promise<FileStore> =>
   typeof config.source === 'string'
-    ? createDiskFileStore({ directory: config.source, metadata: config.metadata ?? resolve(config.source, '_database.json'), protectedPaths })
+    ? createDiskFileStore({ directory: config.source, metadata: config.metadata ?? resolve(config.source, '.files.json'), protectedPaths })
     : createMemoryFileStore(config.source);
 
 export { registerFileRoutes } from './routes.js';

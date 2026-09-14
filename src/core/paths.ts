@@ -26,7 +26,7 @@ export function inputPaths(config: { database?: unknown; files?: unknown; auth?:
     sourcePath,
     database.source,
     database.schema,
-    files.metadata ?? (typeof files.source === 'string' ? resolve(directory, files.source, '_database.json') : undefined),
+    files.metadata ?? (typeof files.source === 'string' ? resolve(directory, files.source, '.files.json') : undefined),
     auth.source,
   ].filter((path): path is string => typeof path === 'string');
   if (typeof database.source === 'string') paths.push(`${database.source}.counters.json`);

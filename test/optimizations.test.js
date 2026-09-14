@@ -48,7 +48,7 @@ test('combined CLI export reads one model and validates both formats before writ
   const directory = await temp(t);
   const schemaPath = join(directory, 'model.json');
   const configPath = join(directory, 'config.mjs');
-  const config = { storage: 'file', database: { source: 'missing-db.json', schema: schemaPath }, openapi: { path: 'api.yaml' }, graphql: { path: 'api.graphql' } };
+  const config = { storage: 'file', database: { source: 'missing-db.json', schema: schemaPath }, openapi: { target: 'api.yaml' }, graphql: { target: 'api.graphql' } };
   await fs.writeFile(schemaPath, JSON.stringify({ ...schema, timestamps: true, softDelete: true }));
   await fs.writeFile(configPath, `export default ${JSON.stringify(config)};`);
   const readFile = fs.readFile;

@@ -26,7 +26,7 @@ test('storage discriminates every source and the schema, with independent input 
   assert.equal(disk.database.source, '/tmp/example/db.json');
   assert.equal(disk.database.schema, '/tmp/example/schema.json');
   assert.equal(disk.auth.source, '/tmp/example/auth.json');
-  assert.equal(disk.files.metadata, '/tmp/example/uploads/_database.json');
+  assert.equal(disk.files.metadata, '/tmp/example/uploads/.files.json');
   for (const storage of ['file', 'memory']) {
     const base = storage === 'memory' ? memory : { storage, database: { source: 'db.json', schema: 'schema.json' } };
     const mismatches =
@@ -47,7 +47,9 @@ test('removed config keys and malformed section values are rejected before openi
     { files: { directory: 'uploads' } },
     { files: { source: [], metadata: 'files.json' } },
     { graphql: { enabled: true } },
+    { graphql: { path: 'schema.graphql' } },
     { openapi: { enabled: false } },
+    { openapi: { path: 'openapi.yaml' } },
   ])
     assert.throws(() => normalizeServerConfig({ ...memory, ...extra }), /Неизвестный/);
   for (const name of ['auth', 'files', 'graphql', 'openapi']) for (const value of [false, null, [], 'yes']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: value }), /JSON-объект/);

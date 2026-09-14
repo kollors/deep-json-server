@@ -17,8 +17,8 @@ const fixture = async (t) => {
     database: { source: 'missing-db.json', schema: 'schema.json' },
     auth: { source: 'missing-users.json' },
     files: { source: 'missing-uploads' },
-    openapi: { path: 'openapi.yaml' },
-    graphql: { path: 'schema.graphql' },
+    openapi: { target: 'openapi.yaml' },
+    graphql: { target: 'schema.graphql' },
     server: { host: 'localhost', port: 5000, logger: false, maxPageSize: 250 },
   };
   const save = (value = config) => writeFile(path, `export default ${JSON.stringify(value)};`);
@@ -39,7 +39,7 @@ test('CLI starts from section presence and applies address precedence without ex
   await runCli([f.path], services(calls));
   assert.equal(calls[0].storage, 'file');
   assert.equal(calls[0].database.source, join(f.directory, 'missing-db.json'));
-  assert.equal(calls[0].files.metadata, join(f.directory, 'missing-uploads', '_database.json'));
+  assert.equal(calls[0].files.metadata, join(f.directory, 'missing-uploads', '.files.json'));
   assert.equal(calls[0].graphql.endpoint, '/graphql');
   await assert.rejects(() => readFile(join(f.directory, 'openapi.yaml')), { code: 'ENOENT' });
   await runCli(['--host', '127.0.0.2', f.path, '--port', '0'], services(calls));
@@ -107,9 +107,9 @@ test('CLI rejects removed commands, flags, repetitions and ambiguous modes', asy
 
 test('CLI validates all export destinations and requires configured formats', async (t) => {
   const f = await fixture(t);
-  delete f.config.graphql.path;
+  delete f.config.graphql.target;
   await f.save();
-  await assert.rejects(() => runCli([f.path, '--generate-only']), /config.graphql.path/);
+  await assert.rejects(() => runCli([f.path, '--generate-only']), /config.graphql.target/);
   await assert.rejects(() => readFile(join(f.directory, 'openapi.yaml')), { code: 'ENOENT' });
   delete f.config.graphql;
   delete f.config.openapi;
@@ -117,8 +117,8 @@ test('CLI validates all export destinations and requires configured formats', as
   await assert.rejects(() => runCli([f.path, '--generate-only']), /section/);
   f.config.openapi = {};
   await f.save();
-  await assert.rejects(() => runCli([f.path, '--generate-only']), /config.openapi.path/);
-  f.config.openapi.path = 'schema.json';
+  await assert.rejects(() => runCli([f.path, '--generate-only']), /config.openapi.target/);
+  f.config.openapi.target = 'schema.json';
   await f.save();
   await assert.rejects(() => runCli([f.path, '--generate-only']), /overwrite/);
 });
