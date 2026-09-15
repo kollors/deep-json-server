@@ -168,8 +168,10 @@ export function buildGraphql(model: Model): GraphQLSchema {
         for (const [key, operand] of Object.entries(operatorsFor(node))) {
           const value = scalar(entity, node);
           if (operand === 'condition') fields[key] = { type: type as GraphQLInputObjectType };
-          else if (operand === 'element') fields[key] = { type: element! };
-          else fields[key] = { type: operand === 'values' ? new GraphQLList(value) : operand === 'comparison' ? scalar(entity, node, false) : operand === 'text' ? GraphQLString : value };
+          else if (operand === 'element') {
+            if (!element) throw new Error(`Missing element filter for ${node.path}`);
+            fields[key] = { type: element };
+          } else fields[key] = { type: operand === 'values' ? new GraphQLList(value) : operand === 'comparison' ? scalar(entity, node, false) : operand === 'text' ? GraphQLString : value };
         }
         return fields;
       },

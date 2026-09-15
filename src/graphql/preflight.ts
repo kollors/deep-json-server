@@ -17,7 +17,8 @@ import type { Node } from '../core/model.js';
  */
 export function preflight(info: GraphQLResolveInfo, engine: Engine): Map<FieldNode, PreparedList> {
   const prepared = new Map<FieldNode, PreparedList>();
-  const root = info.operation.operation === 'mutation' ? info.schema.getMutationType()! : info.schema.getQueryType()!;
+  const root = info.operation.operation === 'mutation' ? info.schema.getMutationType() : info.schema.getQueryType();
+  if (!root) throw new Error('GraphQL operation root is unavailable');
   const visited = new Map<SelectionSetNode, Set<GraphQLObjectType>>();
   const walk = (selectionSet: SelectionSetNode, parent: GraphQLObjectType): void => {
     let parents = visited.get(selectionSet);

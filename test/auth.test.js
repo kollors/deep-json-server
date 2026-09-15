@@ -202,7 +202,7 @@ test('auth works independently of later database errors and protects the credent
   await writeFile(database, '{"items":[]}');
   const { app } = await setup(t, {
     storage: 'file',
-    database: { source: database, schema: await writeJson(database + '.schema.json', schema) },
+    database: { source: database, schema: await writeJson(`${database}.schema.json`, schema) },
     auth: { source: path },
     graphql: {},
     files: { source: dir, metadata: join(dir, 'files.json') },

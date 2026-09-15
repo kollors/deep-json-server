@@ -1,20 +1,16 @@
-import type { FastifyInstance, FastifyListenOptions } from 'fastify';
-import { AUTH_PATHS } from '../auth/contract.js';
-import { DomainError } from '../core/errors.js';
-import { domainStatus } from '../core/http-errors.js';
-import { inputPaths } from '../core/paths.js';
-import { errorMessage, isObject } from '../core/utils.js';
+import type { FastifyInstance } from 'fastify';
 import type { OpenapiDocument } from '../openapi/types.js';
-import { configSourcePath, type DeepJsonServerConfig, type NormalizedServerConfig, normalizeServerConfig } from './config.js';
-import { validateEndpoints } from './features.js';
+import { registerConfiguredModules } from './bootstrap.js';
+import { type DeepJsonServerConfig, type NormalizedServerConfig, normalizeServerConfig } from './config.js';
+import { createHttpServer } from './http.js';
 import { configuredModel } from './model.js';
+import { openapiOptions } from './openapi-options.js';
 export interface ServerFacade {
   fastify(): FastifyInstance;
   openapi(): Promise<OpenapiDocument>;
   graphql(): Promise<string>;
 }
 
-type ListenCallback = (error: Error | null, address: string) => void;
 const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Methods': 'DELETE, GET, OPTIONS, PATCH, POST, PUT',
@@ -23,8 +19,9 @@ const CORS_HEADERS = {
 /** Проверяет настройки и создаёт интерфейс запуска и генерации схем; сетевой порт ещё не открывает.
  * @example await createServer({ storage: 'memory', database: { source: { notes: [] } } }) → объект с fastify(), openapi(), graphql().
  */
-export async function createServer(config: DeepJsonServerConfig): Promise<ServerFacade> {
-  if (arguments.length !== 1) throw new Error('createServer accepts only a configuration object');
+export async function createServer(...args: [DeepJsonServerConfig]): Promise<ServerFacade> {
+  if (args.length !== 1) throw new Error('createServer accepts only a configuration object');
+  const [config] = args;
   return createConfiguredServer(normalizeServerConfig(config));
 }
 /** Собирает сервер из нормализованных настроек; хранилища открываются при инициализации HTTP-экземпляра.
@@ -32,8 +29,6 @@ export async function createServer(config: DeepJsonServerConfig): Promise<Server
  */
 export async function createConfiguredServer(normalized: NormalizedServerConfig): Promise<ServerFacade> {
   const enabled = { auth: normalized.auth !== undefined, files: normalized.files !== undefined };
-  const { inferModel } = await import('../core/model.js');
-  const recordSettings = { auth: enabled.auth };
   const explicitModel = await configuredModel(normalized);
   const { default: Fastify } = await import('fastify');
   const corsHeaders = { ...CORS_HEADERS };
@@ -42,87 +37,16 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig)
     corsHeaders['Access-Control-Allow-Headers'] = [...Object.values(FILE_HEADERS).map(({ name }) => name), 'Content-Type'].join(', ');
   }
   if (enabled.auth) corsHeaders['Access-Control-Allow-Headers'] += ', Authorization';
-  const { cors, logger, maxFileSize, pageSize, maxPageSize } = normalized.server;
+  const { cors, logger } = normalized.server;
   const openapi = async () => {
     if (!normalized.openapi) throw new Error('OpenAPI is not configured');
-    return (await import('../openapi/generate.js')).openapiFromModel(explicitModel, {
-      files: enabled.files,
-      ...recordSettings,
-      pageSize,
-      maxPageSize,
-      info: normalized.openapi.info,
-      host: normalized.server.host,
-      port: normalized.server.port,
-    });
+    return (await import('../openapi/generate.js')).openapiFromModel(explicitModel, openapiOptions(normalized));
   };
   let instance: FastifyInstance | undefined;
   const getFastify = (): FastifyInstance => {
     if (instance) return instance;
-    const server = Fastify({ ajv: { customOptions: { coerceTypes: false, removeAdditional: false } }, logger });
-    const originalListen = server.listen.bind(server);
-    const defaults = { host: normalized.server.host, port: normalized.server.port };
-    const listen = (optionsOrCallback?: FastifyListenOptions | ListenCallback, callback?: ListenCallback): Promise<string> | undefined => {
-      if (typeof optionsOrCallback === 'function') {
-        originalListen(defaults, optionsOrCallback);
-        return;
-      }
-      if (callback) {
-        originalListen({ ...defaults, ...optionsOrCallback }, callback);
-        return;
-      }
-      return originalListen({ ...defaults, ...optionsOrCallback });
-    };
-    server.listen = listen as FastifyInstance['listen'];
-    server.setErrorHandler((error, request, reply) => {
-      const candidate = error instanceof DomainError ? domainStatus[error.code] : isObject(error) ? error.statusCode : undefined;
-      const status = typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599 ? candidate : 500;
-      if (status === 500) request.log.error(error);
-      return reply.code(status).send({ error: status === 500 ? 'Внутренняя ошибка сервера' : errorMessage(error) });
-    });
-    if (cors) {
-      server.addHook('onRequest', async (_request, reply) => {
-        for (const [key, value] of Object.entries(corsHeaders)) reply.header(key, value);
-      });
-      server.options('/', async (_request, reply) => reply.code(204).send());
-      server.options('/*', async (_request, reply) => reply.code(204).send());
-    }
-    server.register(async (app) => {
-      const [{ createDatabaseStore }, { Engine }, { registerRestRoutes }] = await Promise.all([import('../core/database.js'), import('../core/engine.js'), import('../rest/routes.js')]);
-      const keys = explicitModel ? new Map(explicitModel.entities.map((e) => [e.collection, e.primary])) : undefined;
-      const store = await createDatabaseStore(normalized.database, keys);
-      const model = explicitModel ?? inferModel(store.database.data, recordSettings);
-      const engine = new Engine(store, model, pageSize, maxPageSize);
-      engine.validateData(store.database.data);
-      const graphqlPath = normalized.graphql?.endpoint;
-      const openapiPath = normalized.openapi?.endpoint;
-      validateEndpoints(
-        model.entities.map((entity) => entity.collection),
-        [...(graphqlPath ? [graphqlPath] : []), ...(openapiPath ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
-      );
-      const auth = enabled.auth && normalized.auth ? await (await import('../auth/service.js')).createAuthService(normalized.auth) : undefined;
-      if (auth) {
-        app.addHook('onClose', async () => auth.close());
-        const { registerAuthRoutes } = await import('../auth/routes.js');
-        registerAuthRoutes(app, auth);
-      }
-      const authenticate = auth ? (header: unknown) => auth.me(header) : undefined;
-      registerRestRoutes(app, engine, authenticate);
-      if (graphqlPath) {
-        const [{ registerGraphqlRoutes }, { buildGraphql }] = await Promise.all([import('../graphql/routes.js'), import('../graphql/schema.js')]);
-        registerGraphqlRoutes(app, buildGraphql(model), engine, graphqlPath, authenticate);
-      }
-      if (openapiPath) {
-        const document = await openapi();
-        document.servers = [{ url: '/' }];
-        app.get(openapiPath, async () => document);
-      }
-      const files = normalized.files;
-      if (enabled.files && files) {
-        const { createFileStore, registerFileRoutes } = await import('../files/index.js');
-        const protectedPaths = inputPaths({ database: normalized.database, auth: normalized.auth }, '.', configSourcePath(normalized));
-        registerFileRoutes(app, { getStore: () => createFileStore(files, protectedPaths), maxFileSize });
-      }
-    });
+    const server = createHttpServer({ create: Fastify, host: normalized.server.host, port: normalized.server.port, logger, cors, corsHeaders });
+    server.register(async (app) => registerConfiguredModules(app, normalized, explicitModel, openapi));
     instance = server;
     return server;
   };

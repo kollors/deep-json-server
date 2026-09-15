@@ -1,98 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { access, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { domainError } from '../core/errors.js';
 import { canonicalPath } from '../core/paths.js';
 import { createSerialQueue, isSystemError } from '../core/utils.js';
-import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, normalizeStoredFileMetadata, type StoredFileMetadata } from './contract.js';
+import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, type StoredFileMetadata } from './contract.js';
+import { readDiskMetadata, writeDiskMetadata } from './disk-metadata.js';
+import { createDiskPaths } from './disk-paths.js';
 import { createSizeLimiter } from './streams.js';
-
-/** Проверяет доступность пути через access; остальные ошибки файловой системы передаёт вызывающему коду.
- * @example Отсутствующий путь → Promise<false>; существующий доступный файл → Promise<true>; оборванная ссылка → Promise<false>.
- */
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await access(path);
-    return true;
-  } catch (error) {
-    if (isSystemError(error) && error.code === 'ENOENT') {
-      return false;
-    }
-
-    throw error;
-  }
-};
-
-/** Проверяет, что путь совпадает с корнем или лежит внутри него; символические ссылки не раскрывает.
- * @example isPathInside('/tmp/a', '/tmp/a/b') → true; '/tmp/ab' → false.
- */
-const isPathInside = (rootPath: string, targetPath: string): boolean => {
-  const relativePath = relative(rootPath, targetPath);
-
-  return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
-};
-
-/** Читает и проверяет массив метаданных, индексируя его по пути файла.
- * @example Отсутствующий файл → пустая Map; две записи с одинаковым путём → ошибка.
- */
-const readMetadata = async (metadataPath: string): Promise<Map<string, StoredFileMetadata>> => {
-  let source: unknown;
-
-  try {
-    source = JSON.parse(await readFile(metadataPath, 'utf8'));
-  } catch (error) {
-    if (isSystemError(error) && error.code === 'ENOENT') {
-      return new Map();
-    }
-
-    throw error;
-  }
-
-  if (!Array.isArray(source)) {
-    throw new Error(`Файл метаданных ${metadataPath} должен содержать JSON-массив`);
-  }
-
-  const files = new Map<string, StoredFileMetadata>();
-
-  source.forEach((value, index) => {
-    const file = normalizeStoredFileMetadata(value, `Запись ${index} в файле метаданных ${metadataPath}`);
-    const path = getFileKey(file);
-
-    if (files.has(path)) {
-      throw new Error(`Файл метаданных ${metadataPath} содержит повторяющийся путь «${path}»`);
-    }
-
-    files.set(path, file);
-  });
-
-  return files;
-};
-
-/** Сохраняет метаданные через временный файл и переименование; при ошибке удаляет временный файл.
- * @example Map с одной записью → JSON-массив из одной записи в файле; результат Promise<void>.
- */
-const writeMetadata = async (metadataPath: string, files: Map<string, StoredFileMetadata>): Promise<void> => {
-  const temporaryPath = `${metadataPath}.${randomBytes(6).toString('hex')}.tmp`;
-
-  try {
-    await writeFile(temporaryPath, JSON.stringify([...files.values()], null, 2), { encoding: 'utf8', flag: 'wx' });
-    await rename(temporaryPath, metadataPath);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-};
-
-/** Проверяет, что информация о пути описывает обычный файл.
- * @example stats.isFile() === true → undefined; каталог → ошибка.
- */
-const assertRegularFile = (stats: { isFile(): boolean }): void => {
-  if (!stats.isFile()) {
-    throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
-  }
-};
 
 /** Читает размер обычного файла; отсутствие или неподходящий тип пути превращает в ошибку.
  * @example Файл из трёх байтов → Promise<3>.
@@ -101,7 +18,7 @@ const getFileSize = async (path: string): Promise<number> => {
   try {
     const stats = await stat(path);
 
-    assertRegularFile(stats);
+    if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
     return stats.size;
   } catch (error) {
     if (isSystemError(error) && error.code === 'ENOENT') {
@@ -136,12 +53,12 @@ export const createDiskFileStore = async ({
 
   await Promise.all([mkdir(directoryPath, { recursive: true }), mkdir(dirname(metadataPath), { recursive: true }), mkdir(stagingPath, { recursive: true })]);
 
-  const realDirectoryPath = await realpath(directoryPath);
-  let files = await readMetadata(metadataPath);
+  const paths = await createDiskPaths({ directory: directoryPath, metadata: metadataPath, staging: stagingPath, protectedPaths: protectedFiles });
+  let files = await readDiskMetadata(metadataPath);
 
   const commitMetadata = async (nextFiles: Map<string, StoredFileMetadata>, rollback: () => Promise<void>, rollbackMessage: string): Promise<void> => {
     try {
-      await writeMetadata(metadataPath, nextFiles);
+      await writeDiskMetadata(metadataPath, nextFiles);
     } catch (error) {
       try {
         await rollback();
@@ -153,96 +70,6 @@ export const createDiskFileStore = async ({
     }
 
     files = nextFiles;
-  };
-
-  const assertContained = (path: string): void => {
-    if (!isPathInside(realDirectoryPath, path)) {
-      throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
-    }
-  };
-
-  const resolveFilePath = (path: string): string => {
-    const filePath = resolve(directoryPath, path);
-    const canonical = resolve(realDirectoryPath, relative(directoryPath, filePath));
-    if (protectedFiles.has(canonical)) throw domainError('INVALID_INPUT', 'Path is reserved for a server input file');
-    if (filePath === directoryPath || !isPathInside(directoryPath, filePath) || filePath === metadataPath || isPathInside(stagingPath, filePath)) {
-      throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
-    }
-
-    return filePath;
-  };
-
-  const assertNoSymlinks = async (targetPath: string): Promise<void> => {
-    const relativePath = relative(directoryPath, targetPath);
-    const parts = relativePath === '' ? [] : relativePath.split(sep);
-    let currentPath = directoryPath;
-
-    for (const part of parts) {
-      currentPath = resolve(currentPath, part);
-
-      try {
-        if ((await lstat(currentPath)).isSymbolicLink()) {
-          throw domainError('INVALID_INPUT', 'Путь файла не должен содержать символические ссылки');
-        }
-      } catch (error) {
-        if (!isSystemError(error) || error.code !== 'ENOENT') {
-          throw error;
-        }
-      }
-    }
-  };
-
-  const prepareTargetPath = async (path: string): Promise<string> => {
-    const filePath = resolveFilePath(path);
-    const targetDirectory = dirname(filePath);
-    const parts = relative(directoryPath, targetDirectory).split(sep).filter(Boolean);
-    let currentPath = directoryPath;
-
-    for (const part of parts) {
-      currentPath = resolve(currentPath, part);
-
-      try {
-        await mkdir(currentPath);
-      } catch (error) {
-        if (!isSystemError(error) || error.code !== 'EEXIST') {
-          throw error;
-        }
-      }
-
-      const currentStats = await lstat(currentPath);
-
-      if (currentStats.isSymbolicLink() || !currentStats.isDirectory()) {
-        throw domainError('INVALID_INPUT', 'Путь файла должен содержать только обычные директории');
-      }
-
-      assertContained(await realpath(currentPath));
-    }
-
-    if (await pathExists(filePath)) {
-      await assertNoSymlinks(filePath);
-      assertContained(await realpath(filePath));
-      assertRegularFile(await lstat(filePath));
-    }
-
-    return filePath;
-  };
-
-  const resolveExistingPath = async (path: string): Promise<string> => {
-    const filePath = resolveFilePath(path);
-
-    try {
-      await assertNoSymlinks(filePath);
-      assertContained(await realpath(filePath));
-      assertRegularFile(await lstat(filePath));
-    } catch (error) {
-      if (isSystemError(error) && error.code === 'ENOENT') {
-        throw domainError('NOT_FOUND', 'Файл не найден');
-      }
-
-      throw error;
-    }
-
-    return filePath;
   };
 
   const cleanupLater = async (path: string): Promise<void> => {
@@ -271,7 +98,7 @@ export const createDiskFileStore = async ({
   const metadata = (path: string): Promise<FileRecord> =>
     schedule(async () => {
       const file = findFile(path);
-      const filePath = await resolveExistingPath(path);
+      const filePath = await paths.resolveExistingPath(path);
 
       return { ...file, size: await getFileSize(filePath) };
     });
@@ -279,13 +106,13 @@ export const createDiskFileStore = async ({
   const get = (path: string): ReturnType<FileStore['get']> =>
     schedule(async () => {
       const file = findFile(path);
-      const filePath = await resolveExistingPath(path);
+      const filePath = await paths.resolveExistingPath(path);
       const handle = await open(filePath, 'r');
 
       try {
         const stats = await handle.stat();
 
-        assertRegularFile(stats);
+        if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
         const size = stats.size;
 
         return { file: { ...file, size }, stream: handle.createReadStream() };
@@ -318,8 +145,8 @@ export const createDiskFileStore = async ({
       return await schedule(async () => {
         await flushCleanup();
 
-        const path = await prepareTargetPath(key);
-        const existsOnDisk = await pathExists(path);
+        const path = await paths.prepareTargetPath(key);
+        const existsOnDisk = await paths.pathExists(path);
         const exists = files.has(key) || existsOnDisk;
 
         if (exists && !override) {
@@ -343,7 +170,7 @@ export const createDiskFileStore = async ({
           const nextFiles = new Map(files);
 
           nextFiles.set(key, storedFile);
-          await writeMetadata(metadataPath, nextFiles);
+          await writeDiskMetadata(metadataPath, nextFiles);
           files = nextFiles;
           committed = true;
 
@@ -382,15 +209,15 @@ export const createDiskFileStore = async ({
       const file = findFile(sourcePath);
       const updatedFile = { ...file, ...updates };
       const targetPath = getFileKey(updatedFile);
-      const sourceFilePath = await resolveExistingPath(sourcePath);
+      const sourceFilePath = await paths.resolveExistingPath(sourcePath);
 
       if (sourcePath === targetPath) {
         return { ...file, size: await getFileSize(sourceFilePath) };
       }
 
-      const targetFilePath = await prepareTargetPath(targetPath);
+      const targetFilePath = await paths.prepareTargetPath(targetPath);
 
-      if (files.has(targetPath) || (await pathExists(targetFilePath))) {
+      if (files.has(targetPath) || (await paths.pathExists(targetFilePath))) {
         throw domainError('CONFLICT', 'Файл с таким путём уже существует');
       }
 
@@ -411,7 +238,7 @@ export const createDiskFileStore = async ({
       await flushCleanup();
       findFile(path);
 
-      const filePath = await resolveExistingPath(path);
+      const filePath = await paths.resolveExistingPath(path);
       const temporaryPath = `${filePath}.${randomBytes(6).toString('hex')}.delete`;
 
       await rename(filePath, temporaryPath);

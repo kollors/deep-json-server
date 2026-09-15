@@ -9,6 +9,7 @@ import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files
 import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from './auth.js';
 import { createFilePaths } from './files.js';
 import { json, ref, response } from './helpers.js';
+import { OpenapiRegistry } from './registry.js';
 import type { OpenapiDocument, OpenapiSchema } from './types.js';
 
 /** Преобразует nullable-значения JSON Schema в представление OpenAPI 3.0, рекурсивно обрабатывая поля и элементы.
@@ -46,22 +47,16 @@ export function buildOpenapiDocument({
 }): OpenapiDocument {
   assertApi(model, 'openapi');
   ({ pageSize, maxPageSize } = normalizePagination({ pageSize, maxPageSize }));
-  const schemas: Record<string, OpenapiSchema> = {
+  const registry = new OpenapiRegistry({
     Error: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] },
     Pager: {
       type: 'object',
       additionalProperties: false,
       properties: { page: { type: 'integer', minimum: 1, default: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: maxPageSize, default: pageSize } },
     },
-  };
-  const owners = new Map<string, Node>();
-  function reserve(name: string, node: Node): boolean {
-    if (owners.get(name) === node) return false;
-    if (schemas[name]) throw new Error(`OpenAPI schema name collision: ${name}`);
-    owners.set(name, node);
-    schemas[name] = {};
-    return true;
-  }
+  });
+  const { schemas } = registry;
+  const reserve = (name: string, node: Node): boolean => registry.reserve(name, node);
   function annotate(schema: OpenapiSchema, node: Node): OpenapiSchema {
     for (const key of ['description', 'example', 'default', 'readOnly', 'writeOnly'] as const) if (node[key] !== undefined) (schema as Record<string, unknown>)[key] = node[key];
     if (node.generated) schema.readOnly = true;
@@ -170,8 +165,10 @@ export function buildOpenapiDocument({
         ...(node.enum ? { enum: [...node.enum, ...(nullable && !node.enum.includes(null) ? [null] : [])] } : {}),
       };
       if (operand === 'condition') properties[key] = ref(name);
-      else if (operand === 'element') properties[key] = element!;
-      else
+      else if (operand === 'element') {
+        if (!element) throw new Error(`Missing element filter for ${node.path}`);
+        properties[key] = element;
+      } else
         properties[key] =
           operand === 'values' ? { type: 'array', items: scalar } : operand === 'text' ? { type: 'string' } : operand === 'comparison' ? { type: node.base as 'string' | 'number' } : scalar;
     }

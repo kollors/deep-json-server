@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.10`.
+To install a specific version, use `@1.0.0-alpha.11`.
 
 ## Quick start
 

@@ -197,7 +197,7 @@ test('file users persist registration, roles and passwords across restart and re
   await fs.writeFile(path, JSON.stringify(users));
   const app = await setup(t, {
     storage: 'file',
-    database: { source: await writeJson(path + '.db.json', { items: [] }), schema: await writeJson(path + '.schema.json', schema) },
+    database: { source: await writeJson(`${path}.db.json`, { items: [] }), schema: await writeJson(`${path}.schema.json`, schema) },
     auth: { source: path },
     files: { source: directory, metadata: join(directory, 'files.json') },
   });
@@ -240,7 +240,7 @@ test('failed temporary writes preserve the original file, users and sessions, an
   await fs.writeFile(path, original);
   const app = await setup(t, {
     storage: 'file',
-    database: { source: await writeJson(path + '.db.json', { items: [] }), schema: await writeJson(path + '.schema.json', schema) },
+    database: { source: await writeJson(`${path}.db.json`, { items: [] }), schema: await writeJson(`${path}.schema.json`, schema) },
     auth: { source: path },
   });
   const root = await login(app, 'root');

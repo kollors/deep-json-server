@@ -193,7 +193,7 @@ test('rejects invalid scope, nested, filter, ordering and pager even on empty co
     const r = await server.inject(url('/items', q));
     assert.equal(r.statusCode, 400, `${JSON.stringify(q)}: ${r.body}`);
   }
-  for (const path of ['/items?where={', url('/items', { scope: [{ id: true }] }) + '&scope=%7B%7D', '/items?where={}&where={}']) assert.equal((await server.inject(path)).statusCode, 400, path);
+  for (const path of ['/items?where={', `${url('/items', { scope: [{ id: true }] })}&scope=%7B%7D`, '/items?where={}&where={}']) assert.equal((await server.inject(path)).statusCode, 400, path);
   assert.equal((await server.inject('/items/missing?where={}')).statusCode, 400);
   assert.deepEqual(await request(server, '/items', { scope: [{ '*': true }, { where: { and: [] }, order: [{ field: 'meta.value', direction: 'ASC' }] }] }), { data: [], total: 0 });
 });
@@ -422,11 +422,11 @@ test('increment reserves existing numbers across deletion, restart and concurren
   const path = join(directory, 'db.json');
   await writeFile(path, JSON.stringify({ items: [{ id: 12 }] }));
   const model = { models: { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string' } } } } };
-  let facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false } });
+  let facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, model) }, server: { logger: false } });
   let server = facade.fastify();
   assert.equal((await server.inject({ method: 'DELETE', url: '/items/12' })).statusCode, 200);
   await server.close();
-  facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false }, graphql: {} });
+  facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, model) }, server: { logger: false }, graphql: {} });
   server = facade.fastify();
   t.after(() => server.close());
   const responses = await Promise.all(Array.from({ length: 10 }, () => server.inject({ method: 'POST', url: '/items', payload: { name: 'x' } })));

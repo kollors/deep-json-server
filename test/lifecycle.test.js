@@ -166,8 +166,8 @@ test('cascade restoration survives restart, excludes earlier deletions and check
   await writeFile(path, '{"parents":[],"children":[]}');
   const config = {
     storage: 'file',
-    database: { source: path, schema: await writeJson(path + '.schema.json', { ...cascadeSchema(), timestamps: true, softDelete: true }) },
-    auth: { source: await writeJson(path + '.auth.json', users) },
+    database: { source: path, schema: await writeJson(`${path}.schema.json`, { ...cascadeSchema(), timestamps: true, softDelete: true }) },
+    auth: { source: await writeJson(`${path}.auth.json`, users) },
   };
   let { app } = await setup(t, config);
   const alice = await login(app, 'alice'),
@@ -317,8 +317,8 @@ test('legacy unowned records require an administrator and disabling features ret
   await writeFile(path, JSON.stringify({ items: [{ id: 1, name: 'legacy' }] }));
   const config = {
     storage: 'file',
-    database: { source: path, schema: await writeJson(path + '.schema.json', { ...model, timestamps: true, softDelete: true }) },
-    auth: { source: await writeJson(path + '.auth.json', users) },
+    database: { source: path, schema: await writeJson(`${path}.schema.json`, { ...model, timestamps: true, softDelete: true }) },
+    auth: { source: await writeJson(`${path}.auth.json`, users) },
   };
   const { app } = await setup(t, config);
   const alice = await login(app, 'alice'),
@@ -331,7 +331,7 @@ test('legacy unowned records require an administrator and disabling features ret
   assert.equal(old.json().createdAt, null);
   const original = JSON.parse(await readFile(path, 'utf8')).items[0];
   await app.close();
-  const disabled = (await createServer({ storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model) }, server: { logger: false } })).fastify();
+  const disabled = (await createServer({ storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, model) }, server: { logger: false } })).fastify();
   t.after(() => disabled.close());
   const replaced = await request(disabled, 'PUT', '/items/1', { name: 'open' });
   assert.equal(replaced.statusCode, 200, replaced.body);
@@ -346,7 +346,7 @@ test('failed restore validation and repeated DELETE retain original records', as
   const schema = cascadeSchema();
   schema.models.Parent.softDelete = false;
   await writeFile(path, JSON.stringify({ parents: [{ id: 1, name: 'p' }], children: [{ id: 1, name: 'c', parentId: 1 }] }));
-  const { app } = await setup(t, { storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', { ...schema, softDelete: true }) } });
+  const { app } = await setup(t, { storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, { ...schema, softDelete: true }) } });
   assert.equal((await request(app, 'DELETE', '/parents/1')).statusCode, 200);
   const before = await readFile(path, 'utf8');
   assert.equal((await request(app, 'PATCH', '/children/1', {})).statusCode, 400);

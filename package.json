@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-alpha.10",
+  "version": "1.0.0-alpha.11",
   "description": "JSON mock server with schema-driven REST, GraphQL, nested queries and OpenAPI generation",
   "type": "module",
   "main": "./dist/index.js",
@@ -38,7 +38,7 @@
   ],
   "scripts": {
     "build": "node scripts/clean-dist.js && tsc && node scripts/prepare-dist.js",
-    "lint": "biome check .",
+    "lint": "biome check . --error-on-warnings",
     "lint:fix": "biome check --write .",
     "pack:check": "node scripts/check-package.js",
     "prepack": "npm run build",

@@ -7,6 +7,7 @@ import { writeOpenapi } from '../openapi/entry.js';
 import { configure, type NormalizedServerConfig, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
 import { configuredModel } from '../server/model.js';
+import { openapiOptions } from '../server/openapi-options.js';
 
 const HELP_TEXT = `Deep JSON Server
 
@@ -37,17 +38,7 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
   }
   await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
   const model = await configuredModel(config);
-  const openapi = config.openapi
-    ? (await import('../openapi/generate.js')).openapiFromModel(model, {
-        files: config.files !== undefined,
-        auth: config.auth !== undefined,
-        host: config.server.host,
-        port: config.server.port,
-        pageSize: config.server.pageSize,
-        maxPageSize: config.server.maxPageSize,
-        info: config.openapi.info,
-      })
-    : undefined;
+  const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config)) : undefined;
   const graphql = config.graphql ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
   if (openapi && config.openapi?.target) {
     await writeOpenapi(openapi, config.openapi.target);

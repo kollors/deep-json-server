@@ -34,7 +34,7 @@ test('schema generators and accessors need no database, file store or unrelated 
   const graphqlPath = join(dir, 'out', 'schema.graphql');
   const facade = await createServer({
     storage: 'file',
-    database: { source: join(dir, 'missing.json'), schema: await writeJson(join(dir, 'missing.json') + '.schema.json', schema) },
+    database: { source: join(dir, 'missing.json'), schema: await writeJson(`${join(dir, 'missing.json')}.schema.json`, schema) },
     files: { source: join(dir, 'missing-files') },
     graphql: { target: graphqlPath },
     openapi: { target: openapiPath },
@@ -123,7 +123,7 @@ test('GraphQL introspection stays available when the database fails and internal
     t,
     undefined,
     {},
-    { storage: 'file', database: { source: path, schema: await writeJson(path + '.schema.json', model()) }, graphql: {}, files: { source: join(dir, 'files') } },
+    { storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, model()) }, graphql: {}, files: { source: join(dir, 'files') } },
   );
   await server.ready();
   await fs.writeFile(path, 'broken');

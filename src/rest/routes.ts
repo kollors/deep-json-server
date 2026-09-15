@@ -2,9 +2,19 @@ import type { FastifyInstance } from 'fastify';
 import type { Engine } from '../core/engine.js';
 import { domainError } from '../core/errors.js';
 import type { Authenticate } from '../core/lifecycle/options.js';
+import type { Entity } from '../core/model.js';
 import { MUTATIONS } from '../core/operations.js';
 import { parseRestOptions } from './options.js';
 import { project, validateRest } from './projection.js';
+
+/** Возвращает актуальную сущность из снимка модели или сообщает об исчезнувшем ресурсе.
+ * @example Коллекция users есть в модели → Entity; отсутствует → NOT_FOUND.
+ */
+function entityFor(engine: Engine, collection: string): Entity {
+  const entity = engine.model.byCollection.get(collection);
+  if (!entity) throw domainError('NOT_FOUND', 'Resource not found');
+  return entity;
+}
 /** Регистрирует чтение коллекций и операции создания, замены, изменения и удаления записей.
  * @example После регистрации GET / → { resources: [...] }; функция возвращает undefined.
  */
@@ -15,7 +25,7 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
     const itemPath = `${path}/:${initial.primary}`;
     server.get(path, async (request) => {
       const context = await engine.context();
-      const entity = context.model.byCollection.get(initial.collection)!;
+      const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
       const plans = validateRest(engine, entity, options, true);
       const page = engine.list(engine.records(context, entity), entity.root, undefined, plans.get(options.scope));
@@ -23,7 +33,7 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
     });
     server.get(itemPath, async (request) => {
       const context = await engine.context();
-      const entity = context.model.byCollection.get(initial.collection)!;
+      const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
       const plans = validateRest(engine, entity, options);
       const ref = engine.find(context, entity, (request.params as Record<string, string>)[entity.primary]);

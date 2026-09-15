@@ -3,39 +3,16 @@ import type { DatabaseStore } from './database.js';
 import { domainError } from './errors.js';
 import { RecordMutation } from './lifecycle/mutation.js';
 import type { ActorSource } from './lifecycle/options.js';
-import { type Entity, inferModel, isReverseRelation, type Model, type Node, pathParts, readPath, validateRecord } from './model.js';
+import { type Entity, inferModel, isReverseRelation, type Model, type Node, readPath, validateRecord } from './model.js';
 import { MutationWriter } from './mutations/write.js';
 import type { MutationMode } from './operations.js';
-import { compileWhere, type Predicate } from './query/filter.js';
-import { badQuery, childrenOf, type ListOptions, nodeAt } from './query/options.js';
+import { executeList, type Page, type PreparedList, prepareList } from './query/execute.js';
+import type { ListOptions } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
 import type { DatabaseData, JsonObject } from './types.js';
-import { hasOnlyKeys, isObject } from './utils.js';
+import { isObject } from './utils.js';
 
-export interface PreparedList {
-  page: number;
-  pageSize: number;
-  predicate?: Predicate;
-  rules: Array<{ direction: 'ASC' | 'DESC'; keys: string[] }>;
-}
-export interface Page {
-  data: Ref[];
-  total: number;
-}
-function filterView(ref: Ref): Record<string, unknown> {
-  const value: Record<string, unknown> = {};
-  for (const [name, node] of Object.entries(childrenOf(ref.node)))
-    if (!node.writeOnly)
-      Object.defineProperty(value, name, {
-        enumerable: true,
-        get: () => {
-          const field = resolveField(ref, node, true);
-          return isRef(field) ? filterView(field) : Array.isArray(field) ? field.map((v) => (isRef(v) ? filterView(v) : v)) : field;
-        },
-      });
-  return value;
-}
-const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+export type { Page, PreparedList } from './query/execute.js';
 export class Engine {
   private inferredModels = new WeakMap<DatabaseData, Model>();
   constructor(
@@ -83,59 +60,13 @@ export class Engine {
    * @example pager: { page: 2, pageSize: 5 } → план с page: 2 и pageSize: 5; page: 0 → ошибка.
    */
   prepareOptions(node: Node, options: ListOptions = {}): PreparedList {
-    const predicate = options.where !== undefined || node.softDelete || node.relation?.softDelete ? compileWhere(node, options.where ?? {}) : undefined;
-    if (options.order !== undefined) {
-      if (!Array.isArray(options.order)) badQuery('order must be an array');
-      for (const rule of options.order) {
-        if (!isObject(rule) || !hasOnlyKeys(rule, ['field', 'direction']) || typeof rule.field !== 'string' || !['ASC', 'DESC'].includes(rule.direction)) badQuery('Invalid order rule');
-        nodeAt(node, rule.field, true);
-      }
-    }
-    if (options.pager !== undefined && (!isObject(options.pager) || !hasOnlyKeys(options.pager, ['page', 'pageSize']))) badQuery('Invalid pager');
-    const page = options.pager?.page ?? 1;
-    const pageSize = options.pager?.pageSize ?? this.pageSize;
-    if (
-      typeof page !== 'number' ||
-      typeof pageSize !== 'number' ||
-      !Number.isSafeInteger(page) ||
-      page < 1 ||
-      !Number.isSafeInteger(pageSize) ||
-      pageSize < 1 ||
-      pageSize > this.maxPageSize ||
-      !Number.isSafeInteger((page - 1) * pageSize)
-    )
-      badQuery(`Invalid pager; pageSize must be 1..${this.maxPageSize}`);
-    return { page, pageSize, predicate, rules: (options.order ?? []).map((rule) => ({ direction: rule.direction, keys: pathParts(rule.field) })) };
+    return prepareList(node, options, this.pageSize, this.maxPageSize);
   }
   /** Фильтрует, сортирует и возвращает страницу, не меняя порядок исходного массива.
    * @example Три подходящие записи, page: 2, pageSize: 2 → { data: [третья запись], total: 3 }.
    */
   list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options)): Page {
-    const { page, pageSize, predicate, rules } = prepared;
-    const start = (page - 1) * pageSize;
-    const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : records;
-    if (!rules.length) return { data: data.slice(start, start + pageSize), total: data.length };
-    // Извлекаем ключи один раз на запись, а не при каждом сравнении сортировки.
-    const ordered = data.map((ref) => ({ ref, keys: rules.map((rule) => readPath(ref.value, rule.keys)[0]) }));
-    ordered.sort((a, b) => {
-      for (let index = 0; index < rules.length; index++) {
-        const left = a.keys[index];
-        const right = b.keys[index];
-        const comparison =
-          left == null && right == null
-            ? 0
-            : left == null
-              ? 1
-              : right == null
-                ? -1
-                : typeof left === 'number' && typeof right === 'number'
-                  ? left - right
-                  : collator.compare(String(left), String(right));
-        if (comparison) return rules[index].direction === 'DESC' ? -comparison : comparison;
-      }
-      return 0;
-    });
-    return { data: ordered.slice(start, start + pageSize).map(({ ref }) => ref), total: data.length };
+    return executeList(records, prepared);
   }
   /** Проверяет коллекции, значения полей и целостность активных связей.
    * @example Согласованные записи → undefined; обязательная связь без цели → исключение.
