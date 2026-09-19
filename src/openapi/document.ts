@@ -121,7 +121,7 @@ export function buildOpenapiDocument({
       }
       schemas[fieldsName] = { type: 'object', additionalProperties: false, properties };
     }
-    schemas[name] = {
+    const tuple: OpenapiSchema = {
       type: 'array',
       minItems: 1,
       maxItems: list ? 2 : 1,
@@ -130,6 +130,20 @@ export function buildOpenapiDocument({
         ? '[fields, arguments?]. The first object selects fields; the optional second object contains where, order and pager. OpenAPI 3.0 cannot express positional item schemas; the server validates their order.'
         : '[fields]. * selects own fields without relations or writeOnly fields.',
     };
+    schemas[name] = list
+      ? {
+          anyOf: [
+            tuple,
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['union'],
+              properties: { union: { type: 'array', minItems: 1, items: ref(name) } },
+              description: 'Combines list scopes in array order and keeps the first record for each primary key.',
+            },
+          ],
+        }
+      : tuple;
     return ref(name);
   }
   function page(entity: Entity, node: Node): OpenapiSchema {
@@ -215,7 +229,7 @@ export function buildOpenapiDocument({
       name: 'scope',
       ...json(scope(entity, entity.root, list)),
       description:
-        'JSON [fields, arguments?]. Scalars use true; objects and relations use their own scope arrays. * includes own fields without relations or writeOnly fields. Arguments are available only on lists.',
+        'JSON [fields, arguments?] or, for lists, { union: [scope, ...] }. Scalars use true; objects and relations use their own scope arrays. * includes own fields without relations or writeOnly fields. Arguments are available only on lists.',
     });
     const shape = [selectionParameter(false)];
     const list = [selectionParameter(true)];

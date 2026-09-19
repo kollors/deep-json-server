@@ -3,29 +3,65 @@ import type { Entity, Node } from '../core/model.js';
 import { childrenOf } from '../core/query/options.js';
 import { isRef, type Ref, resolveField } from '../core/records.js';
 import type { JsonObject, JsonValue } from '../core/types.js';
-import { ownScope, type RestOptions, type Scope, scopeFor, validateScope } from './options.js';
+import { isUnionScope, ownScope, type RestOptions, type Scope, scopeFor, type TupleScope, validateScope } from './options.js';
+
+export interface ScopedPage {
+  data: Array<{ ref: Ref; scope: TupleScope }>;
+  total: number;
+}
 /** Проверяет дерево выбора и заранее подготавливает фильтры, сортировку и пагинацию вложенных списков.
  * @example Выбор без аргументов у одиночной записи → пустая Map; неверное поле → ошибка.
  */
-export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): Map<Scope | Node, PreparedList> {
+export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): Map<TupleScope | Node, PreparedList> {
   validateScope(entity.root, options.scope, list);
-  const plans = new Map<Scope | Node, PreparedList>();
-  if (list) plans.set(options.scope, engine.prepareOptions(entity.root, options.scope[1]));
+  const plans = new Map<TupleScope | Node, PreparedList>();
+  if (list && !isUnionScope(options.scope)) plans.set(options.scope, engine.prepareOptions(entity.root, options.scope[1]));
   const visit = (node: Node, scope: Scope): void => {
+    if (isUnionScope(scope)) {
+      for (const item of scope.union) {
+        if (!isUnionScope(item) && item[1]) plans.set(item, engine.prepareOptions(node, item[1]));
+        visit(node, item);
+      }
+      return;
+    }
     for (const [key, selection] of Object.entries(scope[0])) {
       if (selection === true) continue;
       const child = childrenOf(node)[key];
-      if (selection[1]) plans.set(selection, engine.prepareOptions(child, selection[1]));
+      if (!isUnionScope(selection) && selection[1]) plans.set(selection, engine.prepareOptions(child, selection[1]));
       visit(child, selection);
     }
   };
   visit(entity.root, options.scope);
   return plans;
 }
+/** Выполняет обычный или объединённый scope списка, сохраняя порядок частей и первую запись с каждым ключом.
+ * @example Две части с id 1, затем id 1 и 2 → данные [1, 2], total 2.
+ */
+export function listScope(engine: Engine, records: Ref[], node: Node, scope: Scope, plans: Map<TupleScope | Node, PreparedList>, planKey?: TupleScope | Node): ScopedPage {
+  if (!isUnionScope(scope)) {
+    const key = planKey ?? scope;
+    const prepared = plans.get(key) ?? engine.prepareOptions(node, scope[1]);
+    plans.set(key, prepared);
+    const page = engine.list(records, node, scope[1], prepared);
+    return { data: page.data.map((ref) => ({ ref, scope })), total: page.total };
+  }
+  const seen = new Set<unknown>();
+  const data: ScopedPage['data'] = [];
+  for (const item of scope.union) {
+    for (const entry of listScope(engine, records, node, item, plans).data) {
+      const key = resolveField(entry.ref, entry.ref.entity.fields[entry.ref.entity.primary]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      data.push(entry);
+    }
+  }
+  return { data, total: data.length };
+}
 /** Строит новый объект из выбранных полей, разворачивая связи и обрабатывая вложенные списки.
  * @example Запись { id: '1', name: 'Анна' } и выбор [{ name: true }] → { name: 'Анна' }.
  */
-export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<Scope | Node, PreparedList>()): JsonObject {
+export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<TupleScope | Node, PreparedList>()): JsonObject {
+  if (isUnionScope(scope)) throw new Error('scope union cannot select a single record');
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
@@ -36,11 +72,8 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
     if (isRef(value)) output[key] = project(engine, value, selection, plans);
     else if (Array.isArray(value)) {
       if (value.every(isRef) && (value.length > 0 || node.relation || node.base === 'object')) {
-        const planKey = selection === ownScope ? node : selection;
-        const prepared = plans.get(planKey) ?? engine.prepareOptions(node, selection[1]);
-        plans.set(planKey, prepared);
-        const page = engine.list(value as Ref[], node, selection[1], prepared);
-        output[key] = { data: page.data.map((v) => project(engine, v, selection, plans)), total: page.total };
+        const page = listScope(engine, value as Ref[], node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection);
+        output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans)), total: page.total };
       } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans) : structuredClone(item))) as JsonValue;
     } else output[key] = structuredClone(value) as JsonValue;
   }

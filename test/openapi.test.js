@@ -319,6 +319,7 @@ test('OpenAPI describes JSON scope with model fields and recursive relations', a
   const ajv = new Ajv({ strict: false });
   ajv.addSchema({ components: doc.components }, 'scope-contract');
   const validate = ajv.compile({ $ref: 'scope-contract#/components/schemas/ItemScope' });
+  const validateList = ajv.compile({ $ref: 'scope-contract#/components/schemas/ItemListScope' });
   for (const scope of [[{}], [{ '*': true }], [{ name: true }], [{ profile: [{ '*': true }], peers: [{ '*': true }] }], [{ profile: [{ name: true }], peers: [{ peers: [{ id: true }] }] }]]) {
     assert.equal(validate(scope), true, JSON.stringify(validate.errors));
   }
@@ -341,4 +342,6 @@ test('OpenAPI describes JSON scope with model fields and recursive relations', a
   ]) {
     assert.equal(validate(scope), false, JSON.stringify(scope));
   }
+  for (const scope of [[{ '*': true }], { union: [[{ id: true }], [{ name: true }]] }]) assert.equal(validateList(scope), true, JSON.stringify(validateList.errors));
+  for (const scope of [{ union: [] }, { union: [[{}]], extra: true }]) assert.equal(validateList(scope), false, JSON.stringify(scope));
 });

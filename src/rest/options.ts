@@ -4,15 +4,25 @@ import { hasOnlyKeys, isObject, isSafeKey } from '../core/utils.js';
 export interface Fields {
   [key: string]: Scope | true;
 }
-export type Scope = [Fields, ListOptions?];
+export type TupleScope = [Fields, ListOptions?];
+export interface UnionScope {
+  union: Scope[];
+}
+export type Scope = TupleScope | UnionScope;
 export interface RestOptions {
   scope: Scope;
 }
-export const ownScope: Scope = [{ '*': true }];
+export const ownScope: TupleScope = [{ '*': true }];
+/** Определяет специальный scope, объединяющий несколько обычных выборок списка.
+ * @example { union: [[{ id: true }], [{ name: true }]] } → true.
+ */
+export function isUnionScope(scope: Scope): scope is UnionScope {
+  return !Array.isArray(scope);
+}
 /** Выбирает вложенный набор полей; для отсутствующего поля или true возвращает выбор собственных полей.
  * @example scopeFor([{ '*': true }], 'name') → [{ '*': true }].
  */
-export function scopeFor(scope: Scope, key: string): Scope {
+export function scopeFor(scope: TupleScope, key: string): Scope {
   const selection = Object.hasOwn(scope[0], key) ? scope[0][key] : true;
   return selection === true ? ownScope : selection;
 }
@@ -36,6 +46,12 @@ export function parseRestOptions(query: unknown): RestOptions {
  */
 export function validateScope(node: Node, scope: unknown, list = false, depth = 0): asserts scope is Scope {
   if (depth > 32) badQuery('scope is too deep');
+  if (isObject(scope) && Object.hasOwn(scope, 'union')) {
+    if (!list || node.mixed) badQuery('scope union requires a list with consistent object types');
+    if (!hasOnlyKeys(scope, ['union']) || !Array.isArray(scope.union) || scope.union.length < 1) badQuery('scope union must contain scopes');
+    for (const item of scope.union) validateScope(node, item, true, depth + 1);
+    return;
+  }
   if (!Array.isArray(scope) || scope.length < 1 || scope.length > 2 || !isObject(scope[0])) badQuery('scope must be [fields, arguments?]');
   if (scope.length === 2) {
     if (!list || node.mixed) badQuery('scope arguments require a list with consistent object types');

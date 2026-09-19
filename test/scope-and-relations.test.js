@@ -60,6 +60,30 @@ test('scope is the only REST query parameter and root arguments match GraphQL', 
   }
 });
 
+test('scope union combines list selections in order and keeps the first record for each primary key', async (t) => {
+  const { app } = await setup(t, itemSchema, {
+    items: [
+      { id: 1, name: 'A', peerIds: [2, 3] },
+      { id: 2, name: 'B' },
+      { id: 3, name: 'C' },
+    ],
+  });
+  const union = {
+    union: [
+      [{ id: true }, { where: { id: { eq: 3 } } }],
+      [{ name: true }, { where: { id: { gte: 2 } } }],
+    ],
+  };
+  const root = await app.inject(url('/items', union));
+  assert.equal(root.statusCode, 200, root.body);
+  assert.deepEqual(root.json(), { data: [{ id: 3 }, { name: 'B' }], total: 2 });
+  const nested = await app.inject(url('/items/1', [{ peers: union }]));
+  assert.equal(nested.statusCode, 200, nested.body);
+  assert.deepEqual(nested.json(), { peers: { data: [{ id: 3 }, { name: 'B' }], total: 2 } });
+  for (const scope of [{ union: [] }, { union: [[{}], true] }, { union: [[{}]], extra: true }]) assert.equal((await app.inject(url('/items', scope))).statusCode, 400);
+  assert.equal((await app.inject(url('/items/1', union))).statusCode, 400);
+});
+
 test('scope validates every tuple and list argument before projecting empty data', async (t) => {
   const { app } = await setup(t, itemSchema, { items: [] });
   for (const scope of [

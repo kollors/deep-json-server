@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@alpha
 ```
 
-To install a specific version, use `@1.0.0-alpha.11`.
+To install a specific version, use `@1.0.0-alpha.12`.
 
 ## Quick start
 
@@ -420,7 +420,7 @@ For example, select a movie's own fields, its actors' users and sorted genres:
 
 Omitting `scope` returns own fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
 
-Arguments are available only on lists. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
+Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. This also works for nested lists. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
 
 ### Nested writes
 
