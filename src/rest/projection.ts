@@ -66,7 +66,7 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
-    const wildcard = Object.hasOwn(scope[0], '*') && !node.relation && !node.many && node.base !== 'object';
+    const wildcard = Object.hasOwn(scope[0], '*') && !node.relation && !node.relationKey && !node.many && node.base !== 'object';
     if (node.writeOnly || (!Object.hasOwn(scope[0], key) && !wildcard)) continue;
     const value = resolveField(ref, node, false, actor);
     const selection = scopeFor(scope, key);
@@ -85,7 +85,9 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
       if (
         !Object.hasOwn(output, key) &&
         !children[key]?.writeOnly &&
-        (children[key] ? !children[key].relation && !children[key].many && children[key].base !== 'object' : value === null || ['string', 'number', 'boolean'].includes(typeof value))
+        (children[key]
+          ? !children[key].relation && !children[key].relationKey && !children[key].many && children[key].base !== 'object'
+          : value === null || ['string', 'number', 'boolean'].includes(typeof value))
       )
         output[key] = structuredClone(value);
   return output;

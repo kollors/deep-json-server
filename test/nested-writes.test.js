@@ -130,7 +130,7 @@ test('nested source paths use the correct array element and accept single relati
       owner: { name: 'new owner' },
     },
     '/movies/1',
-    [{ '*': true, ownerId: true, actors: [{ '*': true, genreIds: true, user: [{ '*': true }], genres: [{ '*': true }] }], owner: [{ '*': true }] }],
+    [{ '*': true, ownerId: true, actors: [{ '*': true, userId: true, genreIds: true, user: [{ '*': true }], genres: [{ '*': true }] }], owner: [{ '*': true }] }],
   );
   assert.equal(result.statusCode, 200, result.body);
   assert.equal(result.json().actors.data[0].userId, 1);
@@ -227,11 +227,11 @@ test('reverse links attach new records and replace only the selected parent memb
 
 test('reverse scalar keys can be supplied by a nested parent creation', async (t) => {
   const { app } = await setup(t, reverseModel(false, true), { parents: [], children: [] });
-  const result = await mutate(app, 'POST', { name: 'parent', children: [{ name: 'child' }] }, '/parents', [{ '*': true, children: [{ '*': true }] }]);
+  const result = await mutate(app, 'POST', { name: 'parent', children: [{ name: 'child' }] }, '/parents', [{ '*': true, children: [{ '*': true, parentId: true }] }]);
   assert.equal(result.statusCode, 201, result.body);
   assert.equal(result.json().children.data[0].parentId, result.json().id);
   assert.equal((await mutate(app, 'PATCH', { children: [] }, '/parents/1')).statusCode, 200);
-  assert.equal((await get(app, '/children/1')).parentId, null);
+  assert.equal((await get(app, url('/children/1', [{ '*': true, parentId: true }]))).parentId, null);
 });
 
 test('custom primary keys use the model key and require generated keys for nested creation', async (t) => {
@@ -266,7 +266,7 @@ test('required and protected relation keys reject disconnects atomically', async
   const protectedServer = await setup(t, schema, { a: [{ id: 1, locked: 1 }], b: [{ id: 1 }, { id: 2 }] });
   const result = await mutate(protectedServer.app, 'PATCH', { other: 2 }, '/a/1');
   assert.equal(result.statusCode, 400, result.body);
-  assert.equal((await get(protectedServer.app, '/a/1')).locked, 1);
+  assert.equal((await get(protectedServer.app, url('/a/1', [{ '*': true, locked: true }]))).locked, 1);
   assert.deepEqual((await get(protectedServer.app, '/b')).data, [{ id: 1 }, { id: 2 }]);
 });
 
@@ -283,7 +283,7 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
   const failed = await mutate(app, 'PATCH', { movies: [1] }, '/users/3');
   assert.equal(failed.statusCode, 400, failed.body);
   assert.match(failed.json().error, /Ambiguous target/);
-  assert.deepEqual((await get(app, url('/movies/1', [{ actors: [{ '*': true, genreIds: true }] }]))).actors.data, initial.movies[0].actors);
+  assert.deepEqual((await get(app, url('/movies/1', [{ actors: [{ '*': true, userId: true, genreIds: true }] }]))).actors.data, initial.movies[0].actors);
   const result = await mutate(
     app,
     'PATCH',
@@ -304,7 +304,8 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
   assert.equal(result.statusCode, 200, result.body);
   assert.equal((await get(app, url('/movies/1', [{ actors: [{ '*': true }] }]))).actors.data.length, 3);
   assert.equal((await mutate(app, 'PATCH', { movies: [] }, '/users/3')).statusCode, 400);
-  assert.equal((await get(app, url('/movies/1', [{ actors: [{ '*': true }] }]))).actors.data[2].userId, 3);
+  assert.equal((await get(app, url('/movies/1', [{ actors: [{ '*': true }] }]))).actors.data[2].userId, undefined);
+  assert.equal((await get(app, url('/movies/1', [{ actors: [{ userId: true }] }]))).actors.data[2].userId, 3);
 });
 
 test('nested source bindings work below multiple levels of arrays', async (t) => {
@@ -346,10 +347,10 @@ test('custom target keys reject ambiguous matches without modifying other record
     ],
   });
   assert.equal((await mutate(app, 'PATCH', { target: { id: 1, name: 'updated' } }, '/owners/1')).statusCode, 200);
-  assert.equal((await get(app, '/owners/1')).targetCode, 'a');
+  assert.equal((await get(app, url('/owners/1', [{ '*': true, targetCode: true }]))).targetCode, 'a');
   const failed = await mutate(app, 'PATCH', { target: 2 }, '/owners/1');
   assert.equal(failed.statusCode, 409, failed.body);
-  assert.equal((await get(app, '/owners/1')).targetCode, 'a');
+  assert.equal((await get(app, url('/owners/1', [{ '*': true, targetCode: true }]))).targetCode, 'a');
 });
 
 test('nested GraphQL errors and excessive depth do not persist partial writes', async (t) => {

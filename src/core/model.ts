@@ -197,6 +197,19 @@ function addField(entity: Entity, path: string, field: Field, implicit = false):
   entity.fields[path] = node;
   return node;
 }
+/** Помечает непервичные поля, в которых хранятся ключи связей.
+ * @example Для связи user с source = 'userId' поле userId получает relationKey = true, а первичный id остаётся обычным полем.
+ */
+function markRelationKeys(model: Model): void {
+  for (const entity of model.entities)
+    for (const node of Object.values(entity.fields)) {
+      if (!node.relation) continue;
+      const sourceField = entity.fields[node.source as string];
+      const targetField = node.relation.fields[node.target as string];
+      if (sourceField && !sourceField.primary) sourceField.relationKey = true;
+      if (targetField && !targetField.primary) targetField.relationKey = true;
+    }
+}
 function systemFields(entity: Entity, options: Required<RecordOptions>): void {
   const names = [
     ...(entity.timestamps ? ['createdAt', 'updatedAt'] : []),
@@ -339,8 +352,6 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
       if (node.relation) {
         const sourceField = entity.fields[node.source as string];
         const targetField = node.relation.fields[node.target as string];
-        if (!sourceField.primary) sourceField.relationKey = true;
-        if (!targetField.primary) targetField.relationKey = true;
         if (sourceField.relation || targetField.relation || !['string', 'number'].includes(sourceField.base) || sourceField.base !== targetField.base)
           throw new Error(`Incompatible relation keys: ${entity.name}.${node.path}`);
       } else {
@@ -350,6 +361,7 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
         ajv.removeSchema(schema);
       }
     }
+  markRelationKeys(model);
   for (const entity of model.entities) {
     const check = (node: Node, inArray = false, protectedParent = false): void => {
       if (inArray && node.readOnly && !protectedParent) throw new Error(`Read-only fields inside arrays require a readOnly parent: ${entity.name}.${node.path}`);
@@ -516,5 +528,6 @@ export function inferModel(database: DatabaseData, settings: RecordOptions = {})
         reverse.relation = entity;
       }
     }
+  markRelationKeys(model);
   return model;
 }

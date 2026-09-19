@@ -86,7 +86,10 @@ test('wildcard includes only scalar fields while arrays, objects and relations a
   const explicit = await request(server, '/movies/1', { scope: [{ publisherIds: true, actors: [{ '*': true }] }] });
   assert.deepEqual(explicit.publisherIds, ['2']);
   assert.equal(explicit.actors.data[0].user, undefined);
-  assert.equal(explicit.actors.data[0].userId, '1');
+  assert.equal(explicit.actors.data[0].userId, undefined);
+  const relationKeys = await request(server, '/users/1', { scope: [{ '*': true, countryId: true }] });
+  assert.equal(relationKeys.countryId, '1');
+  assert.equal((await request(server, '/users/1', { scope: [{ '*': true }] })).countryId, undefined);
   const nested = await request(server, '/movies/1', { scope: [{ actors: [{ genres: [{ '*': true }] }] }] });
   assert.deepEqual(
     nested.actors.data.map((a) => a.genres.data.map((g) => g.id)),
@@ -99,12 +102,20 @@ test('wildcard includes only scalar fields while arrays, objects and relations a
 });
 
 test('schemaless REST accepts new fields, infers relations, and rejects exporters', async (t) => {
-  const facade = await createServer({ storage: 'memory', database: { source: { users: [{ id: '1' }], movies: [{ id: 'a', userId: '1', title: 'A' }] } }, server: { logger: false } });
+  const facade = await createServer({
+    storage: 'memory',
+    database: { source: { users: [{ id: '1' }], movies: [{ id: 'a', userId: '1', externalId: 'external', title: 'A' }] } },
+    server: { logger: false },
+  });
   const server = facade.fastify();
   t.after(() => server.close());
   await assert.rejects(() => facade.openapi(), /not configured/);
   await assert.rejects(() => facade.graphql(), /not configured/);
   assert.equal((await request(server, '/users/1', { scope: [{ movies: [{ title: true }] }] })).movies.total, 1);
+  const wildcard = await request(server, '/movies/a', { scope: [{ '*': true }] });
+  assert.equal(wildcard.userId, undefined);
+  assert.equal(wildcard.externalId, 'external');
+  assert.equal((await request(server, '/movies/a', { scope: [{ userId: true }] })).userId, '1');
   let r = await server.inject({ method: 'POST', url: url('/users', { scope: [{ '*': true, anything: [{ '*': true }], tags: true }] }), payload: { anything: { nested: 42 }, tags: [true, false] } });
   assert.equal(r.statusCode, 201, r.body);
   const key = r.json().id;
@@ -373,7 +384,7 @@ test('required and dangling relations are validated without data coercion', asyn
   assert.equal(good.json().country.code, 1);
   assert.equal((await server.inject({ method: 'DELETE', url: '/countries/1' })).statusCode, 409);
   assert.equal((await server.inject({ method: 'PUT', url: `/users/${good.json().id}`, payload: {} })).statusCode, 400);
-  assert.equal((await request(server, `/users/${good.json().id}`)).countryCode, 1);
+  assert.equal((await request(server, `/users/${good.json().id}`, { scope: [{ '*': true, countryCode: true }] })).countryCode, 1);
 });
 
 test('cascade removes referring roots and embedded actors, and rolls back restrictions', async (t) => {

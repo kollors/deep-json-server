@@ -128,7 +128,7 @@ export function buildOpenapiDocument({
       items: list ? { anyOf: [ref(fieldsName), options(entity, node)] } : ref(fieldsName),
       description: list
         ? '[fields, arguments?]. The first object selects fields; the optional second object contains where, order and pager. OpenAPI 3.0 cannot express positional item schemas; the server validates their order.'
-        : '[fields]. * selects scalar fields only; arrays, objects, relations and writeOnly fields must be handled explicitly.',
+        : '[fields]. * selects scalar fields except relation keys; arrays, objects, relations, their keys and writeOnly fields must be handled explicitly.',
     };
     schemas[name] = list
       ? {
@@ -229,7 +229,7 @@ export function buildOpenapiDocument({
       name: 'scope',
       ...json(scope(entity, entity.root, list)),
       description:
-        'JSON [fields, arguments?] or, for lists, { union: [scope, ...] }. Scalars and primitive arrays use true; objects and relations use their own scope arrays. * includes scalar fields only. Arguments are available only on lists.',
+        'JSON [fields, arguments?] or, for lists, { union: [scope, ...] }. Scalars and primitive arrays use true; objects and relations use their own scope arrays. * includes scalar fields except relation keys. Arguments are available only on lists.',
     });
     const shape = [selectionParameter(false)];
     const list = [selectionParameter(true)];

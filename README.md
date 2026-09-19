@@ -4,7 +4,7 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**Breaking changes: 1.0.0-beta.1.** REST `scope` wildcard now selects only scalar fields. Arrays, objects and relations must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
+**Breaking changes: 1.0.0-beta.2.** The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and their keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
 
 ## Installation
 
@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@beta
 ```
 
-To install a specific version, use `@1.0.0-beta.1`.
+To install a specific version, use `@1.0.0-beta.2`.
 
 ## Quick start
 
@@ -397,7 +397,7 @@ const params = new URLSearchParams({ scope: JSON.stringify(scope) });
 const response = await fetch(`/users?${params}`);
 ```
 
-Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes scalar fields only. Arrays, objects, relations and `writeOnly` fields are not included by the wildcard.
+Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes only scalar fields of the current model that do not store relation keys. Arrays, objects, relations, their keys and `writeOnly` fields are not included by the wildcard. A relation key remains available through an explicit selection such as `{ "*": true, "countryId": true }`. Without a schema, a key is excluded from `*` only when the server can infer its relation from the name and an existing collection.
 
 For example, select a movie's own fields, its actors' users and sorted genres:
 
@@ -454,7 +454,16 @@ The key name and type follow the target model. An object containing only a key s
 
 A supplied list replaces the relation's membership. PATCH preserves omitted relations; PUT clears omitted writable links. `[]` clears a list and `null` clears a nullable single relation. Removing a link does not delete the related record. Required relations must remain populated.
 
-Use either the relation field or its storage key in an object, for example `genres` or `genreIds`. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
+Use either the relation field or its storage key in an object, for example `genres` or `genreIds`. Supplying both fields returns `400 INVALID_INPUT`, even when their key sets match:
+
+```json
+{
+  "genreIds": ["1", "2"],
+  "genres": ["1", "2"]
+}
+```
+
+The server neither gives one field priority nor merges the values; the entire operation is rolled back. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
 
 All nested changes belong to the main record's transaction. A validation error, missing record or invalid response selection rolls back the entire operation. Updating a shared record affects every record linked to it.
 

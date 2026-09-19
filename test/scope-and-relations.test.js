@@ -184,7 +184,7 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
       },
     };
     const { app } = await setup(t, schema, { parents: [{ id: 1, name: 'old', code: 'P' }], children: [{ id: 1, parentCode: 'P' }] }, true);
-    const path = url('/parents/1', [{ '*': true, children: [{ id: true }] }]);
+    const path = url('/parents/1', [{ '*': true, code: true, children: [{ id: true }] }]);
     const patch = await app.inject({ method: 'PATCH', url: path, payload: { name: 'patch' } });
     assert.equal(patch.json().children.total, 1);
     for (const payload of [{ name: 'replace' }, { name: 'replace', children: [] }]) {
@@ -192,7 +192,7 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
       assert.equal(result.statusCode, 200, result.body);
       assert.equal(result.json().children.total, 0);
       assert.equal(result.json().code, 'P');
-      assert.equal((await app.inject('/children/1')).json().parentCode, null);
+      assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, null);
       const relink = await app.inject({ method: 'PATCH', url: path, payload: { children: [1] } });
       assert.equal(relink.statusCode, 200, relink.body);
       assert.equal(relink.json().children.total, 1);
@@ -215,7 +215,7 @@ test('required reverse relations with custom keys cannot be cleared', async (t) 
     const result = await app.inject({ method: 'PUT', url: '/parents/1', payload });
     assert.equal(result.statusCode, 400, result.body);
     assert.match(result.json().error, /Required relation/);
-    assert.equal((await app.inject('/children/1')).json().parentCode, 'P');
+    assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, 'P');
   }
 });
 
@@ -231,7 +231,11 @@ test('transaction key indexes see earlier creates and do not outlive rolled back
   const failed = await mutate({ first: { name: 'rollback' }, second: 999 });
   assert.equal(failed.statusCode, 404, failed.body);
   assert.equal((await mutate({ second: 1 })).statusCode, 404);
-  const good = await mutate({ first: { name: 'created' }, second: { id: 1, name: 'updated' } });
+  const good = await app.inject({
+    method: 'PATCH',
+    url: url('/holders/1', [{ '*': true, firstId: true, secondId: true }]),
+    payload: { first: { name: 'created' }, second: { id: 1, name: 'updated' } },
+  });
   assert.equal(good.statusCode, 200, good.body);
   assert.deepEqual(good.json(), { id: 1, firstId: 1, secondId: 1 });
   assert.equal((await app.inject('/users/1')).json().name, 'updated');
