@@ -1,4 +1,5 @@
 import type { Engine, PreparedList } from '../core/engine.js';
+import type { Actor } from '../core/lifecycle/options.js';
 import type { Entity, Node } from '../core/model.js';
 import { childrenOf } from '../core/query/options.js';
 import { isRef, type Ref, resolveField } from '../core/records.js';
@@ -60,25 +61,32 @@ export function listScope(engine: Engine, records: Ref[], node: Node, scope: Sco
 /** Строит новый объект из выбранных полей, разворачивая связи и обрабатывая вложенные списки.
  * @example Запись { id: '1', name: 'Анна' } и выбор [{ name: true }] → { name: 'Анна' }.
  */
-export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<TupleScope | Node, PreparedList>()): JsonObject {
+export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<TupleScope | Node, PreparedList>(), actor?: Actor): JsonObject {
   if (isUnionScope(scope)) throw new Error('scope union cannot select a single record');
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
-    if (node.writeOnly || (!Object.hasOwn(scope[0], key) && !(Object.hasOwn(scope[0], '*') && !node.relation))) continue;
-    const value = resolveField(ref, node);
+    const wildcard = Object.hasOwn(scope[0], '*') && !node.relation && !node.many && node.base !== 'object';
+    if (node.writeOnly || (!Object.hasOwn(scope[0], key) && !wildcard)) continue;
+    const value = resolveField(ref, node, false, actor);
     const selection = scopeFor(scope, key);
     if (value === undefined) continue;
-    if (isRef(value)) output[key] = project(engine, value, selection, plans);
+    if (isRef(value)) output[key] = project(engine, value, selection, plans, actor);
     else if (Array.isArray(value)) {
       if (value.every(isRef) && (value.length > 0 || node.relation || node.base === 'object')) {
         const page = listScope(engine, value as Ref[], node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection);
-        output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans)), total: page.total };
-      } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans) : structuredClone(item))) as JsonValue;
+        output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor)), total: page.total };
+      } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans, actor) : structuredClone(item))) as JsonValue;
     } else output[key] = structuredClone(value) as JsonValue;
   }
-  // При выведенной модели добавляем исходные поля, которые не удалось описать.
+  // При выведенной модели добавляем исходные скаляры, которые не удалось описать.
   if (!ref.context.model.explicit && scope[0]['*'] === true)
-    for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && !children[key]?.relation && !children[key]?.writeOnly) output[key] = structuredClone(value);
+    for (const [key, value] of Object.entries(ref.value))
+      if (
+        !Object.hasOwn(output, key) &&
+        !children[key]?.writeOnly &&
+        (children[key] ? !children[key].relation && !children[key].many && children[key].base !== 'object' : value === null || ['string', 'number', 'boolean'].includes(typeof value))
+      )
+        output[key] = structuredClone(value);
   return output;
 }

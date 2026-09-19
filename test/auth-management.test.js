@@ -341,6 +341,13 @@ test('queued record mutations recheck auth instead of keeping the original admin
 
 test('OpenAPI describes all auth methods and GraphQL remains limited to record operations', async () => {
   const document = await generateOpenapi(schema, { auth: true });
+  assert.deepEqual(document.paths['/items'].get.security, [{}, { AuthBearer: [] }]);
+  assert.ok(document.paths['/items'].get.responses[401]);
+  assert.equal(document.components.schemas.Item.properties.actions.readOnly, true);
+  assert.deepEqual(Object.keys(document.components.schemas.Item_actions.properties), ['update', 'replace', 'delete']);
+  assert.equal(document.components.schemas.ItemWhere.properties.actions, undefined);
+  assert.ok(document.components.schemas.ItemScopeFields.properties.actions);
+  assert.equal(document.components.schemas.ItemCreate.properties.actions, undefined);
   for (const path of ['/auth/register', '/auth/login']) assert.deepEqual(document.paths[path].post.security, []);
   for (const path of ['/auth/users/{id}/password', '/auth/users/{id}/admin']) {
     const operation = document.paths[path].patch;
@@ -356,6 +363,7 @@ test('OpenAPI describes all auth methods and GraphQL remains limited to record o
   assert.equal(document.components.schemas.AuthPasswordInput.properties.newPassword.writeOnly, true);
   assert.deepEqual(document.components.schemas.AuthPasswordInput.required, ['newPassword']);
   assert.doesNotMatch(await generateGraphql(schema, { auth: true }), /authRegister|authChangePassword|authChangeAdmin|AuthCredentialsInput|AuthSuccess/);
+  assert.match(await generateGraphql(schema, { auth: true }), /actions: Item_actions!/);
   const disabled = await generateOpenapi(schema);
   assert.equal(disabled.paths['/auth/register'], undefined);
   assert.equal(disabled.components.schemas.AuthPasswordInput, undefined);

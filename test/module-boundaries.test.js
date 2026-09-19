@@ -190,7 +190,7 @@ test('nested read-only fields survive object replacement and produce valid Graph
     'meta.server': { type: 'string', readOnly: true },
   });
   const { server } = await setup(t, schema, { items: [{ id: '1', profile: { name: 'old', stamp: 'fixed' }, meta: { server: 'value' } }] }, { graphql: {} });
-  let r = await server.inject({ method: 'PATCH', url: '/items/1', payload: { profile: { name: 'new' } } });
+  let r = await server.inject({ method: 'PATCH', url: `/items/1?${new URLSearchParams({ scope: JSON.stringify([{ profile: [{ '*': true }] }]) })}`, payload: { profile: { name: 'new' } } });
   assert.equal(r.statusCode, 200);
   assert.equal(r.json().profile.stamp, 'fixed');
   r = await gql(server, 'mutation{itemReplace(id:"1",data:{profile:{name:"graphql"}}){profile{name stamp} meta{server}}}');

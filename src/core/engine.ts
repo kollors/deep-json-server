@@ -77,6 +77,7 @@ export class Engine {
     const context = makeContext(data, this.model);
     const visit = (ref: Ref): void => {
       for (const node of Object.values(ref.node.children)) {
+        if (node.virtual) continue;
         if (node.relation) {
           const matches = related(ref, node).filter((match) => !match.entity.softDelete || match.value.deletedAt == null);
           if (!node.many && matches.length > 1) throw domainError('INVALID_INPUT', `Multiple targets for ${ref.entity.name}.${node.path}`);
@@ -172,6 +173,7 @@ export class Engine {
     const dependents = new Map<JsonObject, Dependency[]>();
     const collect = (ref: Ref) => {
       for (const node of Object.values(ref.node.children)) {
+        if (node.virtual) continue;
         if (node.relation) {
           const owner = { ref, node, targets: related(ref, node) };
           owners.push(owner);
@@ -208,7 +210,7 @@ export class Engine {
     lifecycle.deleteGroup(initial, deleted);
     const prune = (node: Node, record: JsonObject): void => {
       for (const [key, child] of Object.entries(node.children))
-        if (!child.relation && child.base === 'object' && record[key] != null) {
+        if (!child.virtual && !child.relation && child.base === 'object' && record[key] != null) {
           if (child.many) {
             record[key] = (record[key] as JsonObject[]).filter((v) => !deleted.has(v));
             (record[key] as JsonObject[]).forEach((v) => {

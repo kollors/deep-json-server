@@ -75,7 +75,7 @@ const gql = (app, query, variables) => app.inject({ method: 'POST', url: '/graph
 
 test('nested PATCH mixes references, updates and creates without storing relation objects', async (t) => {
   const { app } = await setup(t);
-  const result = await mutate(app, 'PATCH', { genres: [1, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', [{ '*': true, genres: [{ '*': true }] }]);
+  const result = await mutate(app, 'PATCH', { genres: [1, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', [{ '*': true, genreIds: true, genres: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json().genreIds, [1, 2, 3]);
   assert.deepEqual(
@@ -100,7 +100,7 @@ test('PUT requires fields in relation objects while IDs only link; nested PUT re
   assert.deepEqual(await get(app, '/movies/1'), before);
   assert.equal((await mutate(app, 'PATCH', { users: [{ id: 1 }] })).statusCode, 200);
   assert.equal((await get(app, '/users/1')).name, 'first');
-  const replaced = await mutate(app, 'PUT', { title: 'replaced', userIds: [1], genres: [{ id: 1, name: 'replacement' }, { name: 'new genre' }] });
+  const replaced = await mutate(app, 'PUT', { title: 'replaced', userIds: [1], genres: [{ id: 1, name: 'replacement' }, { name: 'new genre' }] }, '/movies/1', [{ '*': true, userIds: true }]);
   assert.equal(replaced.statusCode, 200, replaced.body);
   assert.equal(replaced.json().description, undefined);
   assert.equal(replaced.json().actors, undefined);
@@ -130,7 +130,7 @@ test('nested source paths use the correct array element and accept single relati
       owner: { name: 'new owner' },
     },
     '/movies/1',
-    [{ '*': true, actors: [{ '*': true, user: [{ '*': true }], genres: [{ '*': true }] }], owner: [{ '*': true }] }],
+    [{ '*': true, ownerId: true, actors: [{ '*': true, genreIds: true, user: [{ '*': true }], genres: [{ '*': true }] }], owner: [{ '*': true }] }],
   );
   assert.equal(result.statusCode, 200, result.body);
   assert.equal(result.json().actors.data[0].userId, 1);
@@ -140,7 +140,7 @@ test('nested source paths use the correct array element and accept single relati
   assert.equal(result.json().ownerId, 3);
   assert.equal(result.json().owner.name, 'new owner');
   assert.equal(result.json().actors.data[0].user.password, undefined);
-  const cleared = await mutate(app, 'PATCH', { owner: null, genres: [] });
+  const cleared = await mutate(app, 'PATCH', { owner: null, genres: [] }, '/movies/1', [{ '*': true, ownerId: true, genreIds: true }]);
   assert.equal(cleared.statusCode, 200, cleared.body);
   assert.equal(cleared.json().ownerId, null);
   assert.deepEqual(cleared.json().genreIds, []);
@@ -169,7 +169,7 @@ test('nested failures roll back every record and counter on disk', async (t) => 
   const invalidScope = await mutate(app, 'PATCH', { genres: [{ name: 'must roll back' }] }, '/movies/1', [{ missing: true }]);
   assert.equal(invalidScope.statusCode, 400);
   assert.equal(await readFile(path, 'utf8'), before);
-  const good = await mutate(app, 'PATCH', { genres: [{ name: 'saved' }] });
+  const good = await mutate(app, 'PATCH', { genres: [{ name: 'saved' }] }, '/movies/1', [{ '*': true, genreIds: true }]);
   assert.equal(good.statusCode, 200, good.body);
   assert.deepEqual(good.json().genreIds, [3]);
   assert.equal(JSON.parse(await readFile(path, 'utf8')).genres.length, 3);
@@ -215,13 +215,13 @@ test('reverse links attach new records and replace only the selected parent memb
   });
   const result = await mutate(app, 'PATCH', { children: [1, { name: 'new child' }] }, '/parents/1', [{ children: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
-  assert.deepEqual((await get(app, '/children/1')).parentIds, [2, 1]);
-  assert.deepEqual((await get(app, '/children/2')).parentIds, [1]);
+  assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2, 1]);
+  assert.deepEqual((await get(app, url('/children/2', [{ '*': true, parentIds: true }]))).parentIds, [1]);
   assert.equal((await mutate(app, 'PATCH', { name: 'changed' }, '/parents/1')).statusCode, 200);
-  assert.deepEqual((await get(app, '/children/1')).parentIds, [2, 1]);
+  assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2, 1]);
   assert.equal((await mutate(app, 'PUT', { name: 'replaced' }, '/parents/1')).statusCode, 200);
-  assert.deepEqual((await get(app, '/children/1')).parentIds, [2]);
-  assert.deepEqual((await get(app, '/children/2')).parentIds, []);
+  assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2]);
+  assert.deepEqual((await get(app, url('/children/2', [{ '*': true, parentIds: true }]))).parentIds, []);
   assert.equal((await get(app, '/children')).total, 2);
 });
 
@@ -283,7 +283,7 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
   const failed = await mutate(app, 'PATCH', { movies: [1] }, '/users/3');
   assert.equal(failed.statusCode, 400, failed.body);
   assert.match(failed.json().error, /Ambiguous target/);
-  assert.deepEqual((await get(app, '/movies/1')).actors.data, initial.movies[0].actors);
+  assert.deepEqual((await get(app, url('/movies/1', [{ actors: [{ '*': true, genreIds: true }] }]))).actors.data, initial.movies[0].actors);
   const result = await mutate(
     app,
     'PATCH',
@@ -302,9 +302,9 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
     '/users/3',
   );
   assert.equal(result.statusCode, 200, result.body);
-  assert.equal((await get(app, '/movies/1')).actors.data.length, 3);
+  assert.equal((await get(app, url('/movies/1', [{ actors: [{ '*': true }] }]))).actors.data.length, 3);
   assert.equal((await mutate(app, 'PATCH', { movies: [] }, '/users/3')).statusCode, 400);
-  assert.equal((await get(app, '/movies/1')).actors.data[2].userId, 3);
+  assert.equal((await get(app, url('/movies/1', [{ actors: [{ '*': true }] }]))).actors.data[2].userId, 3);
 });
 
 test('nested source bindings work below multiple levels of arrays', async (t) => {
@@ -318,7 +318,9 @@ test('nested source bindings work below multiple levels of arrays', async (t) =>
     },
   };
   const { app } = await setup(t, schema, { genres: [], movies: [{ id: 1 }] });
-  const result = await mutate(app, 'PATCH', { groups: [{ actors: [{ genres: [{ name: 'a' }] }] }, { actors: [{ genres: [{ name: 'b' }] }, { genres: [{ name: 'c' }] }] }] });
+  const result = await mutate(app, 'PATCH', { groups: [{ actors: [{ genres: [{ name: 'a' }] }] }, { actors: [{ genres: [{ name: 'b' }] }, { genres: [{ name: 'c' }] }] }] }, '/movies/1', [
+    { groups: [{ actors: [{ genreIds: true }] }] },
+  ]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(
     result.json().groups.data.map((group) => group.actors.data.map((actor) => actor.genreIds)),

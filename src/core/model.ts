@@ -59,6 +59,7 @@ export function apiFormats(value: unknown, fallback: ApiFormat[], label: string)
 export interface Node extends Field {
   system?: boolean;
   internal?: boolean;
+  virtual?: 'actions';
   softDelete?: boolean;
   path: string;
   base: string;
@@ -212,6 +213,13 @@ function systemFields(entity: Entity, options: Required<RecordOptions>): void {
       node.internal = true;
       node.writeOnly = true;
     }
+  }
+  if (options.auth) {
+    if (entity.fields.actions) throw new Error(`Reserved system field ${entity.name}.actions`);
+    const actions = addField(entity, 'actions', { type: 'object', required: true, readOnly: true });
+    actions.system = true;
+    actions.virtual = 'actions';
+    for (const name of ['update', 'replace', 'delete']) addField(entity, `actions.${name}`, { type: 'boolean', required: true, readOnly: true });
   }
 }
 function checkField(path: string, field: unknown): asserts field is Field {
@@ -387,6 +395,7 @@ export function objectSchema(node: Node, mode: InputMode, root = false, relation
   const properties: Record<string, ValidationSchema> = {};
   const required: string[] = [];
   for (const [key, child] of Object.entries(node.children)) {
+    if (child.virtual) continue;
     if (child.relation) {
       if (mode !== 'stored' && relationSchema) properties[key] = relationSchema(child);
       continue;

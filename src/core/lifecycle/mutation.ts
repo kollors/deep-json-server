@@ -3,7 +3,7 @@ import { domainError } from '../errors.js';
 import type { Entity, Model } from '../model.js';
 import type { DatabaseData, JsonObject, JsonValue } from '../types.js';
 import { isEqual, isObject } from '../utils.js';
-import { type Actor, DELETION_META } from './options.js';
+import { type Actor, canChangeRecord, DELETION_META } from './options.js';
 
 interface Patch {
   collection: string;
@@ -41,8 +41,7 @@ export class RecordMutation {
    */
   check(entity: Entity, record: JsonObject): void {
     const original = this.originals.get(keyOf(entity, record));
-    if (this.model.options.auth && original && !this.actor?.isAdmin && (original.createdById == null || original.createdById !== this.actor?.id))
-      throw domainError('FORBIDDEN', 'Only the owner or an administrator can change this record');
+    if (this.model.options.auth && original && !canChangeRecord(this.actor, original)) throw domainError('FORBIDDEN', 'Only the owner or an administrator can change this record');
   }
   /** Отмечает запись изменённой и при необходимости восстанавливает её каскад в черновике.
    * @example Удалённая запись после успешного вызова → deletedAt: null; конфликт восстановления → ошибка.
@@ -105,7 +104,7 @@ export class RecordMutation {
         const old = this.originals.get(keyOf(entity, row));
         if (!old || row.deletedAt != null) continue;
         for (const [field, node] of Object.entries(entity.root.children)) {
-          if (node.relation || node.base !== 'object' || !Object.hasOwn(old, field) || isEqual(old[field], row[field])) continue;
+          if (node.virtual || node.relation || node.base !== 'object' || !Object.hasOwn(old, field) || isEqual(old[field], row[field])) continue;
           patches.push({ collection: entity.collection, key: row[entity.primary], field, before: old[field], ...(row[field] !== undefined ? { after: structuredClone(row[field]) } : {}) });
         }
       }
@@ -125,7 +124,7 @@ export class RecordMutation {
         const original = this.originals.get(key);
         if (original && !this.touched.has(key) && isEqual(original, record)) continue;
         this.check(entity, record);
-        for (const [name, field] of Object.entries(entity.root.children)) if (field.system && !field.internal && !Object.hasOwn(record, name)) record[name] = null;
+        for (const [name, field] of Object.entries(entity.root.children)) if (field.system && !field.internal && !field.virtual && !Object.hasOwn(record, name)) record[name] = null;
         if (entity.timestamps) {
           record.createdAt = original?.createdAt ?? (original ? null : this.now);
           record.updatedAt = this.now;

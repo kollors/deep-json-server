@@ -10,6 +10,7 @@ import { runCli } from '../dist/src/cli/index.js';
 import { Engine } from '../dist/src/core/engine.js';
 import { configure, readConfigModule } from '../dist/src/server/config.js';
 import { createConfiguredServer } from '../dist/src/server/create.js';
+import { releasePlan } from '../scripts/prepare-release.js';
 
 const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const temporary = async (t) => {
@@ -26,6 +27,14 @@ const setup = async (t, config) => {
 };
 const url = (path, options) => `${path}?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]))}`;
 const gql = (app, query) => app.inject({ method: 'POST', url: '/graphql', payload: { query } });
+
+test('release plan publishes prerelease channels from main and stable versions from tags', () => {
+  assert.deepEqual(releasePlan('1.0.0-alpha.1', 'branch', 'main'), { publish: true, createTag: true, tag: 'v1.0.0-alpha.1' });
+  assert.deepEqual(releasePlan('1.0.0-beta.1', 'branch', 'main'), { publish: true, createTag: true, tag: 'v1.0.0-beta.1' });
+  assert.deepEqual(releasePlan('1.0.0-rc.1', 'branch', 'main'), { publish: true, createTag: true, tag: 'v1.0.0-rc.1' });
+  assert.deepEqual(releasePlan('1.0.0', 'branch', 'main'), { publish: false, createTag: false, tag: 'v1.0.0' });
+  assert.deepEqual(releasePlan('1.0.0', 'tag', 'v1.0.0'), { publish: true, createTag: false, tag: 'v1.0.0' });
+});
 
 test('file uploads and moves preserve database, counters, schema and config inputs', async (t) => {
   const directory = await temporary(t);
@@ -136,7 +145,7 @@ test('listen preserves configured host when overriding only the port in promise 
 test('nested field lookups reject inherited names and empty objects remain writable in REST', async (t) => {
   const schema = model({ profile: { type: 'object' }, 'profile.name': { type: 'string' }, settings: { type: 'object' } });
   const { app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } } });
-  const created = await app.inject({ method: 'POST', url: '/items', payload: { settings: {}, profile: { name: 'A' } } });
+  const created = await app.inject({ method: 'POST', url: url('/items', { scope: [{ '*': true, settings: [{ '*': true }] }] }), payload: { settings: {}, profile: { name: 'A' } } });
   assert.equal(created.statusCode, 201, created.body);
   assert.deepEqual(created.json().settings, {});
   for (const options of [
@@ -190,7 +199,7 @@ test('GraphQL prepares each selected list once and REST reuses nested plans', as
     assert.equal(calls, 2);
     calls = 0;
     assert.equal((await app.inject('/items')).statusCode, 200);
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
   } finally {
     Engine.prototype.prepareOptions = original;
   }

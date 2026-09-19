@@ -127,6 +127,27 @@ test('REST and GraphQL mutations enforce ownership and audit the authenticated u
   assert.equal(created.createdById, 'a');
   assert.equal(created.updatedById, 'a');
   assert.equal(created.deletedById, null);
+  assert.equal(created.actions, undefined);
+  const actionUrl = (path) => `${path}?${new URLSearchParams({ scope: JSON.stringify([{ id: true, actions: [{ '*': true }] }]) })}`;
+  const allowed = { update: true, replace: true, delete: true };
+  const denied = { update: false, replace: false, delete: false };
+  assert.deepEqual((await request(app, 'GET', actionUrl('/items/1'))).json().actions, denied);
+  assert.deepEqual((await request(app, 'GET', actionUrl('/items/1'), undefined, alice)).json().actions, allowed);
+  assert.deepEqual((await request(app, 'GET', actionUrl('/items/1'), undefined, bob)).json().actions, denied);
+  assert.deepEqual((await request(app, 'GET', actionUrl('/items/1'), undefined, admin)).json().actions, allowed);
+  assert.deepEqual((await request(app, 'GET', actionUrl('/items'), undefined, alice)).json().data[0].actions, allowed);
+  assert.equal((await request(app, 'GET', actionUrl('/items/1'), undefined, 'invalid')).statusCode, 401);
+  for (const [token, actions] of [
+    [undefined, denied],
+    [alice, allowed],
+    [bob, denied],
+    [admin, allowed],
+  ]) {
+    const response = (await gql(app, '{item(id:1){actions{update replace delete}}}', token)).json();
+    assert.equal(response.errors, undefined);
+    assert.deepEqual(response.data.item.actions, actions);
+  }
+  assert.equal((await gql(app, '{item(id:1){actions{update}}}', 'invalid')).json().errors[0].extensions.code, 'UNAUTHENTICATED');
   for (const [method, body] of [
     ['PATCH', {}],
     ['PUT', { name: 'stolen' }],
@@ -151,6 +172,32 @@ test('REST and GraphQL mutations enforce ownership and audit the authenticated u
   const upload = await app.inject({ method: 'POST', url: '/_files/storage', headers: { 'content-type': 'text/plain', 'content-name': 'open.txt' }, payload: 'open' });
   assert.equal(upload.statusCode, 201);
   assert.equal((await request(app, 'DELETE', upload.json().url)).statusCode, 204);
+});
+
+test('record actions use the same owner rules in nested REST and GraphQL results', async (t) => {
+  const relationSchema = {
+    models: {
+      Parent: { collection: 'parents', fields: { id: { type: 'number', primary: true }, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
+      Child: { collection: 'children', fields: { id: { type: 'number', primary: true }, parentId: { type: 'number' } } },
+    },
+  };
+  const { app } = await setup(t, {
+    auth: { source: users },
+    graphql: {},
+    database: {
+      schema: relationSchema,
+      source: { parents: [{ id: 1, createdById: 'a' }], children: [{ id: 1, parentId: 1, createdById: 'b' }] },
+    },
+  });
+  const alice = await login(app, 'alice');
+  const selected = JSON.stringify([{ actions: [{ '*': true }], children: [{ actions: [{ '*': true }] }] }]);
+  const rest = (await request(app, 'GET', `/parents/1?${new URLSearchParams({ scope: selected })}`, undefined, alice)).json();
+  assert.equal(rest.actions.update, true);
+  assert.equal(rest.children.data[0].actions.update, false);
+  const graph = (await gql(app, '{parent(id:1){actions{update} children{data{actions{update}}}}}', alice)).json();
+  assert.equal(graph.errors, undefined);
+  assert.equal(graph.data.parent.actions.update, true);
+  assert.equal(graph.data.parent.children.data[0].actions.update, false);
 });
 
 const cascadeSchema = (extra = {}) => ({
@@ -220,9 +267,9 @@ test('nested object cascades restore only unchanged pruned fields', async (t) =>
   await request(app, 'POST', '/genres', { name: 'genre' });
   await request(app, 'POST', '/movies', { name: 'movie', actors: [{ genreId: 1 }] });
   assert.equal((await request(app, 'DELETE', '/genres/1')).statusCode, 200);
-  assert.equal((await app.inject('/movies/1')).json().actors.total, 0);
+  assert.equal((await app.inject(`/movies/1?${new URLSearchParams({ scope: JSON.stringify([{ actors: [{ '*': true }] }]) })}`)).json().actors.total, 0);
   assert.equal((await request(app, 'PATCH', '/genres/1', {})).statusCode, 200);
-  assert.equal((await app.inject('/movies/1')).json().actors.total, 1);
+  assert.equal((await app.inject(`/movies/1?${new URLSearchParams({ scope: JSON.stringify([{ actors: [{ '*': true }] }]) })}`)).json().actors.total, 1);
   await request(app, 'DELETE', '/genres/1');
   await request(app, 'PATCH', '/movies/1', { actors: [{}] });
   assert.equal((await request(app, 'PATCH', '/genres/1', {})).statusCode, 409);

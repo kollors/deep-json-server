@@ -4,15 +4,15 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**Breaking changes: 1.0.0-alpha.10.** Configuration and schema formats have changed. See [Configuration](#configuration) and [Model schema](#model-schema) for current examples.
+**Breaking changes: 1.0.0-beta.1.** REST `scope` wildcard now selects only scalar fields. Arrays, objects and relations must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
 
 ## Installation
 
 ```sh
-npm install @kollors/deep-json-server@alpha
+npm install @kollors/deep-json-server@beta
 ```
 
-To install a specific version, use `@1.0.0-alpha.12`.
+To install a specific version, use `@1.0.0-beta.1`.
 
 ## Quick start
 
@@ -154,7 +154,7 @@ Model definitions belong in `models`. The schema root can define `api`, `timesta
 
 Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions.
 
-Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names; other fields are returned through `scope=[{"*":true}]`. Fields with mixed value types can be read, but filtering, ordering and paging heterogeneous lists require an explicit schema.
+Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names. `scope=[{"*":true}]` returns top-level JSON scalars; arrays and objects must be selected by name. Fields with mixed value types can be read explicitly, but filtering, ordering and paging heterogeneous lists require an explicit schema.
 
 Each model requires `collection`, the database collection and REST path name, and `fields`, its field definitions. The model name (`User`) determines GraphQL type and operation names. `api` controls format availability; `timestamps` and `softDelete` override global settings for that model.
 
@@ -397,7 +397,7 @@ const params = new URLSearchParams({ scope: JSON.stringify(scope) });
 const response = await fetch(`/users?${params}`);
 ```
 
-Select ordinary fields with `true` and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes own fields and stored keys, except `writeOnly` fields; select relations explicitly.
+Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes scalar fields only. Arrays, objects, relations and `writeOnly` fields are not included by the wildcard.
 
 For example, select a movie's own fields, its actors' users and sorted genres:
 
@@ -418,7 +418,7 @@ For example, select a movie's own fields, its actors' users and sorted genres:
 ]
 ```
 
-Omitting `scope` returns own fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
+Omitting `scope` returns scalar fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
 
 Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. This also works for nested lists. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
 
@@ -610,7 +610,39 @@ Only administrators can change `isAdmin`. They can grant or remove another user'
 
 Invalid or expired tokens return `401`, insufficient permissions return `403`, and an absent user for an otherwise permitted operation returns `404`. Invalid request bodies return `400`. Login, registration and password changes may return `429` when too many password computations are running; login also limits active sessions. Sessions are kept in memory and disappear on restart. Logout revokes only the supplied token.
 
-OpenAPI describes all auth routes and their Bearer token requirements. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when changing records. GraphQL and OpenAPI require `database.schema`.
+Every model record has a virtual `actions` object when auth is enabled. It is calculated for the current user and is never stored. In REST, request it explicitly through `scope`:
+
+```json
+[
+  {
+    "id": true,
+    "actions": [{ "*": true }]
+  }
+]
+```
+
+The object contains `update`, `replace` and `delete`. An owner or administrator receives `true`; an anonymous or unrelated user receives `false`. Records without `createdById` are editable only by administrators. A missing token keeps reads public and returns false flags. A supplied invalid token returns `401` in REST or `UNAUTHENTICATED` in GraphQL.
+
+GraphQL exposes the same field and requires its normal explicit selection:
+
+```graphql
+query {
+  itemList {
+    data {
+      id
+      actions {
+        update
+        replace
+        delete
+      }
+    }
+  }
+}
+```
+
+`actions` is available on root and related model records, including mutation results. It cannot be written, filtered or ordered. Plain embedded objects and auth user responses do not receive it.
+
+OpenAPI describes auth routes, optional Bearer authentication on record reads, required authentication on record changes and the `actions` response field. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when reading permissions or changing records. GraphQL and OpenAPI require `database.schema`.
 
 ## Record dates, deletion and ownership
 
@@ -777,7 +809,7 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
-Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; schema and model `api` settings can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
+Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; schema and model `api` settings can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership and `actions` fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
 `generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 
@@ -796,6 +828,6 @@ npm run verify
 
 The command checks types, code style, test coverage and installation from the package archive.
 
-To publish a new alpha, update the version in `package.json`, `package-lock.json` and `src/core/constants.ts`, then push to `main`. GitHub Actions creates the version tag and publishes to npm `alpha` through trusted publishing. Already published versions are skipped. If the tag exists but publication failed, a retry uses that tag and verifies that the package files match it. Pushing a version tag also triggers publication; stable versions publish to `latest`.
+To publish a prerelease, update the version in `package.json`, `package-lock.json` and `src/core/constants.ts`, then push the commit to `main`. GitHub Actions creates its `v<version>` tag and publishes through trusted publishing to the `alpha`, `beta` or `rc` channel. Stable versions publish to `latest` from an explicitly pushed version tag.
 
 License: MIT.

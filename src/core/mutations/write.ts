@@ -216,6 +216,7 @@ export class MutationWriter {
 
   private defaults(node: Node, record: JsonObject): void {
     for (const [key, child] of Object.entries(node.children)) {
+      if (child.virtual) continue;
       if (child.relation) continue;
       if (!Object.hasOwn(record, key) && child.default !== undefined) record[key] = structuredClone(child.default);
       if (child.base === 'object' && record[key] != null) {
@@ -226,6 +227,7 @@ export class MutationWriter {
   }
   private preserve(node: Node, record: JsonObject, previous?: JsonObject): void {
     for (const [key, child] of Object.entries(node.children)) {
+      if (child.virtual) continue;
       if (child.relation) continue;
       if ((child.generated || child.readOnly) && previous && Object.hasOwn(previous, key)) record[key] = structuredClone(previous[key]);
       else if (child.base === 'object' && !child.many) {

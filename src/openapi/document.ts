@@ -128,7 +128,7 @@ export function buildOpenapiDocument({
       items: list ? { anyOf: [ref(fieldsName), options(entity, node)] } : ref(fieldsName),
       description: list
         ? '[fields, arguments?]. The first object selects fields; the optional second object contains where, order and pager. OpenAPI 3.0 cannot express positional item schemas; the server validates their order.'
-        : '[fields]. * selects own fields without relations or writeOnly fields.',
+        : '[fields]. * selects scalar fields only; arrays, objects, relations and writeOnly fields must be handled explicitly.',
     };
     schemas[name] = list
       ? {
@@ -159,7 +159,7 @@ export function buildOpenapiDocument({
     if (!reserve(name, node)) return ref(name);
     const properties: Record<string, OpenapiSchema> = { and: { type: 'array', items: ref(name) }, or: { type: 'array', minItems: 1, items: ref(name) }, not: ref(name) };
     for (const [key, child] of Object.entries(node.children))
-      if (!child.writeOnly) {
+      if (!child.writeOnly && !child.virtual) {
         if (Object.hasOwn(properties, key)) throw new Error(`Reserved filter field: ${entity.name}.${child.path}`);
         properties[key] = !child.many && (child.relation || child.base === 'object') ? where(entity, child) : filter(entity, child);
       }
@@ -229,7 +229,7 @@ export function buildOpenapiDocument({
       name: 'scope',
       ...json(scope(entity, entity.root, list)),
       description:
-        'JSON [fields, arguments?] or, for lists, { union: [scope, ...] }. Scalars use true; objects and relations use their own scope arrays. * includes own fields without relations or writeOnly fields. Arguments are available only on lists.',
+        'JSON [fields, arguments?] or, for lists, { union: [scope, ...] }. Scalars and primitive arrays use true; objects and relations use their own scope arrays. * includes scalar fields only. Arguments are available only on lists.',
     });
     const shape = [selectionParameter(false)];
     const list = [selectionParameter(true)];
@@ -242,12 +242,13 @@ export function buildOpenapiDocument({
         operationId,
         tags: [entity.collection],
         parameters,
-        ...(auth && mutation ? { security: [{ AuthBearer: [] }] } : {}),
+        ...(auth ? { security: mutation ? [{ AuthBearer: [] }] : [{}, { AuthBearer: [] }] } : {}),
         ...(mutation?.hasBody ? { requestBody: { required: true, ...json(ref(`${name}${capitalize(mutation.mode)}`)) } } : {}),
         responses: {
           [mutation?.status ?? 200]: response('Success', schema),
           ...errors,
-          ...(auth && mutation ? { 401: response('Authentication required', ref('Error')), 403: response('Forbidden', ref('Error')) } : {}),
+          ...(auth ? { 401: response(mutation ? 'Authentication required' : 'Invalid or expired credentials', ref('Error')) } : {}),
+          ...(auth && mutation ? { 403: response('Forbidden', ref('Error')) } : {}),
         },
       };
     };

@@ -23,7 +23,7 @@ export interface Page {
 function filterView(ref: Ref): Record<string, unknown> {
   const value: Record<string, unknown> = {};
   for (const [name, node] of Object.entries(ref.node.children))
-    if (!node.writeOnly)
+    if (!node.writeOnly && !node.virtual)
       Object.defineProperty(value, name, {
         enumerable: true,
         get: () => {

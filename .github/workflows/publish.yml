@@ -40,7 +40,7 @@ jobs:
         run: node scripts/prepare-release.js
       - if: steps.release.outputs.publish == 'true'
         run: npm ci
-      - name: Create alpha tag
+      - name: Create version tag
         if: steps.release.outputs.create_tag == 'true'
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}

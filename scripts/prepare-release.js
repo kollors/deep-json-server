@@ -10,7 +10,7 @@ export function releasePlan(version, refType, refName, existingTag = false, publ
     if (refName !== tag) throw new Error('Release tag does not match package version');
     return { publish: true, createTag: false, tag };
   }
-  const publish = refName === 'main' && channel === 'alpha' && !published;
+  const publish = refName === 'main' && channel !== 'latest' && !published;
   return { publish, createTag: publish && !existingTag, tag };
 }
 

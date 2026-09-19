@@ -1,3 +1,4 @@
+import { type Actor, recordActions } from './lifecycle/options.js';
 import { bindingFor, childName, type Entity, type Model, type Node, readPath } from './model.js';
 import type { DatabaseData, JsonObject } from './types.js';
 import { isObject } from './utils.js';
@@ -62,15 +63,16 @@ export function related(ref: Ref, node: Node): Ref[] {
 /** Возвращает значение поля или ссылки на связанные объекты, учитывая отсутствующие и удалённые записи.
  * @example Для обычного name в записи { name: 'Анна' } → 'Анна'; отсутствующая одиночная связь → null.
  */
-export function resolveField(ref: Ref, node: Node, includeDeleted = false): unknown {
+export function resolveField(ref: Ref, node: Node, includeDeleted = false, actor?: Actor): unknown {
   if (node.relation) {
     const records = related(ref, node).filter((record) => node.many || includeDeleted || !record.entity.softDelete || record.value.deletedAt == null);
     return node.many ? records : (records[0] ?? null);
   }
+  const wrap = (object: JsonObject): Ref => ({ ...ref, node, value: object, bindings: { ...ref.bindings, [node.path]: object } });
+  if (node.virtual === 'actions') return wrap(recordActions(actor, ref.root));
   const key = childName(node);
   const value = Object.hasOwn(ref.value, key) ? ref.value[key] : node.system && !node.internal ? null : undefined;
   if ((ref.context.model.explicit && node.base !== 'object') || value == null) return value;
-  const wrap = (object: JsonObject): Ref => ({ ...ref, node, value: object, bindings: { ...ref.bindings, [node.path]: object } });
   if (Array.isArray(value)) return value.map((item) => (isObject(item) ? wrap(item as JsonObject) : item));
   return isObject(value) ? wrap(value as JsonObject) : value;
 }

@@ -147,7 +147,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
           not: { type: type as GraphQLInputObjectType },
         };
         for (const [key, child] of Object.entries(node.children))
-          if (!child.writeOnly) {
+          if (!child.writeOnly && !child.virtual) {
             if (Object.hasOwn(fields, key)) throw new Error(`Reserved filter field: ${entity.name}.${child.path}`);
             fields[key] = { type: child.many ? filter(entity, child) : child.relation || child.base === 'object' ? where(entity, child) : filter(entity, child) };
           }

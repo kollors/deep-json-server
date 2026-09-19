@@ -14,7 +14,10 @@ export function registerGraphqlRoutes(server: FastifyInstance, schema: GraphQLSc
     schema,
     path,
     queryDepth: 32,
-    context: (request) => ({ ...createGraphqlContext(engine), ...(authenticate ? { actor: () => authenticate(request.headers.authorization) } : {}) }),
+    context: (request) => ({
+      ...createGraphqlContext(engine),
+      ...(authenticate && request.headers.authorization !== undefined ? { actor: () => authenticate(request.headers.authorization) } : {}),
+    }),
     errorFormatter: (execution, context) => {
       const formatted = mercurius.defaultErrorFormatter(execution, context);
       formatted.response.errors = execution.errors.map((error) => {

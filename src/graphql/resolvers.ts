@@ -34,13 +34,19 @@ export function attachResolvers(schema: GraphQLSchema, engine: Engine): void {
       if (entity && operation)
         field.resolve = async (_root, args, context: GraphqlContext, info) => {
           const plans = await context.prepare(info);
-          if (operation === 'find') return engine.find(await context.snapshot(), entity, args[entity.primary]) ?? null;
-          if (operation === 'list') return engine.list(engine.records(await context.snapshot(), entity), entity.root, args, plans.get(info.fieldNodes[0]));
+          if (operation === 'find') {
+            context.actor?.();
+            return engine.find(await context.snapshot(), entity, args[entity.primary]) ?? null;
+          }
+          if (operation === 'list') {
+            context.actor?.();
+            return engine.list(engine.records(await context.snapshot(), entity), entity.root, args, plans.get(info.fieldNodes[0]));
+          }
           return engine.mutate(entity, operation, args[entity.primary], args.data ?? {}, undefined, context.actor);
         };
       else if (node)
         field.resolve = async (ref: Ref, args: ListOptions, context: GraphqlContext, info) => {
-          const value = resolveField(ref, node);
+          const value = resolveField(ref, node, false, node.virtual ? context.actor?.() : undefined);
           if (!listNode || value == null) return value;
           const plans = await context.prepare(info);
           return engine.list(value as Ref[], listNode, args, plans.get(info.fieldNodes[0]));

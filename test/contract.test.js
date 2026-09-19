@@ -76,13 +76,17 @@ test('REST scope, nested lists, relation filters and GraphQL return the same cat
   assert.deepEqual(single.movies.data, []);
 });
 
-test('wildcard includes raw keys and excludes all computed relations', async (t) => {
+test('wildcard includes only scalar fields while arrays, objects and relations are explicit', async (t) => {
   const { server } = await setup(t);
   const movie = await request(server, '/movies/1', { scope: [{ '*': true }] });
-  assert.deepEqual(movie.publisherIds, ['2']);
+  assert.equal(movie.title, database.movies[0].title);
+  assert.equal(movie.publisherIds, undefined);
   assert.equal(movie.publishers, undefined);
-  assert.equal(movie.actors.data[0].user, undefined);
-  assert.equal(movie.actors.data[0].userId, '1');
+  assert.equal(movie.actors, undefined);
+  const explicit = await request(server, '/movies/1', { scope: [{ publisherIds: true, actors: [{ '*': true }] }] });
+  assert.deepEqual(explicit.publisherIds, ['2']);
+  assert.equal(explicit.actors.data[0].user, undefined);
+  assert.equal(explicit.actors.data[0].userId, '1');
   const nested = await request(server, '/movies/1', { scope: [{ actors: [{ genres: [{ '*': true }] }] }] });
   assert.deepEqual(
     nested.actors.data.map((a) => a.genres.data.map((g) => g.id)),
@@ -101,7 +105,7 @@ test('schemaless REST accepts new fields, infers relations, and rejects exporter
   await assert.rejects(() => facade.openapi(), /not configured/);
   await assert.rejects(() => facade.graphql(), /not configured/);
   assert.equal((await request(server, '/users/1', { scope: [{ movies: [{ title: true }] }] })).movies.total, 1);
-  let r = await server.inject({ method: 'POST', url: '/users', payload: { anything: { nested: 42 }, tags: [true, false] } });
+  let r = await server.inject({ method: 'POST', url: url('/users', { scope: [{ '*': true, anything: [{ '*': true }], tags: true }] }), payload: { anything: { nested: 42 }, tags: [true, false] } });
   assert.equal(r.statusCode, 201, r.body);
   const key = r.json().id;
   assert.deepEqual(r.json().anything, { nested: 42 });
@@ -342,7 +346,7 @@ test('field constraints apply per array item and PATCH does not insert defaults'
     assert.equal(r.statusCode, 400, r.body);
   }
   const valid = { name: 'yes', tags: ['ab', 'ab', 'cd'], scores: [0, 1.5, 10], date: '2026-09-10', site: 'https://example.com', nullable: null, rows: [{ name: 'nested' }] };
-  const r = await server.inject({ method: 'POST', url: '/items', payload: valid });
+  const r = await server.inject({ method: 'POST', url: url('/items', { scope: [{ '*': true, tags: true, scores: true, rows: [{ '*': true }] }] }), payload: valid });
   assert.equal(r.statusCode, 201, r.body);
   assert.equal(r.json().enabled, true);
   assert.equal(r.json().rows.total, 1);
@@ -388,7 +392,7 @@ test('cascade removes referring roots and embedded actors, and rolls back restri
   let r = await server.inject({ method: 'DELETE', url: '/countries/1' });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal((await request(server, '/users')).total, 0);
-  assert.equal((await request(server, '/movies/m')).actors.total, 0);
+  assert.equal((await request(server, '/movies/m', { scope: [{ actors: [{ '*': true }] }] })).actors.total, 0);
   const restricted = structuredClone(model);
   restricted.models.Movie.fields['actors.user'].onDelete = 'restrict';
   const second = await setup(t, data, restricted);
@@ -396,7 +400,7 @@ test('cascade removes referring roots and embedded actors, and rolls back restri
   assert.equal(r.statusCode, 409);
   assert.equal((await request(second.server, '/countries')).total, 1);
   assert.equal((await request(second.server, '/users')).total, 1);
-  assert.equal((await request(second.server, '/movies/m')).actors.total, 1);
+  assert.equal((await request(second.server, '/movies/m', { scope: [{ actors: [{ '*': true }] }] })).actors.total, 1);
 });
 
 test('cascade cycles terminate and preserve all-or-nothing behavior', async (t) => {
@@ -482,7 +486,7 @@ test('schemaless heterogeneous values are preserved rather than coerced to objec
   });
   const server = facade.fastify();
   t.after(() => server.close());
-  const rows = await request(server, '/items');
+  const rows = await request(server, '/items', { scope: [{ value: [{ '*': true }], mixed: [{ '*': true }] }] });
   assert.equal(rows.data[0].value, 'text');
   assert.deepEqual(rows.data[0].mixed, [{ a: 1 }, 2]);
   assert.deepEqual(rows.data[1].value, { a: 1 });
@@ -507,7 +511,7 @@ test('cascade does not restrict surviving roots through already removed embedded
   const { server } = await setup(t, { users: [{ id: 'u' }], movies: [{ id: 'm', actors: [{ userId: 'u', details: { userId: 'u' } }] }] }, model);
   const r = await server.inject({ method: 'DELETE', url: '/users/u' });
   assert.equal(r.statusCode, 200, r.body);
-  assert.equal((await request(server, '/movies/m')).actors.total, 0);
+  assert.equal((await request(server, '/movies/m', { scope: [{ actors: [{ '*': true }] }] })).actors.total, 0);
 });
 
 test('JSON scope supports explicit relations, wildcard overrides and empty selections', async (t) => {

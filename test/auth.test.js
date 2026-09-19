@@ -123,10 +123,13 @@ test('auth protects REST and GraphQL writes while reads and files remain open', 
     const mutation = (await gql(app, 'mutation{itemCreate(data:{name:"graph"}){id}}', headers)).json();
     if (authenticated) assert.equal(mutation.errors, undefined);
     else assert.equal(mutation.errors[0].extensions.code, 'UNAUTHENTICATED');
-    assert.equal((await app.inject({ url: '/items', headers })).statusCode, 200);
+    assert.equal((await app.inject({ url: '/items', headers })).statusCode, headers.authorization === 'Bearer invalid' ? 401 : 200);
     const result = (await gql(app, '{itemList{total}}', headers)).json();
-    assert.equal(result.errors, undefined);
-    assert.equal(typeof result.data.itemList.total, 'number');
+    if (headers.authorization === 'Bearer invalid') assert.equal(result.errors[0].extensions.code, 'UNAUTHENTICATED');
+    else {
+      assert.equal(result.errors, undefined);
+      assert.equal(typeof result.data.itemList.total, 'number');
+    }
     const doc = (await app.inject({ url: '/openapi.json', headers })).json();
     assert.ok(doc.paths['/auth/login']);
     assert.equal(doc.components.securitySchemes.AuthBearer.scheme, 'bearer');
@@ -155,7 +158,7 @@ test('auth is enabled only by its configuration section', async (t) => {
 test('auth schemas are optional, isolate security requirements and reject name collisions', async () => {
   const doc = await generateOpenapi(schema, { auth: true });
   assert.equal(doc.security, undefined);
-  assert.equal(doc.paths['/items'].get.security, undefined);
+  assert.deepEqual(doc.paths['/items'].get.security, [{}, { AuthBearer: [] }]);
   assert.deepEqual(doc.paths['/items'].post.security, [{ AuthBearer: [] }]);
   assert.deepEqual(doc.paths['/auth/login'].post.security, []);
   assert.deepEqual(doc.paths['/auth/me'].get.security, [{ AuthBearer: [] }]);
