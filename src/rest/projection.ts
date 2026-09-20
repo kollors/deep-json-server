@@ -4,16 +4,30 @@ import type { Entity, Node } from '../core/model.js';
 import { childrenOf } from '../core/query/options.js';
 import { isRef, type Ref, resolveField } from '../core/records.js';
 import type { JsonObject, JsonValue } from '../core/types.js';
+import { defined } from '../core/utils.js';
 import { isUnionScope, ownScope, type RestOptions, type Scope, scopeFor, type TupleScope, validateScope } from './options.js';
+
+/** Допускает в неявный выбор только примитивное значение, не скрытое метаданными поля.
+ * @example wildcardValue({ relationKey: true, … }, 1) → false; wildcardValue(undefined, 'Анна') → true.
+ */
+function wildcardValue(node: Node | undefined, value: unknown): boolean {
+  return (
+    !node?.writeOnly &&
+    !node?.relation &&
+    !node?.relationKey &&
+    (!node || node.mixed || (!node.many && node.base !== 'object')) &&
+    (value === null || ['string', 'number', 'boolean'].includes(typeof value))
+  );
+}
 
 export interface ScopedPage {
   data: Array<{ ref: Ref; scope: TupleScope }>;
   total: number;
 }
 /** Проверяет дерево выбора и заранее подготавливает фильтры, сортировку и пагинацию вложенных списков.
- * @example Выбор без аргументов у одиночной записи → пустая Map; неверное поле → ошибка.
+ * @example Выбор без аргументов у одиночной записи → { scope, plans: Map(0) }; неверное поле → ошибка.
  */
-export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): Map<TupleScope | Node, PreparedList> {
+export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): { scope: Scope; plans: Map<TupleScope | Node, PreparedList> } {
   validateScope(entity.root, options.scope, list);
   const plans = new Map<TupleScope | Node, PreparedList>();
   if (list && !isUnionScope(options.scope)) plans.set(options.scope, engine.prepareOptions(entity.root, options.scope[1]));
@@ -27,13 +41,13 @@ export function validateRest(engine: Engine, entity: Entity, options: RestOption
     }
     for (const [key, selection] of Object.entries(scope[0])) {
       if (selection === true) continue;
-      const child = childrenOf(node)[key];
+      const child = defined(childrenOf(node)[key], key);
       if (!isUnionScope(selection) && selection[1]) plans.set(selection, engine.prepareOptions(child, selection[1]));
       visit(child, selection);
     }
   };
   visit(entity.root, options.scope);
-  return plans;
+  return { scope: options.scope, plans };
 }
 /** Выполняет обычный или объединённый scope списка, сохраняя порядок частей и первую запись с каждым ключом.
  * @example Две части с id 1, затем id 1 и 2 → данные [1, 2], total 2.
@@ -50,7 +64,7 @@ export function listScope(engine: Engine, records: Ref[], node: Node, scope: Sco
   const data: ScopedPage['data'] = [];
   for (const item of scope.union) {
     for (const entry of listScope(engine, records, node, item, plans).data) {
-      const key = resolveField(entry.ref, entry.ref.entity.fields[entry.ref.entity.primary]);
+      const key = entry.ref.node === entry.ref.entity.root ? entry.ref.value[entry.ref.entity.primary] : entry.ref.value;
       if (seen.has(key)) continue;
       seen.add(key);
       data.push(entry);
@@ -66,7 +80,7 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
-    const wildcard = Object.hasOwn(scope[0], '*') && !node.relation && !node.relationKey && !node.many && node.base !== 'object';
+    const wildcard = scope[0]['*'] === true && wildcardValue(node, ref.value[key] === undefined && node.system && !node.internal && !node.virtual ? null : ref.value[key]);
     if (node.writeOnly || (!Object.hasOwn(scope[0], key) && !wildcard)) continue;
     const value = resolveField(ref, node, false, actor);
     const selection = scopeFor(scope, key);
@@ -74,21 +88,13 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
     if (isRef(value)) output[key] = project(engine, value, selection, plans, actor);
     else if (Array.isArray(value)) {
       if (value.every(isRef) && (value.length > 0 || node.relation || node.base === 'object')) {
-        const page = listScope(engine, value as Ref[], node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection);
+        const page = listScope(engine, value, node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection);
         output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor)), total: page.total };
       } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans, actor) : structuredClone(item))) as JsonValue;
     } else output[key] = structuredClone(value) as JsonValue;
   }
   // При выведенной модели добавляем исходные скаляры, которые не удалось описать.
   if (!ref.context.model.explicit && scope[0]['*'] === true)
-    for (const [key, value] of Object.entries(ref.value))
-      if (
-        !Object.hasOwn(output, key) &&
-        !children[key]?.writeOnly &&
-        (children[key]
-          ? !children[key].relation && !children[key].relationKey && !children[key].many && children[key].base !== 'object'
-          : value === null || ['string', 'number', 'boolean'].includes(typeof value))
-      )
-        output[key] = structuredClone(value);
+    for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && wildcardValue(children[key], value)) output[key] = structuredClone(value);
   return output;
 }

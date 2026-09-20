@@ -34,7 +34,7 @@ export function nodeAt(node: Node, path: string, scalarOnly = false): Node {
   const parts = pathParts(path);
   parts.forEach((part, index) => {
     const child = childrenOf(current)[part];
-    if (!Object.hasOwn(childrenOf(current), part) || child.writeOnly || child.virtual) badQuery(`Unknown or inaccessible field ${path}`);
+    if (!Object.hasOwn(childrenOf(current), part) || !child || child.writeOnly || child.virtual) badQuery(`Unknown or inaccessible field ${path}`);
     if (child.mixed) badQuery(`Field ${path} has inconsistent types; provide an explicit schema`);
     if (scalarOnly && (child.many || child.relation || (index === parts.length - 1 && child.base === 'object'))) badQuery(`Cannot sort by ${path}`);
     current = child;

@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { AUTH_PATHS } from '../auth/contract.js';
 import type { Model } from '../core/model.js';
-import { inputPaths } from '../core/paths.js';
 import { configSourcePath, type NormalizedServerConfig } from './config.js';
 import { validateEndpoints } from './features.js';
+import { inputPaths } from './input-paths.js';
 
 /** Подключает к HTTP-серверу хранилище записей и включённые прикладные модули.
  * @example Конфигурация только с базой → REST-маршруты без auth, files и API-экспортов.

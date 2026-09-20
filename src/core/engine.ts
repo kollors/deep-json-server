@@ -9,12 +9,13 @@ import type { MutationMode } from './operations.js';
 import { executeList, type Page, type PreparedList, prepareList } from './query/execute.js';
 import type { ListOptions } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
-import type { DatabaseData, JsonObject } from './types.js';
-import { isObject } from './utils.js';
+import type { DatabaseData, DatabaseSnapshot, JsonObject } from './types.js';
+import { defined, isObject } from './utils.js';
 
 export type { Page, PreparedList } from './query/execute.js';
 export class Engine {
-  private inferredModels = new WeakMap<DatabaseData, Model>();
+  private inferredModels = new WeakMap<DatabaseSnapshot, Model>();
+  private reservedCounters = new WeakSet<DatabaseSnapshot>();
   constructor(
     readonly store: DatabaseStore,
     public model: Model,
@@ -26,7 +27,7 @@ export class Engine {
   /** Возвращает явную модель или кешированное описание, выведенное из переданного снимка данных.
    * @example Повторный вызов с тем же объектом data → тот же объект Model.
    */
-  private modelFor(data: DatabaseData): Model {
+  private modelFor(data: DatabaseSnapshot): Model {
     if (this.model.explicit) return this.model;
     let model = this.inferredModels.get(data);
     if (!model) {
@@ -83,13 +84,13 @@ export class Engine {
           if (!node.many && matches.length > 1) throw domainError('INVALID_INPUT', `Multiple targets for ${ref.entity.name}.${node.path}`);
           if (node.required && !matches.length) throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is empty`);
           const values = sourceValues(ref, node);
-          if (!isReverseRelation(ref.entity, node) && values.some((value) => !matches.some((match) => readPath(match.value, node.target as string).some((target) => keyOf(target) === keyOf(value)))))
+          if (!isReverseRelation(ref.entity, node) && values.some((value) => !matches.some((match) => readPath(match.value, node.target).some((target) => keyOf(target) === keyOf(value)))))
             throw domainError('INVALID_INPUT', `Dangling relation ${ref.entity.name}.${node.path}`);
         } else if (node.base === 'object') {
           const child = resolveField(ref, node);
           if (Array.isArray(child))
             child.forEach((v) => {
-              visit(v as Ref);
+              if (isRef(v)) visit(v);
             });
           else if (isRef(child)) visit(child);
         }
@@ -104,7 +105,9 @@ export class Engine {
   /** Выполняет одну операцию записи в транзакции, включая связи, права и подготовку ответа.
    * @example Режим update с { name: 'Анна' } → обновлённая запись; ошибка проверки → прежние данные.
    */
-  async mutate<T = Ref>(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: ActorSource): Promise<T> {
+  mutate(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: undefined, actor?: ActorSource): Promise<Ref>;
+  mutate<T>(entity: Entity, mode: MutationMode, key: unknown, body: unknown, prepare: (ref: Ref) => T, actor?: ActorSource): Promise<T>;
+  async mutate<T>(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: ActorSource): Promise<T | Ref> {
     const currentActor = () => (typeof actor === 'function' ? actor() : actor);
     if (this.model.options.auth && !currentActor()) throw domainError('UNAUTHENTICATED', 'Authentication required');
     if (mode !== 'delete') {
@@ -112,36 +115,42 @@ export class Engine {
       if (!this.model.explicit && Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     }
     const outcome = await this.store.update((database, before) => {
+      // Используем описание того же снимка, который хранилище прочитало внутри очереди.
+      this.model = this.modelFor(before);
+      const currentEntity = this.model.byCollection.get(entity.collection);
+      if (!currentEntity) throw domainError('NOT_FOUND', 'Resource not found');
+      entity = currentEntity;
       // Пока запрос ждал очередь, токен мог быть отозван, а права пользователя — изменены.
       const lifecycle = new RecordMutation(database.data, this.model, currentActor(), before);
       const finish = (data: DatabaseData, record: JsonObject) => {
         const model = this.modelFor(data);
-        const currentEntity = model.byCollection.get(entity.collection) as Entity;
+        const currentEntity = defined(model.byCollection.get(entity.collection), entity.collection);
         const ref = rootRef(makeContext(data, model), currentEntity, record);
-        const output = prepare ? prepare(ref) : (ref as T);
+        const output = prepare ? prepare(ref) : ref;
         return { model: data === database.data || this.model.explicit ? model : this.modelFor(database.data), output };
       };
-      // Reserve the highest existing generated value before any deletion or replacement.
-      for (const owner of this.model.entities)
-        for (const [field, definition] of Object.entries(owner.root.children))
-          if (definition.generated === 'increment') {
-            database.counters ??= {};
-            const counters = database.counters;
-            const name = `${owner.collection}.${field}`;
-            const maximum = (database.data[owner.collection] ?? []).reduce((max, row) => (typeof row[field] === 'number' ? Math.max(max, row[field] as number) : max), counters[name] ?? 0);
-            if (!Number.isSafeInteger(maximum) || maximum < 0) throw domainError('CONFLICT', 'Invalid increment counter');
-            counters[name] = maximum;
-          }
+      // Свой подтверждённый снимок уже содержит зарезервированные номера. Новый снимок с диска проверяем снова.
+      if (!this.reservedCounters.has(before))
+        for (const owner of this.model.entities)
+          for (const [field, definition] of Object.entries(owner.root.children))
+            if (definition.generated === 'increment') {
+              database.counters ??= {};
+              const counters = database.counters;
+              const name = `${owner.collection}.${field}`;
+              const maximum = (database.data[owner.collection] ?? []).reduce((max, row) => (typeof row[field] === 'number' ? Math.max(max, row[field] as number) : max), counters[name] ?? 0);
+              if (!Number.isSafeInteger(maximum) || maximum < 0) throw domainError('CONFLICT', 'Invalid increment counter');
+              counters[name] = maximum;
+            }
       if (mode === 'delete') {
         const context = makeContext(database.data, this.model);
         const current = this.find(context, entity, key);
         if (!current) throw domainError('NOT_FOUND', 'Record not found');
         lifecycle.check(entity, current.value);
         if (entity.softDelete && current.value.deletedAt != null) return finish(database.data, current.value);
-        this.cascade(context, current as Ref, lifecycle);
+        this.cascade(context, current, lifecycle);
         lifecycle.finish();
         this.validateData(database.data);
-        return finish(entity.softDelete ? database.data : before, (current as Ref).value);
+        return finish(entity.softDelete ? database.data : this.store.database.data, current.value);
       }
       const writer = new MutationWriter(database, this.model, mode === 'replace' ? 'replace' : 'update', (owner, record) => lifecycle.write(owner, record));
       const record = writer.write(entity, mode, key, body);
@@ -150,6 +159,7 @@ export class Engine {
       this.validateData(database.data);
       return finish(database.data, record);
     });
+    this.reservedCounters.add(this.store.database.data);
     this.model = outcome.model;
     return outcome.output;
   }
@@ -160,7 +170,7 @@ export class Engine {
     if (!this.model.explicit) {
       lifecycle.deleteGroup(initial, new Set([initial.value]));
       if (!initial.entity.softDelete) {
-        const rows = context.data[initial.entity.collection];
+        const rows = defined(context.data[initial.entity.collection], initial.entity.collection);
         rows.splice(rows.indexOf(initial.value), 1);
       }
       lifecycle.capturePruned(initial);
@@ -187,7 +197,7 @@ export class Engine {
           if (isRef(v)) collect(v);
           else if (Array.isArray(v))
             v.forEach((x) => {
-              collect(x as Ref);
+              if (isRef(x)) collect(x);
             });
         }
       }
@@ -198,7 +208,7 @@ export class Engine {
         .forEach(collect);
     const pending = [initial.value];
     for (let index = 0; index < pending.length; index++) {
-      for (const { ref, node } of dependents.get(pending[index]) ?? []) {
+      for (const { ref, node } of dependents.get(defined(pending[index], 'cascade record')) ?? []) {
         if (node.onDelete !== 'cascade' || !survives(ref)) continue;
         deleted.add(ref.value);
         pending.push(ref.value);
@@ -221,8 +231,9 @@ export class Engine {
         }
     };
     for (const entity of this.model.entities) {
-      context.data[entity.collection] = (context.data[entity.collection] ?? []).filter((record) => entity.softDelete || !deleted.has(record));
-      context.data[entity.collection].forEach((record) => {
+      const remaining = (context.data[entity.collection] ?? []).filter((record) => entity.softDelete || !deleted.has(record));
+      context.data[entity.collection] = remaining;
+      remaining.forEach((record) => {
         if (!deleted.has(record)) prune(entity.root, record);
       });
     }

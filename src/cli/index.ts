@@ -1,11 +1,12 @@
 import process from 'node:process';
 import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from '../core/constants.js';
-import { inputPaths, validateExportPaths } from '../core/paths.js';
+import { validateExportPaths } from '../core/paths.js';
 import { isObject } from '../core/utils.js';
 import { writeGraphql } from '../graphql/entry.js';
 import { writeOpenapi } from '../openapi/entry.js';
 import { configure, type NormalizedServerConfig, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
+import { inputPaths } from '../server/input-paths.js';
 import { configuredModel } from '../server/model.js';
 import { openapiOptions } from '../server/openapi-options.js';
 
@@ -67,6 +68,7 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   let port: number | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
+    if (arg === undefined) break;
     if (!arg.startsWith('-')) {
       positional.push(arg);
       continue;
@@ -86,7 +88,9 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
   if (seen.has('--generate') && seen.has('--generate-only')) throw new Error('--generate and --generate-only are mutually exclusive');
   if (!positional.length) throw new Error('Укажите путь к файлу конфигурации');
   if (positional.length !== 1) throw new Error('Можно указать только один файл конфигурации');
-  const source = await readConfigModule(positional[0]);
+  const configPath = positional[0];
+  if (configPath === undefined) throw new Error('Укажите путь к файлу конфигурации');
+  const source = await readConfigModule(configPath);
   const server = source.config.server ?? {};
   if (!isObject(server)) throw new Error('config.server must be an object');
   const config = configure(

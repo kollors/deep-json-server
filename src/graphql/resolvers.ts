@@ -4,7 +4,8 @@ import type { Actor } from '../core/lifecycle/options.js';
 import type { Entity, Node } from '../core/model.js';
 import type { MutationMode } from '../core/operations.js';
 import type { ListOptions } from '../core/query/options.js';
-import { type Context, type Ref, resolveField } from '../core/records.js';
+import { type Context, isRef, type Ref, resolveField } from '../core/records.js';
+import { defined } from '../core/utils.js';
 import { preflight } from './preflight.js';
 
 export interface GraphqlContext {
@@ -32,7 +33,7 @@ export function attachResolvers(schema: GraphQLSchema, engine: Engine): void {
     for (const field of Object.values(type.getFields())) {
       const { entity, operation, node, listNode } = field.extensions as { entity?: Entity; operation?: MutationMode | 'find' | 'list'; node?: Node; listNode?: Node };
       if (entity && operation)
-        field.resolve = async (_root, args, context: GraphqlContext, info) => {
+        field.resolve = async (_root: unknown, args: ListOptions & Record<string, unknown>, context: GraphqlContext, info) => {
           const plans = await context.prepare(info);
           if (operation === 'find') {
             context.actor?.();
@@ -40,7 +41,7 @@ export function attachResolvers(schema: GraphQLSchema, engine: Engine): void {
           }
           if (operation === 'list') {
             context.actor?.();
-            return engine.list(engine.records(await context.snapshot(), entity), entity.root, args, plans.get(info.fieldNodes[0]));
+            return engine.list(engine.records(await context.snapshot(), entity), entity.root, args, plans.get(defined(info.fieldNodes[0], 'GraphQL field')));
           }
           return engine.mutate(entity, operation, args[entity.primary], args.data ?? {}, undefined, context.actor);
         };
@@ -49,7 +50,8 @@ export function attachResolvers(schema: GraphQLSchema, engine: Engine): void {
           const value = resolveField(ref, node, false, node.virtual ? context.actor?.() : undefined);
           if (!listNode || value == null) return value;
           const plans = await context.prepare(info);
-          return engine.list(value as Ref[], listNode, args, plans.get(info.fieldNodes[0]));
+          if (!Array.isArray(value) || !value.every(isRef)) throw new Error('Expected a list of record references');
+          return engine.list(value, listNode, args, plans.get(defined(info.fieldNodes[0], 'GraphQL field')));
         };
     }
   }

@@ -1,10 +1,23 @@
 import { VERSION } from '../core/constants.js';
-import { assertApi, canonicalNode, type Entity, type Model, type Node, nodeName, objectSchema, operationName, relationInputSchema, type ValidationSchema, valueSchema } from '../core/model.js';
+import {
+  assertApi,
+  canonicalNode,
+  type Entity,
+  fieldAt,
+  type Model,
+  type Node,
+  nodeName,
+  objectSchema,
+  operationName,
+  relationInputSchema,
+  type ValidationSchema,
+  valueSchema,
+} from '../core/model.js';
 import { MUTATIONS, type Mutation, type WriteMode } from '../core/operations.js';
 import { normalizePagination } from '../core/pagination.js';
 import { operatorsFor } from '../core/query/contract.js';
 import { sortableFields } from '../core/query/options.js';
-import { capitalize, isObject } from '../core/utils.js';
+import { capitalize, defined, isObject } from '../core/utils.js';
 import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files/http.js';
 import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from './auth.js';
 import { createFilePaths } from './files.js';
@@ -67,7 +80,7 @@ export function buildOpenapiDocument({
   }
   function annotateInput(schema: OpenapiSchema, node: Node, defaults: boolean): OpenapiSchema {
     for (const [key, property] of Object.entries(schema.properties ?? {})) {
-      const child = node.children[key];
+      const child = defined(node.children[key], key);
       for (const attribute of ['description', 'example', 'writeOnly'] as const) if (child[attribute] !== undefined) (property as Record<string, unknown>)[attribute] = child[attribute];
       if (defaults && child.default !== undefined) property.default = child.default;
       if (!child.relation && child.base === 'object') annotateInput(child.many ? (property.items as OpenapiSchema) : property, child, defaults);
@@ -82,10 +95,10 @@ export function buildOpenapiDocument({
     if (!reserve(name, entity.root)) return ref(name);
     const existing = writeInput(entity.root, mode === 'replace' ? 'replace' : 'update', true, mode);
     existing.properties ??= {};
-    existing.properties[entity.primary] = toOpenapi(valueSchema(entity.fields[entity.primary]));
+    existing.properties[entity.primary] = toOpenapi(valueSchema(fieldAt(entity, entity.primary)));
     existing.required = [...(existing.required ?? []), entity.primary];
     const variants = [existing];
-    if (entity.fields[entity.primary].generated) variants.push(writeInput(entity.root, 'create', true, mode));
+    if (fieldAt(entity, entity.primary).generated) variants.push(writeInput(entity.root, 'create', true, mode));
     schemas[name] = { anyOf: variants, description: 'An object with a primary key updates an existing record; an object without a key creates one. PUT replaces, PATCH updates supplied fields.' };
     return ref(name);
   }
@@ -233,7 +246,7 @@ export function buildOpenapiDocument({
     });
     const shape = [selectionParameter(false)];
     const list = [selectionParameter(true)];
-    const key = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...entity.fields[entity.primary], generated: undefined }) };
+    const key = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...fieldAt(entity, entity.primary), generated: undefined }) };
     const errors = { 400: response('Invalid request', ref('Error')), 404: response('Not found', ref('Error')), 409: response('Conflict', ref('Error')) };
     const make = (operationId: string, parameters: unknown[], schema: unknown, mutation?: Mutation) => {
       if (operations.has(operationId)) throw new Error(`OpenAPI operation collision: ${operationId}`);
@@ -257,7 +270,7 @@ export function buildOpenapiDocument({
     paths[collectionPath] = { get: make(`${op}List`, list, page(entity, entity.root)) };
     paths[itemPath] = { get: make(op, [key, ...shape], output(entity, entity.root)) };
     for (const mutation of MUTATIONS) {
-      paths[mutation.hasKey ? itemPath : collectionPath][mutation.method.toLowerCase()] = make(
+      defined(paths[mutation.hasKey ? itemPath : collectionPath], 'operation path')[mutation.method.toLowerCase()] = make(
         `${op}${capitalize(mutation.mode)}`,
         mutation.hasKey ? [key, ...shape] : shape,
         output(entity, entity.root),

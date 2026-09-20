@@ -46,15 +46,14 @@ export type DeepJsonServerConfig = {
     server?: ServerConfig;
   };
 }[Storage];
-export interface NormalizedServerConfig {
-  storage: Storage;
-  database: DatabaseConfig;
-  files?: FilesConfig;
-  auth?: AuthConfig;
+type NormalizedSources = {
+  [S in Storage]: { storage: S; database: DatabaseConfig<S>; files?: FilesConfig<S>; auth?: AuthConfig<S> };
+}[Storage];
+export type NormalizedServerConfig = NormalizedSources & {
   openapi?: OpenapiConfig & { endpoint: string };
   graphql?: GraphqlConfig & { endpoint: string };
   server: Required<ServerConfig>;
-}
+};
 const CONFIG_KEYS = new Set(['storage', 'database', 'files', 'auth', 'openapi', 'graphql', 'server']);
 const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
 let configImportIndex = 0;
@@ -68,17 +67,48 @@ function section(value: unknown, name: string, keys: string[]): Record<string, u
   assertKnownKeys(object, new Set(keys), `config.${name}`);
   return object;
 }
-/** Проверяет путь либо начальные данные в соответствии с общим режимом хранения.
- * @example source('db.json', 'file', 'database.source', '/tmp') → '/tmp/db.json'.
+/** Копирует начальные данные из памяти после проверки формы контейнера.
+ * @example memorySource([], 'auth.source', true) → новый пустой массив; объект вместо массива → ошибка.
  */
-function source(value: unknown, storage: Storage, name: string, directory: string, array = false): unknown {
-  if (storage === 'file') return resolve(directory, getString(value, `config.${name}`, true));
+function memorySource(value: unknown, name: string, array = false): object {
   if (array ? !Array.isArray(value) : !isObject(value)) throw new Error(`config.${name} must contain ${array ? 'an array' : 'an object'} for memory storage`);
   try {
-    return structuredClone(value);
+    return structuredClone(value) as object;
   } catch (error) {
     throw new Error(`config.${name} must contain structured data`, { cause: error });
   }
+}
+/** Нормализует пути или контейнеры данных, сохраняя связь их типов с режимом хранения.
+ * @example storage = 'file', database.source = 'db.json', directory = '/tmp' → source = '/tmp/db.json'.
+ */
+function normalizeSources(config: Record<string, unknown>, directory: string): NormalizedSources {
+  if (config.storage !== 'file' && config.storage !== 'memory') throw new Error("config.storage must be 'file' or 'memory'");
+  const database = section(config.database, 'database', ['source', 'schema']);
+  if (!database) throw new Error('config.database is required');
+  const files = section(config.files, 'files', config.storage === 'file' ? ['source', 'metadata'] : ['source']);
+  const auth = section(config.auth, 'auth', ['source', 'expiresIn']);
+  const expiresIn = getPositiveInteger(auth?.expiresIn, 'config.auth.expiresIn');
+  if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
+  const path = (value: unknown, name: string) => resolve(directory, getString(value, `config.${name}`, true));
+  if (config.storage === 'file') {
+    const filesSource = files ? path(files.source, 'files.source') : undefined;
+    return {
+      storage: 'file',
+      database: { source: path(database.source, 'database.source'), ...(database.schema === undefined ? {} : { schema: path(database.schema, 'database.schema') }) },
+      files: files && filesSource ? { source: filesSource, metadata: files.metadata === undefined ? resolve(filesSource, '.files.json') : path(files.metadata, 'files.metadata') } : undefined,
+      auth: auth ? { source: path(auth.source, 'auth.source'), expiresIn } : undefined,
+    };
+  }
+  // Содержимое контейнеров проверяют загрузчики модели и хранилищ перед использованием.
+  return {
+    storage: 'memory',
+    database: {
+      source: memorySource(database.source, 'database.source') as DatabaseConfig<'memory'>['source'],
+      ...(database.schema === undefined ? {} : { schema: memorySource(database.schema, 'database.schema') as ModelSchema }),
+    },
+    files: files ? { source: memorySource(files.source, 'files.source', true) as FilesConfig<'memory'>['source'] } : undefined,
+    auth: auth ? { source: memorySource(auth.source, 'auth.source', true) as AuthConfig<'memory'>['source'], expiresIn } : undefined,
+  };
 }
 /** Проверяет секции настроек и возвращает независимые данные с абсолютными путями.
  * @example { storage: 'file', database: { source: 'db.json' } } → абсолютный database.source.
@@ -86,37 +116,10 @@ function source(value: unknown, storage: Storage, name: string, directory: strin
 function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfig {
   const config = getObject(value, 'config', true);
   assertKnownKeys(config, CONFIG_KEYS, 'config');
-  if (config.storage !== 'file' && config.storage !== 'memory') throw new Error("config.storage must be 'file' or 'memory'");
-  const storage = config.storage;
-  const database = section(config.database, 'database', ['source', 'schema']);
-  if (!database) throw new Error('config.database is required');
-  const normalizedDatabase: DatabaseConfig = {
-    source: source(database.source, storage, 'database.source', directory) as DatabaseConfig['source'],
-    ...(database.schema !== undefined ? { schema: source(database.schema, storage, 'database.schema', directory) as DatabaseConfig['schema'] } : {}),
-  };
-  const files = section(config.files, 'files', storage === 'file' ? ['source', 'metadata'] : ['source']);
-  const normalizedFiles: FilesConfig | undefined =
-    files === undefined
-      ? undefined
-      : storage === 'file'
-        ? {
-            source: source(files.source, storage, 'files.source', directory) as string,
-            metadata:
-              files.metadata === undefined
-                ? resolve(directory, getString(files.source, 'config.files.source', true), '.files.json')
-                : resolve(directory, getString(files.metadata, 'config.files.metadata', true)),
-          }
-        : { source: source(files.source, storage, 'files.source', directory, true) as FilesConfig<'memory'>['source'] };
-  const auth = section(config.auth, 'auth', ['source', 'expiresIn']);
-  let normalizedAuth: AuthConfig | undefined;
-  if (auth) {
-    const expiresIn = getPositiveInteger(auth.expiresIn, 'config.auth.expiresIn');
-    if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
-    normalizedAuth = { source: source(auth.source, storage, 'auth.source', directory, true) as AuthConfig['source'], expiresIn };
-  }
+  const sources = normalizeSources(config, directory);
   const openapi = section(config.openapi, 'openapi', ['target', 'info', 'endpoint']);
   const graphql = section(config.graphql, 'graphql', ['target', 'endpoint']);
-  if ((openapi || graphql) && normalizedDatabase.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
+  if ((openapi || graphql) && sources.database.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
   const exportPath = (value: unknown, name: string) => (value === undefined ? undefined : resolve(directory, getString(value, name, true)));
   const openapiEndpoint = getString(openapi?.endpoint, 'config.openapi.endpoint') ?? '/openapi.json';
   const graphqlEndpoint = getString(graphql?.endpoint, 'config.graphql.endpoint') ?? '/graphql';
@@ -127,10 +130,7 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
   const logger = server.logger;
   if (logger != null && typeof logger !== 'boolean' && !isObject(logger)) throw new Error('config.server.logger must be boolean or an object');
   return {
-    storage,
-    database: normalizedDatabase,
-    files: normalizedFiles,
-    auth: normalizedAuth,
+    ...sources,
     openapi: openapi ? { endpoint: openapiEndpoint, target: exportPath(openapi.target, 'config.openapi.target'), info: normalizeOpenapiInfo(openapi.info) } : undefined,
     graphql: graphql ? { endpoint: graphqlEndpoint, target: exportPath(graphql.target, 'config.graphql.target') } : undefined,
     server: {

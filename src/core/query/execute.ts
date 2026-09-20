@@ -75,7 +75,7 @@ export function executeList(records: Ref[], prepared: PreparedList): Page {
   if (!rules.length) return { data: data.slice(start, start + pageSize), total: data.length };
   const ordered = data.map((ref) => ({ ref, keys: rules.map((rule) => readPath(ref.value, rule.keys)[0]) }));
   ordered.sort((leftEntry, rightEntry) => {
-    for (let index = 0; index < rules.length; index++) {
+    for (const [index, rule] of rules.entries()) {
       const left = leftEntry.keys[index];
       const right = rightEntry.keys[index];
       const comparison =
@@ -88,7 +88,7 @@ export function executeList(records: Ref[], prepared: PreparedList): Page {
               : typeof left === 'number' && typeof right === 'number'
                 ? left - right
                 : collator.compare(String(left), String(right));
-      if (comparison) return rules[index].direction === 'DESC' ? -comparison : comparison;
+      if (comparison) return rule.direction === 'DESC' ? -comparison : comparison;
     }
     return 0;
   });

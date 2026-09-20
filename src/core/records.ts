@@ -1,5 +1,5 @@
 import { type Actor, recordActions } from './lifecycle/options.js';
-import { bindingFor, childName, type Entity, type Model, type Node, readPath } from './model.js';
+import { bindingFor, childName, type Entity, type Model, type Node, readPath, requireRelation } from './model.js';
 import type { DatabaseData, JsonObject } from './types.js';
 import { isObject } from './utils.js';
 
@@ -34,7 +34,7 @@ export const keyOf = (value: unknown): string => `${typeof value}:${String(value
  * @example При source = 'authorId' и записи { authorId: 7 } → [7].
  */
 export function sourceValues(ref: Ref, node: Node): unknown[] {
-  const path = node.source as string;
+  const path = requireRelation(node).source;
   const binding = bindingFor(ref.bindings, path);
   return binding ? readPath(ref.bindings[binding], path === binding ? [] : path.slice(binding.length + 1)) : readPath(ref.root, path);
 }
@@ -42,13 +42,14 @@ export function sourceValues(ref: Ref, node: Node): unknown[] {
  * @example Ключи [1, 1, 2] при двух совпавших записях → две ссылки на записи.
  */
 export function related(ref: Ref, node: Node): Ref[] {
-  const entity = node.relation as Entity;
+  const relation = requireRelation(node);
+  const entity = relation.relation;
   const indexKey = `${entity.collection}:${node.target}`;
   let index = ref.context.indexes.get(indexKey);
   if (!index) {
     index = new Map();
     for (const record of ref.context.data[entity.collection] ?? [])
-      for (const value of readPath(record, node.target as string)) {
+      for (const value of readPath(record, relation.target)) {
         const key = keyOf(value);
         const bucket = index.get(key) ?? [];
         bucket.push(record);

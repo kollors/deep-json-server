@@ -1,5 +1,5 @@
 import { getBoolean } from '../config-values.js';
-import type { JsonObject } from '../types.js';
+import type { JsonObject, RecordSnapshot } from '../types.js';
 import { isObject } from '../utils.js';
 
 export interface RecordOptions {
@@ -24,7 +24,7 @@ export const AUDIT_FIELDS = ['createdAt', 'updatedAt', 'deletedAt', 'createdById
 /** Проверяет право пользователя изменять существующую запись.
  * @example Владелец записи { createdById: '1' } с actor.id = '1' → true; другой обычный пользователь → false.
  */
-export function canChangeRecord(actor: Actor | undefined, record: JsonObject): boolean {
+export function canChangeRecord(actor: Actor | undefined, record: RecordSnapshot): boolean {
   return !!actor && (!!actor.isAdmin || record.createdById === actor.id);
 }
 /** Возвращает доступные пользователю операции над записью.

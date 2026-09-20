@@ -4,8 +4,9 @@ import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import { domainError } from './errors.js';
 import type { ModelSchema } from './model.js';
+import { freezeSnapshot } from './snapshot.js';
 import type { Source, Storage } from './storage.js';
-import type { DatabaseData, DatabaseRecord } from './types.js';
+import type { DatabaseData, DatabaseRecord, DatabaseSnapshot } from './types.js';
 import { createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
 
 export interface DatabaseConfig<S extends Storage = Storage> {
@@ -24,7 +25,7 @@ export interface DatabaseStore {
   /** Передаёт изменяемый черновик и исходные данные только для чтения; сохраняет черновик после проверки.
    * @example update((draft, before) => { draft.data.notes = []; return before.notes.length; }) → прежнее число записей.
    */
-  update<T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T>;
+  update<T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T>;
 }
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -32,7 +33,7 @@ const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 /** Проверяет сериализуемое JSON-значение; отвергает циклы, разреженные массивы, NaN и бесконечности.
  * @example validateJsonValue({ a: [1, null] }, 'data') → undefined; NaN → ошибка.
  */
-export const validateJsonValue = (value: unknown, path: string, ancestors = new WeakSet<object>()): void => {
+export const validateJsonValue = (value: unknown, path: string, ancestors = new WeakSet<object>(), freeze = false): void => {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return;
   }
@@ -67,26 +68,27 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
         throw new Error(`${path}[${index}] отсутствует; разреженные массивы несовместимы с JSON`);
       }
 
-      validateJsonValue(value[index], `${path}[${index}]`, ancestors);
+      validateJsonValue(value[index], `${path}[${index}]`, ancestors, freeze);
     }
   } else {
     Object.entries(value).forEach(([key, item]) => {
-      validateJsonValue(item, `${path}.${key}`, ancestors);
+      validateJsonValue(item, `${path}.${key}`, ancestors, freeze);
     });
   }
 
   ancestors.delete(value);
+  if (freeze) Object.freeze(value);
 };
 
 /** Проверяет объект коллекций, записи и уникальность ключей; возвращает исходный объект.
  * @example validateDatabase({ notes: [{ id: '1' }] }) → тот же объект; повторный id → ошибка.
  */
-export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>): DatabaseData => {
+export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>, freeze = false): DatabaseData => {
   if (!isObject(data)) {
     throw new Error('База данных должна содержать JSON-объект');
   }
 
-  validateJsonValue(data, 'База данных');
+  validateJsonValue(data, 'База данных', new WeakSet(), freeze);
 
   Object.entries(data).forEach(([resource, records]) => {
     if (!RESOURCE_NAME_PATTERN.test(resource) || !isSafeKey(resource)) {
@@ -98,7 +100,7 @@ export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string
     }
 
     const primary = primaryKeys?.get(resource) ?? 'id';
-    const ids = new Set();
+    const ids = new Set<string>();
 
     records.forEach((record, index) => {
       if (!isObject(record)) {
@@ -143,7 +145,7 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
     throw error;
   }
 
-  const value = JSON.parse(source);
+  const value: unknown = JSON.parse(source);
 
   if (!isObject(value)) {
     throw new Error(`${label} должен содержать JSON-объект`);
@@ -159,7 +161,7 @@ export const readDatabaseFile = async (databasePath: string, keys?: Map<string, 
 
 const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => {
   try {
-    validateDatabase(data, keys);
+    validateDatabase(data, keys, true);
   } catch (error) {
     throw domainError('INVALID_INPUT', (error as Error).message);
   }
@@ -167,19 +169,19 @@ const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => 
 
 const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
-  const initialData = await readDatabaseFile(resolvedDatabasePath, keys);
+  const initialData = freezeSnapshot(await readDatabaseFile(resolvedDatabasePath, keys));
   const database = new Low(new JSONFile<DatabaseData>(resolvedDatabasePath), initialData);
   const schedule = createSerialQueue();
   const counterStore = new Low(new JSONFile<Record<string, number>>(`${resolvedDatabasePath}.counters.json`), {});
   await counterStore.read();
 
   const read = async () => {
-    database.data = await readDatabaseFile(resolvedDatabasePath, keys);
+    database.data = freezeSnapshot(await readDatabaseFile(resolvedDatabasePath, keys));
 
     return database.data;
   };
 
-  const update = <T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T> =>
+  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T> =>
     schedule(async () => {
       await read();
 
@@ -187,13 +189,13 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
       const draft = { data: structuredClone(database.data), counters: structuredClone(counterStore.data) };
       const result = operation(draft, database.data);
       validateDraft(draft.data, keys);
-      // Reserve generated numbers first: failed data writes may leave gaps, never reused IDs.
+      // Сначала сохраняем счётчики: ошибка записи может оставить пропуск, но не повторный номер.
       if (JSON.stringify(draft.counters) !== JSON.stringify(counterStore.data)) {
         counterStore.data = draft.counters;
         await counterStore.write();
       }
       await database.adapter.write(draft.data);
-      database.data = draft.data;
+      database.data = freezeSnapshot(draft.data);
 
       return result;
     });
@@ -204,17 +206,17 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
 const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, string>): DatabaseStore => {
   validateDatabase(sourceData, keys);
 
-  const database = { data: structuredClone(sourceData), counters: {} as Record<string, number> };
+  const database = { data: freezeSnapshot(structuredClone(sourceData)), counters: {} as Record<string, number> };
   const schedule = createSerialQueue();
 
   const read = async () => database.data;
-  const update = <T>(operation: (database: DatabaseContainer, before: Readonly<DatabaseData>) => T): Promise<T> =>
+  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T> =>
     schedule(() => {
       const draft = structuredClone(database);
       const result = operation(draft, database.data);
 
       validateDraft(draft.data, keys);
-      database.data = draft.data;
+      database.data = freezeSnapshot(draft.data);
       database.counters = draft.counters;
 
       return result;

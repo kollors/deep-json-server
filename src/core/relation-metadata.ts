@@ -30,7 +30,7 @@ export const getRelationMetadata = (key: string, resourceNames: string[], source
   // Суффиксы Id и Ids обозначают одиночный ключ и массив ключей.
   const match = key.match(/^(.+)(Id|Ids)$/);
 
-  if (match == null) {
+  if (!match?.[1] || !match[2]) {
     return undefined;
   }
 

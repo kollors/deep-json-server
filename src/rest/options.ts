@@ -10,7 +10,7 @@ export interface UnionScope {
 }
 export type Scope = TupleScope | UnionScope;
 export interface RestOptions {
-  scope: Scope;
+  scope: unknown;
 }
 export const ownScope: TupleScope = [{ '*': true }];
 /** Определяет специальный scope, объединяющий несколько обычных выборок списка.
@@ -24,9 +24,9 @@ export function isUnionScope(scope: Scope): scope is UnionScope {
  */
 export function scopeFor(scope: TupleScope, key: string): Scope {
   const selection = Object.hasOwn(scope[0], key) ? scope[0][key] : true;
-  return selection === true ? ownScope : selection;
+  return selection === true || selection === undefined ? ownScope : selection;
 }
-/** Читает JSON-массив выбора полей из единственного параметра URL; проверяет длину и синтаксис JSON.
+/** Читает JSON-значение выбора полей из единственного параметра URL; проверяет длину и синтаксис JSON.
  * @example parseRestOptions({ scope: '[{"id":true}]' }) → { scope: [{ id: true }] }.
  */
 export function parseRestOptions(query: unknown): RestOptions {
@@ -65,7 +65,7 @@ export function validateScope(node: Node, scope: unknown, list = false, depth = 
     }
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || !isSafeKey(key)) badQuery(`Invalid scope field ${key}`);
     const child = children[key];
-    if (!Object.hasOwn(children, key) || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
+    if (!Object.hasOwn(children, key) || !child || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
     if (child.relation || child.base === 'object') validateScope(child, selection, child.many, depth + 1);
     else if (selection !== true) badQuery(`Scalar field ${key} must be true`);
   }

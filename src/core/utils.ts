@@ -124,3 +124,11 @@ export const capitalize = (value: string): string => value.charAt(0).toUpperCase
  * @example isPortNumber(4001) → true; isPortNumber(65536) → false; isPortNumber('80') → false.
  */
 export const isPortNumber = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 65535;
+
+/** Возвращает значение, если оно определено; иначе сообщает о нарушенном условии.
+ * @example defined(0, 'count') → 0; defined(undefined, 'id') → ошибка.
+ */
+export function defined<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Missing ${label}`);
+  return value;
+}

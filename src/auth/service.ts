@@ -150,7 +150,7 @@ export class AuthService {
     this.assertOpen();
     if (typeof authorization !== 'string') throw unauthorized();
     const match = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(authorization);
-    if (!match) throw unauthorized();
+    if (!match?.[1]) throw unauthorized();
     const key = tokenKey(match[1]);
     const session = this.sessions.get(key);
     if (!session || session.expiresAt <= Date.now()) {
@@ -202,7 +202,7 @@ export class AuthService {
   }
 }
 /** Открывает источник учётных записей и создаёт хранилище сессий в памяти.
- * @example createAuthService({ users: [] }) → Promise<AuthService>; повторяющиеся id → ошибка.
+ * @example createAuthService({ source: [] }) → Promise<AuthService>; повторяющиеся id → ошибка.
  */
 export async function createAuthService(config: AuthConfig): Promise<AuthService> {
   return new AuthService(await createAuthStore(config.source), config.expiresIn ?? DEFAULT_SESSION_SECONDS);

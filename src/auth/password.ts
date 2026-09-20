@@ -33,7 +33,7 @@ export async function hashPassword(password: string): Promise<string> {
  */
 export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
   const parts = HASH_PATTERN.exec(encoded);
-  if (!parts) return false;
+  if (!parts?.[1] || !parts[2]) return false;
   const actual = await derive(password, Buffer.from(parts[1], 'hex'));
   return timingSafeEqual(actual, Buffer.from(parts[2], 'hex'));
 }

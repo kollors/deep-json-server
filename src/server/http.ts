@@ -6,7 +6,7 @@ import { errorMessage, isObject } from '../core/utils.js';
 type ListenCallback = (error: Error | null, address: string) => void;
 
 /** Создаёт HTTP-сервер с едиными ошибками, CORS и значениями listen по умолчанию.
- * @example createHttpServer({ host: '127.0.0.1', port: 4001, cors: false }) → FastifyInstance.
+ * @example createHttpServer({ create: Fastify, host: '127.0.0.1', port: 4001, logger: false, cors: false, corsHeaders: {} }) → FastifyInstance.
  */
 export function createHttpServer({
   create,

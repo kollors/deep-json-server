@@ -94,6 +94,7 @@ export const validateDirectory = (value: unknown, source: string): string => {
     throw domainError('INVALID_INPUT', `${source} должен содержать безопасный относительный путь`);
   }
 
+  for (const part of parts) validateName(part, source);
   return value;
 };
 
@@ -101,7 +102,7 @@ export const validateDirectory = (value: unknown, source: string): string => {
  * @example normalizeMimeType('Text/Plain; charset=utf-8') → 'text/plain'.
  */
 export const normalizeMimeType = (value: unknown, source = 'Заголовок Content-Type'): string => {
-  const mimeType = typeof value === 'string' ? value.split(';', 1)[0].trim().toLowerCase() : '';
+  const mimeType = typeof value === 'string' ? (value.split(';', 1)[0] ?? '').trim().toLowerCase() : '';
 
   if (mimeType === '' || !MIME_TYPE_PATTERN.test(mimeType)) {
     throw domainError('INVALID_INPUT', `${source} должен содержать корректный MIME-тип`);

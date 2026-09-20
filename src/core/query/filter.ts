@@ -79,7 +79,7 @@ export function compileWhere(node: Node, input: unknown, depth = 0, defaults = t
       return (field) => !nested(field);
     }
     const child = childrenOf(node)[key];
-    if (!Object.hasOwn(childrenOf(node), key) || child.writeOnly || child.virtual) badQuery(`Unknown or inaccessible filter field ${key}`);
+    if (!Object.hasOwn(childrenOf(node), key) || !child || child.writeOnly || child.virtual) badQuery(`Unknown or inaccessible filter field ${key}`);
     if (child.mixed) badQuery(`Field ${key} has inconsistent types; provide an explicit schema`);
     const nested = condition(child, value, depth + 1);
     return (field) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined);

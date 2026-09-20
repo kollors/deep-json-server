@@ -28,8 +28,8 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
       const context = await engine.context();
       const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
-      const plans = validateRest(engine, entity, options, true);
-      const page = listScope(engine, engine.records(context, entity), entity.root, options.scope, plans);
+      const { scope, plans } = validateRest(engine, entity, options, true);
+      const page = listScope(engine, engine.records(context, entity), entity.root, scope, plans);
       return { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor)), total: page.total };
     });
     server.get(itemPath, async (request) => {
@@ -37,10 +37,10 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
       const context = await engine.context();
       const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
-      const plans = validateRest(engine, entity, options);
+      const { scope, plans } = validateRest(engine, entity, options);
       const ref = engine.find(context, entity, (request.params as Record<string, string>)[entity.primary]);
       if (!ref) throw domainError('NOT_FOUND', 'Record not found');
-      return project(engine, ref, options.scope, plans, actor);
+      return project(engine, ref, scope, plans, actor);
     });
     for (const { method, mode, hasKey, status } of MUTATIONS) {
       server.route({
@@ -56,8 +56,8 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
             (request.params as Record<string, string>)[initial.primary],
             request.body,
             (ref) => {
-              const plans = validateRest(engine, ref.entity, options);
-              return project(engine, ref, options.scope, plans, actor?.());
+              const { scope, plans } = validateRest(engine, ref.entity, options);
+              return project(engine, ref, scope, plans, actor?.());
             },
             actor,
           );

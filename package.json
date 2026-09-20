@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0-beta.3",
   "description": "JSON mock server with schema-driven REST, GraphQL, OpenAPI generation and file uploads",
   "type": "module",
   "main": "./dist/index.js",
@@ -45,7 +45,7 @@
     "prepublishOnly": "npm run verify",
     "test": "npm run build && node --test",
     "test:coverage": "npm run build && node scripts/run-coverage.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
     "verify": "npm run typecheck && npm run lint && npm run test:coverage && npm run pack:check"
   },
   "engines": {

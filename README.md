@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@beta
 ```
 
-To install a specific version, use `@1.0.0-beta.2`.
+To install a specific version, use `@1.0.0-beta.3`.
 
 ## Quick start
 
@@ -154,7 +154,7 @@ Model definitions belong in `models`. The schema root can define `api`, `timesta
 
 Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions.
 
-Schemaless REST generates an `id` and preserves arbitrary JSON fields. Filters and individual field selections use identifier-style names. `scope=[{"*":true}]` returns top-level JSON scalars; arrays and objects must be selected by name. Fields with mixed value types can be read explicitly, but filtering, ordering and paging heterogeneous lists require an explicit schema.
+Schemaless REST generates an `id` and preserves arbitrary JSON fields. Newly inferred relations are available to subsequent reads and writes without restarting the server. Filters and individual field selections use identifier-style names. `scope=[{"*":true}]` returns top-level JSON scalars; arrays and objects must be selected by name. Fields with mixed value types can be read explicitly, but filtering, ordering and paging heterogeneous lists require an explicit schema.
 
 Each model requires `collection`, the database collection and REST path name, and `fields`, its field definitions. The model name (`User`) determines GraphQL type and operation names. `api` controls format availability; `timestamps` and `softDelete` override global settings for that model.
 
@@ -420,7 +420,7 @@ For example, select a movie's own fields, its actors' users and sorted genres:
 
 Omitting `scope` returns scalar fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
 
-Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. This also works for nested lists. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
+Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. For embedded object arrays without primary keys, each source element is kept once, even if several parts select it. Distinct elements with equal contents remain separate. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
 
 ### Nested writes
 
@@ -757,6 +757,8 @@ A new file returns status `201` and its computed metadata:
   "url": "/_files/storage/posters/shadows-of-ardenia.jpg"
 }
 ```
+
+File names and every directory segment follow the same rules: no control characters, `<>:"/\\|?*`, trailing dots or spaces, or reserved Windows names such as `CON` and `NUL`. Use `/` between directory segments.
 
 The combination of `directory` and `name` identifies a file. Uploading to an existing path returns `409`. Pass `Content-Override: true` to replace it; a successful replacement returns `200`. The server supports these file routes:
 

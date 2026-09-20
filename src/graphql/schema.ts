@@ -17,7 +17,7 @@ import {
   GraphQLSchema,
   GraphQLString,
 } from 'graphql';
-import { assertApi, canonicalNode, type Entity, type InputMode, type Model, type Node, nodeName, operationName, writable } from '../core/model.js';
+import { assertApi, canonicalNode, type Entity, fieldAt, type InputMode, type Model, type Node, nodeName, operationName, requiredInput, writable } from '../core/model.js';
 import { MUTATIONS } from '../core/operations.js';
 import { operatorsFor } from '../core/query/contract.js';
 import { sortableFields } from '../core/query/options.js';
@@ -34,8 +34,8 @@ export function buildGraphql(model: Model): GraphQLSchema {
     names.add(name);
     return name;
   };
-  const objects = new Map<Node, GraphQLObjectType>();
-  const pages = new Map<Node, GraphQLObjectType>();
+  const objects = new Map<Node, GraphQLObjectType<unknown, unknown>>();
+  const pages = new Map<Node, GraphQLObjectType<unknown, unknown>>();
   const inputs = new Map<Node, Map<string, GraphQLInputObjectType>>();
   const wheres = new Map<Node, GraphQLInputObjectType>();
   const filters = new Map<Node, GraphQLInputObjectType>();
@@ -58,7 +58,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     }
     return node.base === 'number' ? GraphQLFloat : node.base === 'boolean' ? GraphQLBoolean : node.primary ? GraphQLID : GraphQLString;
   }
-  function output(entity: Entity, node: Node): GraphQLObjectType {
+  function output(entity: Entity, node: Node): GraphQLObjectType<unknown, unknown> {
     [entity, node] = canonicalNode(entity, node);
     let type = objects.get(node);
     if (type) return type;
@@ -89,7 +89,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
     objects.set(node, type);
     return type;
   }
-  function page(entity: Entity, node: Node): GraphQLObjectType {
+  function page(entity: Entity, node: Node): GraphQLObjectType<unknown, unknown> {
     [entity, node] = canonicalNode(entity, node);
     let type = pages.get(node);
     if (type) return type;
@@ -123,8 +123,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
               ? input(entity, child, mode)
               : scalar(entity, child);
           if (child.many) childType = new GraphQLList(new GraphQLNonNull(childType));
-          if (!lookup && !child.relation && !child.relationKey && child.required && !child.nullable && !(root && (mode === 'update' || (nested && mode === 'create'))) && child.default === undefined)
-            childType = new GraphQLNonNull(childType);
+          if (!lookup && !child.relation && !child.nullable && requiredInput(child, mode, root, true) && !(root && nested && mode === 'create')) childType = new GraphQLNonNull(childType);
           fields[key] = { type: childType, description: child.description };
         }
         return fields;
@@ -201,7 +200,7 @@ export function buildGraphql(model: Model): GraphQLSchema {
   for (const entity of model.entities.filter((e) => e.api.includes('graphql'))) {
     const name = operationName(entity);
     for (const operation of [name, `${name}List`]) if (queries[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-    const keyArg = { [entity.primary]: { type: new GraphQLNonNull(scalar(entity, entity.fields[entity.primary], false)) } };
+    const keyArg = { [entity.primary]: { type: new GraphQLNonNull(scalar(entity, fieldAt(entity, entity.primary), false)) } };
     queries[name] = {
       type: output(entity, entity.root),
       args: keyArg,
