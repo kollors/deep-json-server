@@ -32,7 +32,6 @@ export interface EntityDefinition {
 export type ApiFormat = 'openapi' | 'graphql';
 export interface ModelSchema {
   models: Record<string, EntityDefinition>;
-  api?: ApiFormat[];
   timestamps?: boolean;
   softDelete?: boolean;
 }

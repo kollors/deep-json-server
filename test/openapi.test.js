@@ -131,8 +131,7 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   assert.ok((await only.openapi()).paths['/items']);
   await assert.rejects(() => only.graphql(), /No models/);
   model.models.Item.api = [];
-  const internal = await facadeFor(model, { graphql: undefined });
-  assert.deepEqual((await internal.openapi()).paths, {});
+  const internal = await facadeFor(model, { openapi: undefined, graphql: undefined });
   const server = internal.fastify();
   assert.equal((await server.inject('/items')).statusCode, 200);
   await server.close();

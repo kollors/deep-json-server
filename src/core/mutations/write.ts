@@ -122,14 +122,13 @@ export class MutationWriter {
    * @example '1' → существующая запись; { name: 'Анна' } без первичного ключа → новая запись.
    */
   private resolve(entity: Entity, input: unknown, depth: number): JsonObject {
-    const object = isObject(input);
-    if (object && !Object.hasOwn(input, entity.primary)) return this.write(entity, 'create', undefined, input, depth + 1);
-    const key = object ? input[entity.primary] : input;
+    if (!isObject(input)) throw domainError('INVALID_INPUT', `${entity.name}: relation values must be objects`);
+    if (!Object.hasOwn(input, entity.primary)) return this.write(entity, 'create', undefined, input, depth + 1);
+    const key = input[entity.primary];
     const primary = defined(entity.fields[entity.primary], entity.primary);
     if (!['string', 'number'].includes(typeof key) || (this.model.explicit && typeof key !== primary.base)) throw domainError('INVALID_INPUT', `${entity.name}.${entity.primary}: invalid key type`);
     const current = this.index(entity).get(String(key));
     if (!current || keyOf(current[entity.primary]) !== keyOf(key)) throw domainError('NOT_FOUND', `${entity.name}: related record not found`);
-    if (!object) return current;
     const data = { ...input };
     delete data[entity.primary];
     return this.write(entity, this.existingMode, key, data, depth + 1);

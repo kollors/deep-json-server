@@ -77,7 +77,7 @@ test('generate exports before starting and never starts after a generation error
   );
   assert.equal(calls.length, 1);
   await rm(join(f.directory, 'openapi.yaml'));
-  await writeFile(join(f.directory, 'schema.json'), JSON.stringify({ ...schema, api: ['openapi'] }));
+  await writeFile(join(f.directory, 'schema.json'), JSON.stringify({ models: { Item: { ...schema.models.Item, api: ['openapi'] } } }));
   await assert.rejects(() => runCli(['--generate', f.path], services(calls)), /No models enable graphql/);
   assert.equal(calls.length, 1);
   await assert.rejects(() => readFile(join(f.directory, 'openapi.yaml')), { code: 'ENOENT' });

@@ -4,7 +4,6 @@ import { domainError } from '../errors.js';
 import { AUDIT_FIELDS } from '../lifecycle/options.js';
 import { defined } from '../utils.js';
 import { type InputMode, requiredInput, writable } from './policy.js';
-import { fieldAt, requireRelation } from './tree.js';
 import type { Entity, Node, ValidationSchema } from './types.js';
 /** Создаёт независимый валидатор JSON Schema с форматами и строгой проверкой без преобразования данных.
  * @example createValidator().validate({ type: 'number' }, '1') → false.
@@ -53,12 +52,11 @@ export function objectSchema(node: Node, mode: InputMode, root = false, relation
   if (root && mode === 'stored') for (const name of AUDIT_FIELDS) properties[name] ??= { type: ['string', 'null'], ...(name.endsWith('At') ? { format: 'date-time' } : {}) };
   return { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) };
 }
-/** Описывает ввод связанной записи: первичный ключ или объект, при необходимости — массив таких значений.
- * @example Связь со строковым ключом → anyOf для строки и объекта; many: true → массив.
+/** Описывает ввод связанной записи: объект, при необходимости — массив объектов.
+ * @example Связь со строковым ключом → объект; many: true → массив объектов.
  */
 export function relationInputSchema(node: Node, object: ValidationSchema = { type: 'object' }): ValidationSchema {
-  const target = requireRelation(node).relation;
-  let schema: ValidationSchema = { anyOf: [valueSchema(fieldAt(target, target.primary)), object] };
+  let schema: ValidationSchema = object;
   if (node.many) schema = { type: 'array', items: schema };
   else if (node.nullable) schema = { anyOf: [schema, { type: 'null' }] };
   return schema;

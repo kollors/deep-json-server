@@ -124,7 +124,7 @@ test('scope arguments work in mutation responses and invalid nested arguments ro
     ],
   });
   const scope = [{ name: true, peers: [{ name: true }, { order: [{ field: 'name', direction: 'DESC' }], pager: { pageSize: 1 } }] }];
-  const result = await app.inject({ method: 'PATCH', url: url('/items/1', scope), payload: { peers: [2, { name: 'C' }] } });
+  const result = await app.inject({ method: 'PATCH', url: url('/items/1', scope), payload: { peers: [{ id: 2 }, { name: 'C' }] } });
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json(), { name: 'A', peers: { data: [{ name: 'C' }], total: 2 } });
   const failed = await app.inject({ method: 'PATCH', url: url('/items/1', [{ peers: [{}, { pager: { pageSize: 0 } }] }]), payload: { peers: [{ name: 'unsaved' }] } });
@@ -193,7 +193,7 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
       assert.equal(result.json().children.total, 0);
       assert.equal(result.json().code, 'P');
       assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, null);
-      const relink = await app.inject({ method: 'PATCH', url: path, payload: { children: [1] } });
+      const relink = await app.inject({ method: 'PATCH', url: path, payload: { children: [{ id: 1 }] } });
       assert.equal(relink.statusCode, 200, relink.body);
       assert.equal(relink.json().children.total, 1);
     }
@@ -228,9 +228,9 @@ test('transaction key indexes see earlier creates and do not outlive rolled back
   };
   const { app } = await setup(t, schema, { users: [], holders: [{ id: 1 }] });
   const mutate = (payload) => app.inject({ method: 'PATCH', url: '/holders/1', payload });
-  const failed = await mutate({ first: { name: 'rollback' }, second: 999 });
+  const failed = await mutate({ first: { name: 'rollback' }, second: { id: 999 } });
   assert.equal(failed.statusCode, 404, failed.body);
-  assert.equal((await mutate({ second: 1 })).statusCode, 404);
+  assert.equal((await mutate({ second: { id: 1 } })).statusCode, 404);
   const good = await app.inject({
     method: 'PATCH',
     url: url('/holders/1', [{ '*': true, firstId: true, secondId: true }]),

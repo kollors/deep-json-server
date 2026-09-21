@@ -75,7 +75,7 @@ const gql = (app, query, variables) => app.inject({ method: 'POST', url: '/graph
 
 test('nested PATCH mixes references, updates and creates without storing relation objects', async (t) => {
   const { app } = await setup(t);
-  const result = await mutate(app, 'PATCH', { genres: [1, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', [{ '*': true, genreIds: true, genres: [{ '*': true }] }]);
+  const result = await mutate(app, 'PATCH', { genres: [{ id: 1 }, { id: 2, name: 'updated' }, { name: 'created' }] }, '/movies/1', [{ '*': true, genreIds: true, genres: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json().genreIds, [1, 2, 3]);
   assert.deepEqual(
@@ -113,7 +113,7 @@ test('PUT requires fields in relation objects while IDs only link; nested PUT re
   assert.equal(genre.token, data.genres[0].token);
   assert.equal((await get(app, '/users/1')).role, 'member');
   assert.equal((await get(app, '/genres/3')).name, 'new genre');
-  assert.equal((await mutate(app, 'PUT', { title: 'references', users: [1] })).statusCode, 200);
+  assert.equal((await mutate(app, 'PUT', { title: 'references', userIds: [1] })).statusCode, 200);
   assert.equal((await get(app, '/users/1')).role, 'member');
 });
 
@@ -213,7 +213,7 @@ test('reverse links attach new records and replace only the selected parent memb
     ],
     children: [{ id: 1, name: 'child', parentIds: [2] }],
   });
-  const result = await mutate(app, 'PATCH', { children: [1, { name: 'new child' }] }, '/parents/1', [{ children: [{ '*': true }] }]);
+  const result = await mutate(app, 'PATCH', { children: [{ id: 1 }, { name: 'new child' }] }, '/parents/1', [{ children: [{ '*': true }] }]);
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2, 1]);
   assert.deepEqual((await get(app, url('/children/2', [{ '*': true, parentIds: true }]))).parentIds, [1]);
@@ -280,7 +280,7 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
     { userId: 2, genreIds: [2] },
   ];
   const { app } = await setup(t, schema, initial);
-  const failed = await mutate(app, 'PATCH', { movies: [1] }, '/users/3');
+  const failed = await mutate(app, 'PATCH', { movies: [{ id: 1 }] }, '/users/3');
   assert.equal(failed.statusCode, 400, failed.body);
   assert.match(failed.json().error, /Ambiguous target/);
   assert.deepEqual((await get(app, url('/movies/1', [{ actors: [{ '*': true, userId: true, genreIds: true }] }]))).actors.data, initial.movies[0].actors);
@@ -348,7 +348,7 @@ test('custom target keys reject ambiguous matches without modifying other record
   });
   assert.equal((await mutate(app, 'PATCH', { target: { id: 1, name: 'updated' } }, '/owners/1')).statusCode, 200);
   assert.equal((await get(app, url('/owners/1', [{ '*': true, targetCode: true }]))).targetCode, 'a');
-  const failed = await mutate(app, 'PATCH', { target: 2 }, '/owners/1');
+  const failed = await mutate(app, 'PATCH', { target: { id: 2 } }, '/owners/1');
   assert.equal(failed.statusCode, 409, failed.body);
   assert.equal((await get(app, url('/owners/1', [{ '*': true, targetCode: true }]))).targetCode, 'a');
 });
@@ -367,7 +367,7 @@ test('nested GraphQL errors and excessive depth do not persist partial writes', 
   assert.equal((await get(cyclic.app, '/nodes')).total, 1);
   const ancestor = await mutate(cyclic.app, 'PATCH', { children: [{ id: 1, children: [] }] }, '/nodes/1');
   assert.equal(ancestor.statusCode, 409, ancestor.body);
-  assert.equal((await mutate(cyclic.app, 'PATCH', { children: [1] }, '/nodes/1')).statusCode, 200);
+  assert.equal((await mutate(cyclic.app, 'PATCH', { childIds: [1] }, '/nodes/1')).statusCode, 200);
 });
 
 test('OpenAPI validates nested create, update and replace shapes', async (t) => {
@@ -378,7 +378,7 @@ test('OpenAPI validates nested create, update and replace shapes', async (t) => 
   ajv.addSchema({ components: document.components }, 'nested-contract');
   const update = ajv.compile({ $ref: 'nested-contract#/components/schemas/MovieUpdate' });
   const replace = ajv.compile({ $ref: 'nested-contract#/components/schemas/MovieReplace' });
-  assert.equal(update({ genres: [1, { id: 2 }, { name: 'new' }] }), true, JSON.stringify(update.errors));
+  assert.equal(update({ genres: [{ id: 1 }, { id: 2 }, { name: 'new' }] }), true, JSON.stringify(update.errors));
   assert.equal(replace({ title: 'new', users: [{ id: 1 }] }), false);
   assert.equal(replace({ title: 'new', userIds: [1], genres: [{ id: 1, name: 'full' }, { name: 'new' }] }), true, JSON.stringify(replace.errors));
   assert.equal(update({ genres: [{ id: 1, stamp: 'protected' }] }), false);

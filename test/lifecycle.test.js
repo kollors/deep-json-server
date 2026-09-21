@@ -324,7 +324,7 @@ test('nested writes and reverse reconnections cannot bypass ownership or forge a
   assert.equal((await app.inject('/children/1')).json().createdById, 'a');
   await request(app, 'POST', '/children', { name: 'foreign', parentId: null }, bob);
   const before = (await app.inject('/children/2')).body;
-  assert.equal((await request(app, 'PATCH', '/parents/1', { children: [2] }, alice)).statusCode, 403);
+  assert.equal((await request(app, 'PATCH', '/parents/1', { children: [{ id: 2 }] }, alice)).statusCode, 403);
   assert.equal((await app.inject('/children/2')).body, before);
   const childPath = `/children/1?${new URLSearchParams({ scope: JSON.stringify([{ '*': true, parentId: true }]) })}`;
   assert.equal((await app.inject(childPath)).json().parentId, 1);

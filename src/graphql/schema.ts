@@ -223,7 +223,6 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
       };
     }
   }
-  if (!Object.keys(queries).length) throw new Error('No models enable graphql');
   const schema = new GraphQLSchema({ query: new GraphQLObjectType({ name: 'Query', fields: queries }), mutation: new GraphQLObjectType({ name: 'Mutation', fields: mutations }) });
   assertValidSchema(schema);
   return schema;

@@ -57,9 +57,8 @@ test('removed config keys and malformed section values are rejected before openi
   await assert.rejects(() => createServer(memory, {}), /only a configuration/);
 });
 
-test('root schema settings are inherited and per-model values replace them, including false and empty api', async (t) => {
+test('root schema settings are inherited and model api values exclude individual formats', async (t) => {
   const definition = {
-    api: ['openapi'],
     timestamps: true,
     softDelete: true,
     models: { Item: item, Plain: { ...item, collection: 'plain', timestamps: false, softDelete: false, api: [] }, Graph: { ...item, collection: 'graphs', api: ['graphql'] } },
@@ -79,7 +78,8 @@ test('root schema settings are inherited and per-model values replace them, incl
   assert.equal(spec.paths['/graphs'], undefined);
   const graphql = await facade.graphql();
   assert.match(graphql, /graphList/);
-  assert.doesNotMatch(graphql, /itemList|plainList/);
+  assert.match(graphql, /itemList/);
+  assert.doesNotMatch(graphql, /plainList/);
 });
 
 test('API defaults follow configured sections and direct generators without activating absent endpoints', async (t) => {
@@ -93,9 +93,13 @@ test('API defaults follow configured sections and direct generators without acti
   }
   assert.ok((await generateOpenapi(schema)).paths['/items']);
   assert.match(await generateGraphql(schema), /itemList/);
-  assert.deepEqual((await generateOpenapi({ ...schema, api: [] })).paths, {});
-  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /No models/);
-  const facade = await createServer({ ...memory, database: { ...memory.database, schema: { ...schema, api: ['graphql'] } } });
+  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }), /Неизвестный/);
+  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /Неизвестный/);
+  const disabledSchema = { models: { Item: { ...item, api: [] } } };
+  await assert.rejects(() => generateOpenapi(disabledSchema), /No models enable openapi/);
+  await assert.rejects(() => generateGraphql(disabledSchema), /No models enable graphql/);
+  const graphqlSchema = { models: { Item: { ...item, api: ['graphql'] } } };
+  const facade = await createServer({ ...memory, database: { ...memory.database, schema: graphqlSchema } });
   const app = facade.fastify();
   t.after(() => app.close());
   assert.equal((await app.inject('/graphql')).statusCode, 404);

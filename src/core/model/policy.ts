@@ -15,6 +15,7 @@ export function writable(node: Node, mode: InputMode, relations = false): boolea
  */
 export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
+  if (!model.entities.some((entity) => entity.api.includes(api))) throw new Error(`No models enable ${api}`);
   for (const entity of model.entities.filter((e) => e.api.includes(api)))
     for (const node of Object.values(entity.fields))
       if (node.relation && !node.relation.api.includes(api)) throw new Error(`${entity.name}.${node.path}: ${node.relation.name} does not enable ${api}`);
