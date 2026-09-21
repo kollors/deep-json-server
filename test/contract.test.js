@@ -14,9 +14,17 @@ import { createServer } from '../dist/index.js';
 
 const database = JSON.parse(await readFile(new URL('../examples/database.json', import.meta.url), 'utf8'));
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
+const packageSource = { name: 'test-api', version: '1.0.0' };
+const packagePath = new URL('../package.json', import.meta.url).pathname;
 const url = (path, query = {}) => `${path}?${new URLSearchParams(Object.entries(query).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))}`;
 const setup = async (t, data = database, model = schema, options = {}) => {
-  const facade = await createServer({ storage: 'memory', database: { source: data, schema: model }, graphql: model !== undefined ? {} : undefined, server: { logger: false, ...options } });
+  const facade = await createServer({
+    storage: 'memory',
+    database: { source: data, schema: model },
+    graphql: model !== undefined ? {} : undefined,
+    ...(model === undefined ? {} : { package: { source: packageSource } }),
+    server: { logger: false, ...options },
+  });
   const server = facade.fastify();
   t.after(() => server.close());
   return { facade, server };
@@ -441,7 +449,13 @@ test('increment reserves existing numbers across deletion, restart and concurren
   let server = facade.fastify();
   assert.equal((await server.inject({ method: 'DELETE', url: '/items/12' })).statusCode, 200);
   await server.close();
-  facade = await createServer({ storage: 'file', database: { source: path, schema: await writeJson(`${path}.schema.json`, model) }, server: { logger: false }, graphql: {} });
+  facade = await createServer({
+    storage: 'file',
+    database: { source: path, schema: await writeJson(`${path}.schema.json`, model) },
+    server: { logger: false },
+    graphql: {},
+    package: { source: packagePath },
+  });
   server = facade.fastify();
   t.after(() => server.close());
   const responses = await Promise.all(Array.from({ length: 10 }, () => server.inject({ method: 'POST', url: '/items', payload: { name: 'x' } })));

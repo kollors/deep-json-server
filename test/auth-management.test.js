@@ -20,6 +20,8 @@ import { Engine } from '../dist/src/core/engine.js';
 import { loadModel } from '../dist/src/core/model.js';
 
 const password = 'initial-password';
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const passwordHash = await hashPassword(password);
 const users = [
   { id: 'root', username: 'root', passwordHash, isAdmin: true },
@@ -45,7 +47,8 @@ const temporary = async (t) => {
   return directory;
 };
 const setup = async (t, extra = {}) => {
-  const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra });
+  const config = { storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra };
+  const facade = await createServer({ ...config, ...((config.openapi ?? config.graphql) === undefined ? {} : { package: { source: packageSource } }) });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();
@@ -339,7 +342,7 @@ test('queued record mutations recheck auth instead of keeping the original admin
 });
 
 test('OpenAPI describes all auth methods and GraphQL remains limited to record operations', async () => {
-  const document = await generateOpenapi(schema, { auth: true });
+  const document = await generateOpenapi(schema, { auth: true, packagePath });
   assert.deepEqual(document.paths['/items'].get.security, [{}, { AuthBearer: [] }]);
   assert.ok(document.paths['/items'].get.responses[401]);
   assert.equal(document.components.schemas.Item.properties.actions.readOnly, true);
@@ -363,7 +366,7 @@ test('OpenAPI describes all auth methods and GraphQL remains limited to record o
   assert.deepEqual(document.components.schemas.AuthPasswordInput.required, ['newPassword']);
   assert.doesNotMatch(await generateGraphql(schema, { auth: true }), /authRegister|authChangePassword|authChangeAdmin|AuthCredentialsInput|AuthSuccess/);
   assert.match(await generateGraphql(schema, { auth: true }), /actions: Item_actions!/);
-  const disabled = await generateOpenapi(schema);
+  const disabled = await generateOpenapi(schema, { packagePath });
   assert.equal(disabled.paths['/auth/register'], undefined);
   assert.equal(disabled.components.schemas.AuthPasswordInput, undefined);
 });

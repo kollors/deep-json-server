@@ -4,10 +4,17 @@ import { buildSchema, parse, validate } from 'graphql';
 import { createServer, generateGraphql } from '../dist/index.js';
 import { preflight } from '../dist/src/graphql/preflight.js';
 
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const primary = { type: 'number', primary: true, generated: 'increment' };
 const url = (path, scope) => `${path}?${new URLSearchParams({ scope: JSON.stringify(scope) })}`;
 const setup = async (t, schema, data, graphql = false) => {
-  const facade = await createServer({ storage: 'memory', database: { schema, source: data }, graphql: graphql ? {} : undefined, server: { logger: false } });
+  const facade = await createServer({
+    storage: 'memory',
+    database: { schema, source: data },
+    graphql: graphql ? {} : undefined,
+    ...(graphql ? { package: { source: packageSource } } : {}),
+    server: { logger: false },
+  });
   const app = facade.fastify();
   t.after(() => app.close());
   return { app, facade };

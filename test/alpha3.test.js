@@ -12,6 +12,8 @@ import { configure, readConfigModule } from '../dist/src/server/config.js';
 import { createConfiguredServer } from '../dist/src/server/create.js';
 import { releasePlan } from '../scripts/prepare-release.js';
 
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0', description: 'Test API' };
 const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const temporary = async (t) => {
   const path = await mkdtemp(join(tmpdir(), 'deep-alpha3-'));
@@ -19,7 +21,11 @@ const temporary = async (t) => {
   return path;
 };
 const setup = async (t, config) => {
-  const facade = await createServer({ ...config, server: { logger: false, ...config.server } });
+  const facade = await createServer({
+    ...config,
+    ...((config.openapi ?? config.graphql) === undefined ? {} : { package: { source: config.storage === 'file' ? packagePath : packageSource } }),
+    server: { logger: false, ...config.server },
+  });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();
@@ -39,11 +45,18 @@ test('release plan publishes prerelease channels from main and stable versions f
 test('file uploads and moves preserve database, counters, schema and config inputs', async (t) => {
   const directory = await temporary(t);
   const sourcePath = join(directory, 'server.config.mjs');
-  const config = { storage: 'file', database: { source: 'db.json', schema: 'model.json' }, files: { source: '.', metadata: 'files.json' }, server: { logger: false } };
+  const config = {
+    storage: 'file',
+    database: { source: 'db.json', schema: 'model.json' },
+    files: { source: '.', metadata: 'files.json' },
+    package: { source: 'package.json' },
+    server: { logger: false },
+  };
   const contents = {
     'db.json': JSON.stringify({ items: [{ id: '1' }] }),
     'db.json.counters.json': '{}',
     'model.json': JSON.stringify(model()),
+    'package.json': JSON.stringify(packageSource),
     'server.config.mjs': `export default ${JSON.stringify(config)};`,
   };
   for (const [name, content] of Object.entries(contents)) await writeFile(join(directory, name), content);
@@ -91,7 +104,14 @@ test('generation reads only the schema and rejects colliding destinations before
   const source = join(directory, 'config.mjs');
   const schemaPath = join(directory, 'model.json');
   await writeFile(schemaPath, JSON.stringify(model()));
-  const config = { storage: 'file', database: { source: 'missing-db.json', schema: 'model.json' }, openapi: { target: 'api.yaml' }, graphql: { target: 'api.graphql' } };
+  await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'fixture-api', version: '1.2.3', description: 'Fixture API' }));
+  const config = {
+    storage: 'file',
+    database: { source: 'missing-db.json', schema: 'model.json' },
+    openapi: { target: 'api.yaml' },
+    graphql: { target: 'api.graphql' },
+    package: { source: 'package.json' },
+  };
   const run = async (value) => {
     await writeFile(source, `export default ${JSON.stringify(value)};`);
     return runCli(['--generate-only', source]);
@@ -110,9 +130,9 @@ test('generation reads only the schema and rejects colliding destinations before
   assert.deepEqual(JSON.parse(await readFile(schemaPath, 'utf8')), model());
 });
 
-test('pagination and info snapshots agree across public generators and the server', async (t) => {
+test('pagination and package metadata agree across public generators and the server', async (t) => {
   const schema = model();
-  const generated = await generateOpenapi(schema, { maxPageSize: 5 });
+  const generated = await generateOpenapi(schema, { maxPageSize: 5, packagePath });
   assert.equal(generated.components.schemas.Pager.properties.pageSize.default, 5);
   for (const options of [
     { pageSize: 0 },
@@ -123,14 +143,12 @@ test('pagination and info snapshots agree across public generators and the serve
     { info: { title: 'x' } },
     { files: 'true' },
   ])
-    await assert.rejects(() => generateOpenapi(schema, options));
-  const info = { title: 'Original', version: '1' };
-  const { facade, app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } }, openapi: { info }, server: { maxPageSize: 5, port: 0 } });
-  info.title = 'Changed';
+    await assert.rejects(() => generateOpenapi(schema, { ...options, packagePath }));
+  const { facade, app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } }, openapi: {}, server: { maxPageSize: 5, port: 0 } });
   const fromFacade = await facade.openapi();
   const fromEndpoint = (await app.inject('/openapi.json')).json();
   assert.deepEqual(fromFacade, fromEndpoint);
-  assert.equal(fromEndpoint.info.title, 'Original');
+  assert.equal(fromEndpoint.info.title, 'test-api');
   assert.deepEqual(fromEndpoint.servers, [{ url: '/' }]);
 });
 
@@ -154,9 +172,9 @@ test('nested field lookups reject inherited names and empty objects remain writa
     { scope: [{ '*': true }, { where: { profile: { toString: { eq: 'x' } } } }] },
   ])
     assert.equal((await app.inject(url('/items', options))).statusCode, 400);
-  assert.ok((await generateOpenapi(schema)).components.schemas.ItemCreate.properties.settings);
+  assert.ok((await generateOpenapi(schema, { packagePath })).components.schemas.ItemCreate.properties.settings);
   await assert.rejects(() => generateGraphql(schema), /at least one visible field/);
-  for (const type of ['object', 'object[]']) await assert.rejects(() => generateOpenapi(model({ profile: { type, enum: [{}] } })), /enum.*primitive/);
+  for (const type of ['object', 'object[]']) await assert.rejects(() => generateOpenapi(model({ profile: { type, enum: [{}] } }), { packagePath }), /enum.*primitive/);
 });
 
 test('OpenAPI preserves annotations on objects and relations', async () => {
@@ -165,7 +183,7 @@ test('OpenAPI preserves annotations on objects and relations', async () => {
     'profile.name': { type: 'string' },
     related: { type: 'Item[]', source: 'id', target: 'id', description: 'Related items' },
   });
-  const doc = await generateOpenapi(schema);
+  const doc = await generateOpenapi(schema, { packagePath });
   const { profile, related } = doc.components.schemas.Item.properties;
   assert.equal(profile.readOnly, true);
   assert.equal(profile.description, 'Profile');
@@ -254,7 +272,7 @@ test('public imports and REST startup do not load unrelated API runtimes', async
       const entry = mode === 'openapi' ? './dist/src/openapi/entry.js' : mode === 'graphql' ? './dist/src/graphql/entry.js' : './dist/index.js';
       const api = await import(entry);
       const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
-      if (mode === 'openapi') await api.generateOpenapi(schema, { auth: true });
+      if (mode === 'openapi') await api.generateOpenapi(schema, { auth: true, packagePath: ${JSON.stringify(packagePath)} });
       if (mode === 'graphql') await api.generateGraphql(schema);
       if (mode === 'rest') { const app = (await api.createServer({ storage: 'memory', database: { source: { items: [] } }, server: { logger: false } })).fastify(); await app.ready(); await app.close(); }
       console.log(JSON.stringify([...loaded]));

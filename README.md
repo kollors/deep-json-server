@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@beta
 ```
 
-To install a specific version, use `@1.0.0-beta.4`.
+To install a specific version, use `@1.0.0-beta.6`.
 
 ## Quick start
 
@@ -54,6 +54,7 @@ export default {
   files: { source: './uploads' },
   graphql: { target: './generated/schema.graphql' },
   openapi: { target: './generated/openapi.yaml' },
+  package: { source: './package.json' },
   server: { host: '127.0.0.1', port: 4001 },
 };
 ```
@@ -71,13 +72,15 @@ export default {
 | `graphql.target` | GraphQL SDL export destination |
 | `openapi.endpoint` | HTTP endpoint; default `/openapi.json` |
 | `openapi.target` | OpenAPI export destination |
-| `openapi.info` | Metadata: required `title` and `version`, optional `description` |
+| `package.source` | Project `package.json`; required when `openapi` or `graphql` is configured |
 | `server.host`, `server.port` | Defaults `127.0.0.1`, `4001`; CLI also reads `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | Defaults 10 and 100; default size is capped by the maximum |
 | `server.cors`, `server.logger` | Default `true`; logger also accepts Fastify logger options |
 | `server.maxFileSize` | Default 100 MiB |
 
-Relative paths resolve from the configuration file directory, or from the working directory with `createServer(config)`. In-memory data, including the schema, is copied. Port `0` lets the system choose an available port.
+`package.source` follows the storage mode. With `storage: 'file'`, pass a path to `package.json`. With `storage: 'memory'`, pass its metadata directly: `{ name: 'example-api', version: '1.0.0', description: 'Example API' }`; `name` and `version` are required, while `description` is optional.
+
+Relative paths resolve from the configuration file directory, or from the working directory with `createServer(config)`. In-memory data, including the schema and package metadata, is copied. Port `0` lets the system choose an available port.
 
 ### CLI
 
@@ -486,7 +489,7 @@ mutation {
 
 ### GraphQL
 
-Set `database.schema` and add `graphql: {}` to the configuration:
+Set `database.schema` and add `graphql: {}` plus `package.source` to the configuration:
 
 ```sh
 npx deep-json-server server.config.js
@@ -526,7 +529,7 @@ Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`,
 
 ## OpenAPI and schema exports
 
-Exports use OpenAPI 3.0.3. Add `openapi: {}` and `database.schema` to serve the specification at `/openapi.json`. Change the route with `openapi.endpoint`. Open the document in Swagger UI or import it into an API client.
+Exports use OpenAPI 3.0.3. Add `openapi: {}`, `database.schema` and `package.source` to serve the specification at `/openapi.json`. Change the route with `openapi.endpoint`. OpenAPI `info.title`, `info.version` and optional `info.description` come from the configured `package.json`. Open the document in Swagger UI or import it into an API client.
 
 Set output paths to save schemas:
 
@@ -536,6 +539,7 @@ export default {
   database: { source: './database.json', schema: './schema.json' },
   openapi: { target: './generated/openapi.yaml' },
   graphql: { target: './generated/schema.graphql' },
+  package: { source: './package.json' },
 };
 ```
 
@@ -808,7 +812,7 @@ await server.listen();
 
 The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup.
 
-`createServer(config)` takes one argument. Configuration sections control modules exactly as in the CLI. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
+`createServer(config)` takes the same configuration object as the CLI. When `openapi` or `graphql` is configured, `package.source` is required. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
 
 The root import `@kollors/deep-json-server` also provides these functions. Server adapters load when enabled. Generators can be used independently:
 
@@ -816,7 +820,7 @@ The root import `@kollors/deep-json-server` also provides these functions. Serve
 import { generateOpenapi, writeOpenapi } from '@kollors/deep-json-server/openapi';
 import { generateGraphql, writeGraphql } from '@kollors/deep-json-server/graphql';
 
-const document = await generateOpenapi('./schema.json', { files: true });
+const document = await generateOpenapi('./schema.json', { files: true, packagePath: './package.json' });
 const sdl = await generateGraphql('./schema.json');
 await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
@@ -824,7 +828,7 @@ await writeGraphql(sdl, './generated/schema.graphql');
 
 Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; a model's `api` setting can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership and `actions` fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
-`generateOpenapi()` also accepts `host`, `port`, `pageSize`, `maxPageSize` and `info`. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
+`generateOpenapi()` requires `packagePath` and also accepts `host`, `port`, `pageSize` and `maxPageSize`. It reads OpenAPI metadata from that package. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 
 ## Data storage
 

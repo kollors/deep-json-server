@@ -23,8 +23,13 @@ import { loadModel } from '../dist/src/core/model.js';
 import { createOpenapi } from '../dist/src/openapi/generate.js';
 
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0', description: 'Test API' };
 const definition = (fields) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
-const facadeFor = (model, extra = {}) => createServer({ storage: 'memory', database: { source: {}, schema: model }, openapi: {}, graphql: {}, server: { logger: false }, ...extra });
+const facadeFor = (model, extra = {}) => {
+  const config = { storage: 'memory', database: { source: {}, schema: model }, openapi: {}, graphql: {}, server: { logger: false }, ...extra };
+  return createServer({ ...config, ...((config.openapi ?? config.graphql) === undefined ? {} : { package: { source: config.storage === 'file' ? packagePath : packageSource } }) });
+};
 function checkReferences(document) {
   const walk = (value) => {
     if (!value || typeof value !== 'object') return;
@@ -114,14 +119,14 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   const openapiPath = join(directory, 'out', 'api.yaml');
   const graphqlPath = join(directory, 'out', 'api.graphql');
   const facade = await facadeFor(model, {
-    openapi: { target: openapiPath, info: { title: 'Example', version: 'alpha', description: 'Shared schema' } },
+    openapi: { target: openapiPath },
     graphql: { target: graphqlPath },
     server: { host: '::1', port: 9000, logger: false },
   });
   await writeOpenapi(await facade.openapi(), openapiPath);
   await writeGraphql(await facade.graphql(), graphqlPath);
   const doc = parse(await readFile(openapiPath, 'utf8'));
-  assert.equal(doc.info.title, 'Example');
+  assert.equal(doc.info.title, 'test-api');
   assert.equal(doc.servers[0].url, 'http://[::1]:9000');
   assert.match(await readFile(graphqlPath, 'utf8'), /itemList/);
   for (const bad of [{ host: '' }, { port: -1 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
@@ -227,7 +232,14 @@ test('validates explicit keys, implicit fields, primary defaults and nullable re
   const compiled = await loadModel(model);
   assert.equal(compiled.byName.get('A').fields.bCode.type, 'number');
   assert.equal(compiled.byName.get('A').fields.bCode.nullable, true);
-  await createServer({ storage: 'memory', database: { source: { a: [{ code: 1, bCode: null }], b: [] }, schema: model }, openapi: {}, graphql: {}, server: { logger: false } });
+  await createServer({
+    storage: 'memory',
+    database: { source: { a: [{ code: 1, bCode: null }], b: [] }, schema: model },
+    openapi: {},
+    graphql: {},
+    package: { source: packageSource },
+    server: { logger: false },
+  });
   const both = structuredClone(model);
   delete both.models.A.fields.b.source;
   const loaded = await loadModel(both);

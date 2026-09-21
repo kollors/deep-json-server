@@ -13,6 +13,8 @@ import { loadModel } from '../dist/src/core/model.js';
 import { cloneSnapshot, freezeSnapshot } from '../dist/src/core/snapshot.js';
 import { createHttpServer } from '../dist/src/server/http.js';
 
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const schema = (fields = {}) => ({
   models: { Note: { collection: 'notes', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true }, ...fields } } },
 });
@@ -188,14 +190,16 @@ test('invalid enum values fail during model loading and both API generations', a
   for (const field of invalid) {
     const model = schema({ state: field });
     await assert.rejects(loadModel(model), /Invalid enum\[0\]: Note.state/);
-    await assert.rejects(generateOpenapi(model), /Invalid enum\[0\]: Note.state/);
+    await assert.rejects(generateOpenapi(model, { packagePath }), /Invalid enum\[0\]: Note.state/);
     await assert.rejects(generateGraphql(model), /Invalid enum\[0\]: Note.state/);
   }
 });
 
 test('valid nullable enums and enum arrays agree between REST, GraphQL and OpenAPI', async (t) => {
   const model = schema({ state: { type: 'string', nullable: true, enum: ['on', 'off'] }, tags: { type: 'string[]', enum: ['a', 'b'] } });
-  const app = (await createServer({ storage: 'memory', database: { source: { notes: [] }, schema: model }, graphql: {}, openapi: {}, server: { logger: false } })).fastify();
+  const app = (
+    await createServer({ storage: 'memory', database: { source: { notes: [] }, schema: model }, graphql: {}, openapi: {}, package: { source: packageSource }, server: { logger: false } })
+  ).fastify();
   t.after(() => app.close());
   const created = await app.inject({ method: 'POST', url: '/notes', payload: { name: 'rest', state: null, tags: ['a'] } });
   assert.equal(created.statusCode, 201, created.body);

@@ -18,12 +18,15 @@ import { runCli } from '../dist/src/cli/index.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
 const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } } };
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const password = 'Тестовый пароль';
 const users = [{ id: '1', username: 'admin', passwordHash: await hashPassword(password) }];
 const credentials = { username: 'admin', password };
 const bearer = (token) => ({ authorization: `Bearer ${token}` });
 const setup = async (t, extra = {}) => {
-  const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra });
+  const config = { storage: 'memory', database: { source: { items: [] }, schema }, auth: { source: users }, server: { logger: false }, ...extra };
+  const facade = await createServer({ ...config, ...((config.openapi ?? config.graphql) === undefined ? {} : { package: { source: config.storage === 'file' ? packagePath : packageSource } }) });
   const app = facade.fastify();
   t.after(() => app.close());
   return { app, facade };
@@ -156,7 +159,7 @@ test('auth is enabled only by its configuration section', async (t) => {
 });
 
 test('auth schemas are optional, isolate security requirements and reject name collisions', async () => {
-  const doc = await generateOpenapi(schema, { auth: true });
+  const doc = await generateOpenapi(schema, { auth: true, packagePath });
   assert.equal(doc.security, undefined);
   assert.deepEqual(doc.paths['/items'].get.security, [{}, { AuthBearer: [] }]);
   assert.deepEqual(doc.paths['/items'].post.security, [{ AuthBearer: [] }]);
@@ -166,15 +169,15 @@ test('auth schemas are optional, isolate security requirements and reject name c
   assert.equal(doc.components.securitySchemes.AuthBearer.scheme, 'bearer');
   assert.equal(doc.components.schemas.AuthUser.properties.passwordHash, undefined);
   doc.components.schemas.AuthUser.properties.username.type = 'number';
-  assert.equal((await generateOpenapi(schema, { auth: true })).components.schemas.AuthUser.properties.username.type, 'string');
-  await assert.rejects(() => generateOpenapi(schema, { auth: 'true' }), /auth/);
+  assert.equal((await generateOpenapi(schema, { auth: true, packagePath })).components.schemas.AuthUser.properties.username.type, 'string');
+  await assert.rejects(() => generateOpenapi(schema, { auth: 'true', packagePath }), /auth/);
   for (const name of ['AuthUser', 'AuthMe']) {
     const model = { models: { [name]: { ...schema.models.Item } } };
-    await assert.rejects(() => generateOpenapi(model, { auth: true }), /collision/);
-    const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema: model }, graphql: {}, auth: { source: users } });
+    await assert.rejects(() => generateOpenapi(model, { auth: true, packagePath }), /collision/);
+    const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema: model }, graphql: {}, auth: { source: users }, package: { source: packageSource } });
     assert.equal(await facade.graphql(), await generateGraphql(model, { auth: true }));
   }
-  await assert.rejects(() => generateOpenapi({ models: { Item: { ...schema.models.Item, collection: 'auth' } } }, { auth: true }), /collision/);
+  await assert.rejects(() => generateOpenapi({ models: { Item: { ...schema.models.Item, collection: 'auth' } } }, { auth: true, packagePath }), /collision/);
 });
 
 test('auth config, credential records and route collisions fail before startup', async (t) => {
@@ -235,8 +238,10 @@ test('CLI enables auth and exports auth schemas without opening the users file',
     auth: { source: './missing-users.json' },
     openapi: { target: 'api.yaml' },
     graphql: { target: 'api.graphql' },
+    package: { source: './package.json' },
   };
   const save = () => writeFile(source, `export default ${JSON.stringify(config)};`);
+  await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'auth-api', version: '1.0.0' }));
   await save();
   let call;
   await runCli([source], {
@@ -250,7 +255,7 @@ test('CLI enables auth and exports auth schemas without opening the users file',
   await runCli(['--generate-only', source]);
   assert.ok(parse(await readFile(join(dir, 'api.yaml'), 'utf8')).paths['/auth/login']);
   assert.equal((await readFile(join(dir, 'api.graphql'), 'utf8')).trimEnd(), await generateGraphql(schema, { auth: true }));
-  const facade = await createServer({ ...config, auth: { source: '/missing/users.json' } });
+  const facade = await createServer({ ...config, auth: { source: '/missing/users.json' }, package: { source: packagePath } });
   assert.ok((await facade.openapi()).paths['/auth/login']);
   assert.equal(await facade.graphql(), await generateGraphql(schema, { auth: true }));
   config.auth.source = '/missing/users.json';

@@ -15,6 +15,8 @@ import { createMemoryFileStore } from '../dist/src/files/memory-store.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
 const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } } } };
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const temp = async (t) => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'deep-optimization-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -26,20 +28,15 @@ test('server config and generators apply the same option validation and defaults
   assert.deepEqual(normalized.server, { cors: true, host: '127.0.0.1', logger: true, maxFileSize: 104857600, pageSize: 5, maxPageSize: 5, port: 4001 });
   assert.equal(normalized.openapi, undefined);
   assert.equal(normalized.graphql, undefined);
-  for (const info of [[], {}, { title: 'API', version: '1', description: 42 }]) {
-    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: { info } }));
-    await assert.rejects(() => generateOpenapi(schema, { info }));
-  }
+  assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: { info: { title: 'API', version: '1' } } }), /config.openapi.info/);
   for (const options of [{ host: '' }, { port: 65536 }, { pageSize: 0 }, { maxPageSize: Number.MAX_SAFE_INTEGER + 1 }, { pageSize: 11, maxPageSize: 10 }]) {
     assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {} }, server: options }));
-    await assert.rejects(() => generateOpenapi(schema, options));
+    await assert.rejects(() => generateOpenapi(schema, { ...options, packagePath }));
   }
-  const info = { title: 'API', version: '1', description: 'Описание', 'x-meta': { owner: 'one' } };
-  const config = normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: { info } });
-  const document = await generateOpenapi(schema, { info, maxPageSize: 5, host: '::1', port: 0 });
-  info['x-meta'].owner = 'changed';
-  assert.deepEqual(config.openapi.info, document.info);
-  assert.equal(document.info['x-meta'].owner, 'one');
+  const config = normalizeServerConfig({ storage: 'memory', database: { source: {}, schema }, openapi: {}, package: { source: packageSource } });
+  const document = await generateOpenapi(schema, { packagePath, maxPageSize: 5, host: '::1', port: 0 });
+  assert.equal(config.openapi.info, undefined);
+  assert.equal(document.info.title, '@kollors/deep-json-server');
   assert.equal(document.servers[0].url, '/');
   assert.equal(document.components.schemas.Pager.properties.pageSize.default, normalized.server.pageSize);
 });
@@ -48,8 +45,15 @@ test('combined CLI export reads one model and validates both formats before writ
   const directory = await temp(t);
   const schemaPath = join(directory, 'model.json');
   const configPath = join(directory, 'config.mjs');
-  const config = { storage: 'file', database: { source: 'missing-db.json', schema: schemaPath }, openapi: { target: 'api.yaml' }, graphql: { target: 'api.graphql' } };
+  const config = {
+    storage: 'file',
+    database: { source: 'missing-db.json', schema: schemaPath },
+    openapi: { target: 'api.yaml' },
+    graphql: { target: 'api.graphql' },
+    package: { source: 'package.json' },
+  };
   await fs.writeFile(schemaPath, JSON.stringify({ ...schema, timestamps: true, softDelete: true }));
+  await fs.writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'optimization-api', version: '1.0.0' }));
   await fs.writeFile(configPath, `export default ${JSON.stringify(config)};`);
   const readFile = fs.readFile;
   let reads = 0;
@@ -72,9 +76,8 @@ test('combined CLI export reads one model and validates both formats before writ
   await assert.rejects(() => runCli(['--generate-only', configPath]), /graphql/);
   assert.equal(await fs.readFile(join(directory, 'api.yaml'), 'utf8'), originalYaml);
   assert.equal(await fs.readFile(join(directory, 'api.graphql'), 'utf8'), originalGraphql);
-  config.openapi.info = { title: 'API', version: '1', description: 42 };
-  await fs.writeFile(configPath, `export default ${JSON.stringify(config)};`);
-  await assert.rejects(() => runCli(['--generate-only', configPath]), /OpenAPI info/);
+  await fs.writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'optimization-api', version: '1.0.0', description: 42 }));
+  await assert.rejects(() => runCli(['--generate-only', configPath]), /description/);
 });
 
 for (const softDelete of [false, true]) {

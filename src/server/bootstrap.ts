@@ -52,7 +52,7 @@ export async function registerConfiguredModules(
   }
   if (enabled.files && config.files) {
     const { createFileStore, registerFileRoutes } = await import('../files/index.js');
-    const protectedPaths = inputPaths({ database: config.database, auth: config.auth }, '.', configSourcePath(config));
+    const protectedPaths = inputPaths({ database: config.database, auth: config.auth, package: config.package }, '.', configSourcePath(config));
     registerFileRoutes(app, { getStore: () => createFileStore(config.files as NonNullable<typeof config.files>, protectedPaths), maxFileSize: config.server.maxFileSize });
   }
 }

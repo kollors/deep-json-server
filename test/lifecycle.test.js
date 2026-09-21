@@ -22,14 +22,17 @@ const users = [
 ];
 const item = { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } };
 const model = { models: { Item: item } };
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const setup = async (t, options = {}) => {
-  const facade = await createServer({
+  const config = {
     storage: 'memory',
     database: { source: { items: [] }, schema: { ...model, timestamps: true, softDelete: true } },
     openapi: {},
     server: { logger: false },
     ...options,
-  });
+  };
+  const facade = await createServer({ ...config, package: { source: config.storage === 'file' ? packagePath : packageSource } });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();
@@ -335,23 +338,24 @@ test('nested writes and reverse reconnections cannot bypass ownership or forge a
 test('schema roots supply lifecycle settings for CLI and standalone generators', async (t) => {
   for (const flags of [{ timestamps: 'yes' }, { softDelete: 1 }]) {
     assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, ...flags } }), /Неизвестный/);
-    await assert.rejects(() => generateOpenapi({ ...model, ...flags }), /boolean/);
+    await assert.rejects(() => generateOpenapi({ ...model, ...flags }, { packagePath }), /boolean/);
   }
-  await assert.rejects(() => generateOpenapi({ models: { Item: { ...item, timestamps: 'yes' } } }), /boolean/);
-  await assert.rejects(() => generateOpenapi({ timestamps: true, models: { Item: { ...item, fields: { ...item.fields, createdAt: { type: 'string' } } } } }), /Reserved/);
+  await assert.rejects(() => generateOpenapi({ models: { Item: { ...item, timestamps: 'yes' } } }, { packagePath }), /boolean/);
+  await assert.rejects(() => generateOpenapi({ timestamps: true, models: { Item: { ...item, fields: { ...item.fields, createdAt: { type: 'string' } } } } }, { packagePath }), /Reserved/);
   const directory = await temp(t),
     path = join(directory, 'config.mjs');
   const schema = { ...model, timestamps: true, softDelete: true };
+  await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'lifecycle-api', version: '1.0.0' }));
   await writeFile(
     path,
-    `export default ${JSON.stringify({ storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, graphql: { target: 'schema.graphql' }, openapi: { target: 'api.yaml' } })};`,
+    `export default ${JSON.stringify({ storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, graphql: { target: 'schema.graphql' }, openapi: { target: 'api.yaml' }, package: { source: packageSource } })};`,
   );
   await runCli(['--generate-only', path]);
   const sdl = await readFile(join(directory, 'schema.graphql'), 'utf8');
   assert.match(sdl, /createdAt: String/);
   assert.match(sdl, /deletedById: String/);
   assert.doesNotMatch(sdl, /djsDeletion|authLogin/);
-  const spec = await generateOpenapi(schema, { auth: true, files: true });
+  const spec = await generateOpenapi(schema, { auth: true, files: true, packagePath });
   for (const name of ['createdAt', 'updatedAt', 'deletedAt', 'createdById', 'updatedById', 'deletedById']) {
     assert.equal(spec.components.schemas.Item.properties[name].readOnly, true);
     assert.equal(spec.components.schemas.ItemCreate.properties[name], undefined);

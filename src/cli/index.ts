@@ -1,9 +1,12 @@
 import process from 'node:process';
 import { DEFAULT_HOST, DEFAULT_PORT, VERSION } from '../core/constants.js';
 import { validateExportPaths } from '../core/paths.js';
+import { loadProjectPackage } from '../core/project-package.js';
 import { isObject } from '../core/utils.js';
 import { writeGraphql } from '../graphql/entry.js';
 import { writeOpenapi } from '../openapi/entry.js';
+import type { OpenapiInfo } from '../openapi/options.js';
+import { projectPackageToOpenapiInfo } from '../openapi/options.js';
 import { configure, type NormalizedServerConfig, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
 import { inputPaths } from '../server/input-paths.js';
@@ -28,7 +31,7 @@ Generate flags are mutually exclusive and require output targets.`;
 /** Проверяет все назначения, строит обе схемы и только затем сохраняет файлы.
  * @example Секции openapi и graphql с target → два файла; нет target → ошибка до записи.
  */
-async function generate(config: NormalizedServerConfig, source: Record<string, unknown>, directory: string, sourcePath: string): Promise<void> {
+async function generate(config: NormalizedServerConfig, source: Record<string, unknown>, directory: string, sourcePath: string, openapiInfo?: OpenapiInfo): Promise<void> {
   if (!config.openapi && !config.graphql) throw new Error('Generation requires an openapi or graphql section');
   const outputs: string[] = [];
   for (const format of ['openapi', 'graphql'] as const) {
@@ -39,7 +42,8 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
   }
   await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
   const model = await configuredModel(config);
-  const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config)) : undefined;
+  if (config.openapi && !openapiInfo) throw new Error('OpenAPI package metadata is not configured');
+  const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config, openapiInfo as OpenapiInfo)) : undefined;
   const graphql = config.graphql ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
   if (openapi && config.openapi?.target) {
     await writeOpenapi(openapi, config.openapi.target);
@@ -101,9 +105,10 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
     source.directory,
     source.path,
   );
-  if (seen.has('--generate') || seen.has('--generate-only')) await generate(config, source.config, source.directory, source.path);
+  const packageInfo = config.package ? projectPackageToOpenapiInfo(await loadProjectPackage(config.package.source)) : undefined;
+  if (seen.has('--generate') || seen.has('--generate-only')) await generate(config, source.config, source.directory, source.path, packageInfo);
   if (seen.has('--generate-only')) return;
-  const app = (await services.createServer(config)).fastify();
+  const app = (await services.createServer(config, packageInfo)).fastify();
   await app.listen();
   app.log.info('Deep JSON Server started');
 }

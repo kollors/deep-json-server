@@ -13,9 +13,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer, generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from '../dist/index.js';
 
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const setup = async (t, schema, data = { items: [] }, extra = {}) => {
-  const facade = await createServer({ storage: 'memory', database: { source: data, schema }, server: { logger: false }, ...extra });
+  const config = { storage: 'memory', database: { source: data, schema }, server: { logger: false }, ...extra };
+  const facade = await createServer({ ...config, ...((config.openapi ?? config.graphql) === undefined ? {} : { package: { source: config.storage === 'file' ? packagePath : packageSource } }) });
   const server = facade.fastify();
   t.after(() => server.close());
   return { server, facade };
@@ -38,6 +41,7 @@ test('schema generators and accessors need no database, file store or unrelated 
     files: { source: join(dir, 'missing-files') },
     graphql: { target: graphqlPath },
     openapi: { target: openapiPath },
+    package: { source: packagePath },
   });
   assert.ok((await facade.openapi()).paths['/items']);
   await assert.rejects(() => fs.access(openapiPath), { code: 'ENOENT' });
@@ -45,12 +49,17 @@ test('schema generators and accessors need no database, file store or unrelated 
   const s = facade.fastify();
   await assert.rejects(() => s.ready(), /не найден/);
   await s.close();
-  const doc = await generateOpenapi(model());
+  const doc = await generateOpenapi(model(), { packagePath });
   const sdl = await generateGraphql(model());
   await writeOpenapi(doc, openapiPath);
   await writeGraphql(sdl, graphqlPath);
   assert.match(await fs.readFile(graphqlPath, 'utf8'), /itemList/);
-  const brokenData = await createServer({ storage: 'memory', database: { source: { items: [{ id: '1', wrong: true }] }, schema: model() }, graphql: { target: graphqlPath } });
+  const brokenData = await createServer({
+    storage: 'memory',
+    database: { source: { items: [{ id: '1', wrong: true }] }, schema: model() },
+    graphql: { target: graphqlPath },
+    package: { source: packageSource },
+  });
   assert.match(await brokenData.graphql(), /itemCreate/);
 });
 
@@ -81,7 +90,7 @@ test('API endpoints cannot shadow collections, records or one another', async ()
     { openapi: { endpoint: '/items/123' } },
     { graphql: { endpoint: '/api' }, openapi: { endpoint: '/api' } },
   ]) {
-    const f = await createServer({ storage: 'memory', database: { source: { items: [{ id: '123' }] }, schema: model() }, server: { logger: false }, ...extra });
+    const f = await createServer({ storage: 'memory', database: { source: { items: [{ id: '123' }] }, schema: model() }, package: { source: packageSource }, server: { logger: false }, ...extra });
     const s = f.fastify();
     try {
       await assert.rejects(() => s.ready(), /conflict/);
@@ -136,7 +145,10 @@ test('GraphQL introspection stays available when the database fails and internal
 });
 
 test('OpenAPI checks file operation collisions and nullable enum filters match runtime', async (t) => {
-  await assert.rejects(() => generateOpenapi({ models: { DownloadFile: { collection: 'downloads', fields: { id: { type: 'string', primary: true } } } } }, { files: true }), /operation collision/);
+  await assert.rejects(
+    () => generateOpenapi({ models: { DownloadFile: { collection: 'downloads', fields: { id: { type: 'string', primary: true } } } } }, { files: true, packagePath }),
+    /operation collision/,
+  );
   const schema = model({ state: { type: 'string', enum: ['a', 'b'], nullable: true } });
   const { server, facade } = await setup(t, schema, { items: [{ id: '1', state: null }] }, { graphql: {}, openapi: {} });
   const doc = await facade.openapi();

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../dist/index.js';
 
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 const primary = { type: 'number', primary: true, generated: 'increment' };
 const model = {
   models: {
@@ -58,7 +60,14 @@ const setup = async (t, schema = model, initial = data, disk = false) => {
     await writeFile(schemaPath, JSON.stringify(schema));
     database = { schema: schemaPath, source: path };
   }
-  const facade = await createServer({ storage: disk ? 'file' : 'memory', database, openapi: {}, graphql: schema ? {} : undefined, server: { logger: false } });
+  const facade = await createServer({
+    storage: disk ? 'file' : 'memory',
+    database,
+    openapi: {},
+    graphql: schema ? {} : undefined,
+    package: { source: disk ? packagePath : packageSource },
+    server: { logger: false },
+  });
   const app = facade.fastify();
   t.after(() => app.close());
   await app.ready();

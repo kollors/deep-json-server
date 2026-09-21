@@ -12,6 +12,7 @@ const fixture = async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'config.mjs');
   await writeFile(join(directory, 'schema.json'), JSON.stringify(schema));
+  await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'cli-fixture', version: '1.0.0', description: 'CLI fixture' }));
   const config = {
     storage: 'file',
     database: { source: 'missing-db.json', schema: 'schema.json' },
@@ -19,6 +20,7 @@ const fixture = async (t) => {
     files: { source: 'missing-uploads' },
     openapi: { target: 'openapi.yaml' },
     graphql: { target: 'schema.graphql' },
+    package: { source: 'package.json' },
     server: { host: 'localhost', port: 5000, logger: false, maxPageSize: 250 },
   };
   const save = (value = config) => writeFile(path, `export default ${JSON.stringify(value)};`);
@@ -27,7 +29,7 @@ const fixture = async (t) => {
 };
 const services = (calls, onStart = () => {}) => ({
   async createServer(...args) {
-    assert.equal(args.length, 1);
+    assert.equal(args.length, 2);
     calls.push(args[0]);
     return { fastify: () => ({ listen: onStart, log: { info() {} } }) };
   },

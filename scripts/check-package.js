@@ -18,7 +18,7 @@ try {
   assert(paths.includes('dist/bin/deep-json-server.js'));
   assert(paths.every((path) => !path.startsWith('src/') && !path.startsWith('types/')));
 
-  await writeFile(join(temporaryDirectory, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
+  await writeFile(join(temporaryDirectory, 'package.json'), JSON.stringify({ name: 'deep-json-server-package-check', private: true, type: 'module', version: '1.0.0' }));
   await execute('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', archivePath], { cwd: temporaryDirectory });
   await execute(
     process.execPath,
@@ -31,9 +31,9 @@ try {
       import { generateOpenapi } from '@kollors/deep-json-server/openapi';
       import { generateGraphql } from '@kollors/deep-json-server/graphql';
       const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
-      assert.equal((await generateOpenapi(schema)).openapi, '3.0.3');
+      assert.equal((await generateOpenapi(schema, { packagePath: './package.json' })).openapi, '3.0.3');
       assert.match(await generateGraphql(schema), /itemList/);
-      const facade = await createServer({ storage: 'memory', database: { source: { items: [] }, schema: { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } } }, auth: { source: [{ id: '1', username: 'admin', passwordHash: await hashPassword('packed-test') }] }, graphql: {}, openapi: {}, server: { logger: false } });
+      const facade = await createServer({ storage: 'memory', package: { source: { name: 'packed-api', version: '1.0.0' } }, database: { source: { items: [] }, schema: { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string', required: true } } } } } }, auth: { source: [{ id: '1', username: 'admin', passwordHash: await hashPassword('packed-test') }] }, graphql: {}, openapi: {}, server: { logger: false } });
       assert.match(await facade.graphql(), /itemCreate/);
       assert.equal((await facade.openapi()).openapi, '3.0.3');
       const server = facade.fastify();

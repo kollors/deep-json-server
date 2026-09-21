@@ -7,10 +7,10 @@ import { DEFAULT_MAX_FILE_SIZE } from '../core/constants.js';
 import type { DatabaseConfig } from '../core/database.js';
 import type { ModelSchema } from '../core/model.js';
 import { normalizePagination } from '../core/pagination.js';
+import { normalizeProjectPackage, type ProjectPackage } from '../core/project-package.js';
 import type { Storage } from '../core/storage.js';
 import { assertKnownKeys, errorMessage, isObject } from '../core/utils.js';
 import type { FilesConfig } from '../files/contract.js';
-import { normalizeOpenapiInfo, type OpenapiInfo } from '../openapi/options.js';
 
 export type { AuthConfig } from '../auth/contract.js';
 export type { DatabaseConfig } from '../core/database.js';
@@ -20,12 +20,12 @@ export type DatabaseSchema = ModelSchema;
 export interface OpenapiConfig {
   endpoint?: string;
   target?: string;
-  info?: OpenapiInfo;
 }
 export interface GraphqlConfig {
   target?: string;
   endpoint?: string;
 }
+export type PackageConfig<S extends Storage> = { source: S extends 'file' ? string : ProjectPackage };
 export interface ServerConfig {
   cors?: boolean;
   host?: string;
@@ -35,26 +35,28 @@ export interface ServerConfig {
   pageSize?: number;
   port?: number;
 }
+type ApiConfig<S extends Storage> =
+  | { openapi?: undefined; graphql?: undefined; package?: PackageConfig<S> }
+  | { openapi: OpenapiConfig; graphql?: GraphqlConfig; package: PackageConfig<S> }
+  | { openapi?: OpenapiConfig; graphql: GraphqlConfig; package: PackageConfig<S> };
 export type DeepJsonServerConfig = {
   [S in Storage]: {
     storage: S;
     database: DatabaseConfig<S>;
     files?: FilesConfig<S>;
     auth?: AuthConfig<S>;
-    openapi?: OpenapiConfig;
-    graphql?: GraphqlConfig;
     server?: ServerConfig;
-  };
+  } & ApiConfig<S>;
 }[Storage];
 type NormalizedSources = {
-  [S in Storage]: { storage: S; database: DatabaseConfig<S>; files?: FilesConfig<S>; auth?: AuthConfig<S> };
+  [S in Storage]: { storage: S; database: DatabaseConfig<S>; files?: FilesConfig<S>; auth?: AuthConfig<S>; package?: PackageConfig<S> };
 }[Storage];
 export type NormalizedServerConfig = NormalizedSources & {
   openapi?: OpenapiConfig & { endpoint: string };
   graphql?: GraphqlConfig & { endpoint: string };
   server: Required<ServerConfig>;
 };
-const CONFIG_KEYS = new Set(['storage', 'database', 'files', 'auth', 'openapi', 'graphql', 'server']);
+const CONFIG_KEYS = new Set(['storage', 'database', 'files', 'auth', 'openapi', 'graphql', 'package', 'server']);
 const SERVER_KEYS = new Set(['cors', 'host', 'logger', 'maxFileSize', 'maxPageSize', 'pageSize', 'port']);
 let configImportIndex = 0;
 
@@ -87,6 +89,7 @@ function normalizeSources(config: Record<string, unknown>, directory: string): N
   if (!database) throw new Error('config.database is required');
   const files = section(config.files, 'files', config.storage === 'file' ? ['source', 'metadata'] : ['source']);
   const auth = section(config.auth, 'auth', ['source', 'expiresIn']);
+  const projectPackage = section(config.package, 'package', ['source']);
   const expiresIn = getPositiveInteger(auth?.expiresIn, 'config.auth.expiresIn');
   if (expiresIn !== undefined && expiresIn > 2147483647) throw new Error('config.auth.expiresIn must be at most 2147483647 seconds');
   const path = (value: unknown, name: string) => resolve(directory, getString(value, `config.${name}`, true));
@@ -97,6 +100,7 @@ function normalizeSources(config: Record<string, unknown>, directory: string): N
       database: { source: path(database.source, 'database.source'), ...(database.schema === undefined ? {} : { schema: path(database.schema, 'database.schema') }) },
       files: files && filesSource ? { source: filesSource, metadata: files.metadata === undefined ? resolve(filesSource, '.files.json') : path(files.metadata, 'files.metadata') } : undefined,
       auth: auth ? { source: path(auth.source, 'auth.source'), expiresIn } : undefined,
+      package: projectPackage ? { source: path(projectPackage.source, 'package.source') } : undefined,
     };
   }
   // Содержимое контейнеров проверяют загрузчики модели и хранилищ перед использованием.
@@ -108,6 +112,7 @@ function normalizeSources(config: Record<string, unknown>, directory: string): N
     },
     files: files ? { source: memorySource(files.source, 'files.source', true) as FilesConfig<'memory'>['source'] } : undefined,
     auth: auth ? { source: memorySource(auth.source, 'auth.source', true) as AuthConfig<'memory'>['source'], expiresIn } : undefined,
+    package: projectPackage ? { source: normalizeProjectPackage(memorySource(projectPackage.source, 'package.source'), 'config.package.source') } : undefined,
   };
 }
 /** Проверяет секции настроек и возвращает независимые данные с абсолютными путями.
@@ -117,9 +122,10 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
   const config = getObject(value, 'config', true);
   assertKnownKeys(config, CONFIG_KEYS, 'config');
   const sources = normalizeSources(config, directory);
-  const openapi = section(config.openapi, 'openapi', ['target', 'info', 'endpoint']);
+  const openapi = section(config.openapi, 'openapi', ['target', 'endpoint']);
   const graphql = section(config.graphql, 'graphql', ['target', 'endpoint']);
   if ((openapi || graphql) && sources.database.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
+  if ((openapi || graphql) && !sources.package) throw new Error('GraphQL and OpenAPI require config.package');
   const exportPath = (value: unknown, name: string) => (value === undefined ? undefined : resolve(directory, getString(value, name, true)));
   const openapiEndpoint = getString(openapi?.endpoint, 'config.openapi.endpoint') ?? '/openapi.json';
   const graphqlEndpoint = getString(graphql?.endpoint, 'config.graphql.endpoint') ?? '/graphql';
@@ -131,7 +137,7 @@ function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfi
   if (logger != null && typeof logger !== 'boolean' && !isObject(logger)) throw new Error('config.server.logger must be boolean or an object');
   return {
     ...sources,
-    openapi: openapi ? { endpoint: openapiEndpoint, target: exportPath(openapi.target, 'config.openapi.target'), info: normalizeOpenapiInfo(openapi.info) } : undefined,
+    openapi: openapi ? { endpoint: openapiEndpoint, target: exportPath(openapi.target, 'config.openapi.target') } : undefined,
     graphql: graphql ? { endpoint: graphqlEndpoint, target: exportPath(graphql.target, 'config.graphql.target') } : undefined,
     server: {
       ...normalizeAddress(server),

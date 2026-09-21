@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createServer } from '../dist/index.js';
 
+const packagePath = new URL('../package.json', import.meta.url).pathname;
 const startServer = async (config) => {
   const facade = await createServer(config);
   const server = facade.fastify();
@@ -272,7 +273,13 @@ test('does not initialize disk file storage when only OpenAPI is generated', asy
   const filesPath = join(rootPath, 'files');
   const schemaPath = join(rootPath, 'schema.json');
   await writeFile(schemaPath, JSON.stringify({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } }));
-  const facade = await createServer({ storage: 'file', database: { source: join(rootPath, 'missing.json'), schema: schemaPath }, files: { source: filesPath }, openapi: {} });
+  const facade = await createServer({
+    storage: 'file',
+    database: { source: join(rootPath, 'missing.json'), schema: schemaPath },
+    files: { source: filesPath },
+    openapi: {},
+    package: { source: packagePath },
+  });
   try {
     await facade.openapi();
     await assert.rejects(() => access(filesPath), { code: 'ENOENT' });

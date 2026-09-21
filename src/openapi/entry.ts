@@ -6,7 +6,7 @@ import type { OpenapiDocument } from './types.js';
 /** Загружает генератор при первом обращении и передаёт ему описание и параметры.
  * @example await generateOpenapi({ models: { Note: { collection: 'notes', fields: { id: { type: 'string', primary: true } } } } }) → документ с маршрутом /notes.
  */
-export async function generateOpenapi(schema: ModelSchema | string, options?: OpenapiOptions): Promise<OpenapiDocument> {
+export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions): Promise<OpenapiDocument> {
   return (await import('./generate.js')).generateOpenapi(schema, options);
 }
 /** Загружает модуль записи по требованию и сохраняет схему в указанный файл.

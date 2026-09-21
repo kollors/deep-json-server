@@ -1,13 +1,14 @@
 import { getBoolean, normalizeAddress } from '../core/config-values.js';
 import { assertApi, loadModel, type Model, type ModelSchema } from '../core/model.js';
+import { loadProjectPackage } from '../core/project-package.js';
 import { assertKnownKeys } from '../core/utils.js';
 import { buildOpenapiDocument } from './document.js';
-import { normalizeOpenapiInfo, type OpenapiOptions } from './options.js';
+import { normalizeOpenapiInfo, type OpenapiDocumentOptions, type OpenapiOptions, projectPackageToOpenapiInfo } from './options.js';
 import type { OpenapiDocument } from './types.js';
 /** Проверяет параметры экспорта и строит документ из подготовленной модели.
  * @example Модель с коллекцией notes → документ с paths['/notes'].
  */
-export function openapiFromModel(model: Model | undefined, options: OpenapiOptions = {}): OpenapiDocument {
+export function openapiFromModel(model: Model | undefined, options: OpenapiDocumentOptions): OpenapiDocument {
   assertApi(model, 'openapi');
   const auth = getBoolean(options.auth, 'auth');
   const files = getBoolean(options.files, 'files');
@@ -17,9 +18,10 @@ export function openapiFromModel(model: Model | undefined, options: OpenapiOptio
 /** Загружает описание из объекта или файла и возвращает документ спецификации.
  * @example Корректное описание → Promise<OpenapiDocument> с openapi: '3.0.3'.
  */
-export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions = {}): Promise<OpenapiDocument> {
-  assertKnownKeys(options, new Set(['auth', 'files', 'host', 'port', 'pageSize', 'maxPageSize', 'info']), 'options');
-  return openapiFromModel(await loadModel(schema, { auth: options.auth, api: ['openapi'] }), options);
+export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions): Promise<OpenapiDocument> {
+  assertKnownKeys(options, new Set(['auth', 'files', 'host', 'port', 'pageSize', 'maxPageSize', 'packagePath']), 'options');
+  const { packagePath, ...documentOptions } = options;
+  return openapiFromModel(await loadModel(schema, { auth: options.auth, api: ['openapi'] }), { ...documentOptions, info: projectPackageToOpenapiInfo(await loadProjectPackage(packagePath)) });
 }
 
 /** Строит HTTP-адрес, оборачивая IPv6 в квадратные скобки; нулевой порт даёт относительный адрес.

@@ -12,6 +12,8 @@ import { normalizeServerConfig } from '../dist/src/server/config.js';
 const item = { collection: 'items', fields: { id: { type: 'string', primary: true } } };
 const schema = { models: { Item: item } };
 const memory = { storage: 'memory', database: { source: { items: [] }, schema }, server: { logger: false } };
+const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packageSource = { name: 'test-api', version: '1.0.0' };
 
 test('storage discriminates every source and the schema, with independent input copies', () => {
   const input = { ...memory, auth: { source: [] }, files: { source: [{ name: 'one.txt', mimeType: 'text/plain', content: new Uint8Array([1]) }] } };
@@ -54,7 +56,10 @@ test('removed config keys and malformed section values are rejected before openi
     assert.throws(() => normalizeServerConfig({ ...memory, ...extra }), /Неизвестный/);
   for (const name of ['auth', 'files', 'graphql', 'openapi']) for (const value of [false, null, [], 'yes']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: value }), /JSON-объект/);
   for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, database: { source: {} }, [name]: {} }), /explicit/);
-  await assert.rejects(() => createServer(memory, {}), /only a configuration/);
+  for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: {} }), /config.package/);
+  for (const source of [{}, { name: '', version: '1' }, { name: 'api', version: '' }, { name: 'api', version: '1', description: 2 }])
+    assert.throws(() => normalizeServerConfig({ ...memory, graphql: {}, package: { source } }), /package/);
+  await assert.rejects(() => createServer(memory, packagePath), /only a configuration/);
 });
 
 test('root schema settings are inherited and model api values exclude individual formats', async (t) => {
@@ -68,7 +73,13 @@ test('root schema settings are inherited and model api values exclude individual
   assert.equal(model.byName.get('Plain').timestamps, false);
   assert.equal(model.byName.get('Plain').softDelete, false);
   assert.deepEqual(model.byName.get('Plain').api, []);
-  const facade = await createServer({ ...memory, database: { source: { items: [{ id: '1' }], plain: [{ id: '2' }], graphs: [] }, schema: definition }, openapi: {}, graphql: {} });
+  const facade = await createServer({
+    ...memory,
+    database: { source: { items: [{ id: '1' }], plain: [{ id: '2' }], graphs: [] }, schema: definition },
+    openapi: {},
+    graphql: {},
+    package: { source: packageSource },
+  });
   const app = facade.fastify();
   t.after(() => app.close());
   assert.equal((await app.inject('/plain/2')).statusCode, 200);
@@ -84,19 +95,20 @@ test('root schema settings are inherited and model api values exclude individual
 
 test('API defaults follow configured sections and direct generators without activating absent endpoints', async (t) => {
   for (const format of ['openapi', 'graphql']) {
-    const facade = await createServer({ ...memory, [format]: {} });
+    const config = { ...memory, [format]: {}, package: { source: packageSource } };
+    const facade = await createServer(config);
     const app = facade.fastify();
     t.after(() => app.close());
     const other = format === 'openapi' ? 'graphql' : 'openapi';
     await assert.rejects(() => facade[other](), /not configured/);
     assert.equal((await app.inject(other === 'graphql' ? '/graphql' : '/openapi.json')).statusCode, 404);
   }
-  assert.ok((await generateOpenapi(schema)).paths['/items']);
+  assert.ok((await generateOpenapi(schema, { packagePath })).paths['/items']);
   assert.match(await generateGraphql(schema), /itemList/);
-  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }), /Неизвестный/);
+  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }, { packagePath }), /Неизвестный/);
   await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /Неизвестный/);
   const disabledSchema = { models: { Item: { ...item, api: [] } } };
-  await assert.rejects(() => generateOpenapi(disabledSchema), /No models enable openapi/);
+  await assert.rejects(() => generateOpenapi(disabledSchema, { packagePath }), /No models enable openapi/);
   await assert.rejects(() => generateGraphql(disabledSchema), /No models enable graphql/);
   const graphqlSchema = { models: { Item: { ...item, api: ['graphql'] } } };
   const facade = await createServer({ ...memory, database: { ...memory.database, schema: graphqlSchema } });
@@ -116,7 +128,7 @@ test('schema rejects the old root layout and invalid global or entity overrides'
   for (const key of ['timestamps', 'softDelete']) {
     await assert.rejects(() => loadModel({ ...schema, [key]: 'yes' }), /boolean/);
     await assert.rejects(() => generateGraphql(schema, { [key]: true }), /Неизвестный/);
-    await assert.rejects(() => generateOpenapi(schema, { [key]: true }), /Неизвестный/);
+    await assert.rejects(() => generateOpenapi(schema, { [key]: true, packagePath }), /Неизвестный/);
   }
   await assert.rejects(() => loadModel({ ...schema, typo: true }), /Неизвестный/);
 });
@@ -130,7 +142,7 @@ test('public TypeScript types correlate all sources with the one storage discrim
     path,
     `import { createServer, type DeepJsonServerConfig, type ModelSchema } from ${JSON.stringify(entry)};
 const schema: ModelSchema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
-const memory: DeepJsonServerConfig = { storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, files: { source: [] }, graphql: {} };
+const memory: DeepJsonServerConfig = { storage: 'memory', database: { source: {}, schema }, auth: { source: [] }, files: { source: [] }, graphql: {}, package: { source: { name: 'types-api', version: '1.0.0' } } };
 const disk: DeepJsonServerConfig = { storage: 'file', database: { source: 'db.json', schema: 'schema.json' }, auth: { source: 'auth.json' }, files: { source: 'uploads' } };
 // @ts-expect-error memory schema must be an object
 const wrongSchema: DeepJsonServerConfig = { storage: 'memory', database: { source: {}, schema: 'schema.json' } };
@@ -140,6 +152,12 @@ const wrongAuth: DeepJsonServerConfig = { storage: 'file', database: { source: '
 const wrongFiles: DeepJsonServerConfig = { storage: 'memory', database: { source: {} }, files: { source: 'uploads' } };
 // @ts-expect-error file schema must be a path
 const wrongFileSchema: DeepJsonServerConfig = { storage: 'file', database: { source: 'db.json', schema } };
+// @ts-expect-error memory package source must contain metadata
+const wrongMemoryPackage: DeepJsonServerConfig = { storage: 'memory', database: { source: {}, schema }, graphql: {}, package: { source: 'package.json' } };
+// @ts-expect-error file package source must be a path
+const wrongFilePackage: DeepJsonServerConfig = { storage: 'file', database: { source: 'db.json', schema: 'schema.json' }, graphql: {}, package: { source: { name: 'api', version: '1' } } };
+// @ts-expect-error API sections require package metadata
+const missingPackage: DeepJsonServerConfig = { storage: 'memory', database: { source: {}, schema }, openapi: {} };
 // @ts-expect-error overrides were removed
 createServer(memory, {});
 // @ts-expect-error enabled was removed

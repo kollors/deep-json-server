@@ -12,7 +12,7 @@ JSON-сервер для имитации API: REST, GraphQL, связанные
 npm install @kollors/deep-json-server@beta
 ```
 
-Для установки конкретной версии укажите `@1.0.0-beta.4`.
+Для установки конкретной версии укажите `@1.0.0-beta.6`.
 
 ## Быстрый старт
 
@@ -54,6 +54,7 @@ export default {
   files: { source: './uploads' },
   graphql: { target: './generated/schema.graphql' },
   openapi: { target: './generated/openapi.yaml' },
+  package: { source: './package.json' },
   server: { host: '127.0.0.1', port: 4001 },
 };
 ```
@@ -71,13 +72,15 @@ export default {
 | `graphql.target` | Файл для экспорта GraphQL SDL |
 | `openapi.endpoint` | HTTP-маршрут; по умолчанию `/openapi.json` |
 | `openapi.target` | Файл для экспорта OpenAPI |
-| `openapi.info` | Метаданные: обязательные `title`, `version`, необязательный `description` |
+| `package.source` | `package.json` проекта; обязателен при наличии `openapi` или `graphql` |
 | `server.host`, `server.port` | По умолчанию `127.0.0.1`, `4001`; CLI также читает `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | По умолчанию 10 и 100; размер по умолчанию ограничен максимумом |
 | `server.cors`, `server.logger` | По умолчанию `true`; logger принимает также настройки Fastify |
 | `server.maxFileSize` | По умолчанию 100 МиБ |
 
-Относительные пути разрешаются от каталога файла конфигурации; при вызове `createServer(config)` — от рабочего каталога. Данные в памяти, включая схему, копируются. Порт `0` позволяет системе выбрать свободный порт.
+`package.source` подчиняется режиму хранения. При `storage: 'file'` укажите путь к `package.json`. При `storage: 'memory'` передайте метаданные напрямую: `{ name: 'example-api', version: '1.0.0', description: 'Example API' }`; `name` и `version` обязательны, `description` необязателен.
+
+Относительные пути разрешаются от каталога файла конфигурации; при вызове `createServer(config)` — от рабочего каталога. Данные в памяти, включая схему и метаданные пакета, копируются. Порт `0` позволяет системе выбрать свободный порт.
 
 ### CLI
 
@@ -486,7 +489,7 @@ mutation {
 
 ### GraphQL
 
-Укажите `database.schema` и добавьте секцию `graphql: {}` в конфигурацию:
+Укажите `database.schema` и добавьте в конфигурацию `graphql: {}` вместе с `package.source`:
 
 ```sh
 npx deep-json-server server.config.js
@@ -526,7 +529,7 @@ query {
 
 ## OpenAPI и экспорт схем
 
-Экспорт использует OpenAPI 3.0.3. Добавьте `openapi: {}` и `database.schema`, чтобы получать спецификацию по HTTP на `/openapi.json`. Путь меняется через `openapi.endpoint`. Спецификацию можно открыть в Swagger UI или импортировать в API-клиент.
+Экспорт использует OpenAPI 3.0.3. Добавьте `openapi: {}`, `database.schema` и `package.source`, чтобы получать спецификацию по HTTP на `/openapi.json`. Путь меняется через `openapi.endpoint`. Поля OpenAPI `info.title`, `info.version` и необязательное `info.description` берутся из настроенного `package.json`. Спецификацию можно открыть в Swagger UI или импортировать в API-клиент.
 
 Для сохранения схем задайте пути экспорта:
 
@@ -536,6 +539,7 @@ export default {
   database: { source: './database.json', schema: './schema.json' },
   openapi: { target: './generated/openapi.yaml' },
   graphql: { target: './generated/schema.graphql' },
+  package: { source: './package.json' },
 };
 ```
 
@@ -808,7 +812,7 @@ await server.listen();
 
 Методы `openapi()` и `graphql()` возвращают схемы и требуют `database.schema`. `fastify()` возвращает экземпляр сервера для настройки и запуска. База и включённые сервисы инициализируются при `ready()`, `listen()` или первом `inject()`; ошибка инициализации останавливает запуск.
 
-`createServer(config)` принимает один аргумент. Наличие секций управляет модулями так же, как при запуске через CLI. Для методов `openapi()` и `graphql()` нужна соответствующая секция. Методы возвращают схему и не записывают файлы.
+`createServer(config)` принимает тот же объект конфигурации, что и CLI. При наличии `openapi` или `graphql` обязателен `package.source`. Для методов `openapi()` и `graphql()` нужна соответствующая секция. Методы возвращают схему и не записывают файлы.
 
 Эти функции доступны и через общий импорт `@kollors/deep-json-server`. Адаптеры сервера загружаются при включении. Генераторы можно использовать отдельно:
 
@@ -816,7 +820,7 @@ await server.listen();
 import { generateOpenapi, writeOpenapi } from '@kollors/deep-json-server/openapi';
 import { generateGraphql, writeGraphql } from '@kollors/deep-json-server/graphql';
 
-const document = await generateOpenapi('./schema.json', { files: true });
+const document = await generateOpenapi('./schema.json', { files: true, packagePath: './package.json' });
 const sdl = await generateGraphql('./schema.json');
 await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
@@ -824,7 +828,7 @@ await writeGraphql(sdl, './generated/schema.graphql');
 
 Отдельные генераторы принимают путь или объект схемы и не требуют конфигурации сервера. Выбранная функция задаёт формат по умолчанию; `api` у модели может его ограничить. `timestamps` и `softDelete` берутся из схемы. Опция `{ auth: true }` добавляет поля владельца и `actions`; OpenAPI также описывает маршруты auth и требования токена. `hashPassword()` доступна и через общий импорт пакета.
 
-`generateOpenapi()` также принимает `host`, `port`, `pageSize`, `maxPageSize` и `info`. Вместо пути можно передать объект схемы. Сервер и генераторы работают с собственной копией модели. Размеры страниц должны быть положительными целыми числами; `pageSize` не может превышать `maxPageSize`.
+Для `generateOpenapi()` обязателен `packagePath`; дополнительно доступны `host`, `port`, `pageSize` и `maxPageSize`. Метаданные OpenAPI читаются из указанного пакета. Вместо пути можно передать объект схемы. Сервер и генераторы работают с собственной копией модели. Размеры страниц должны быть положительными целыми числами; `pageSize` не может превышать `maxPageSize`.
 
 ## Хранение данных
 
