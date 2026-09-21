@@ -31,11 +31,12 @@ export function createHttpServer({
       originalListen(defaults, optionsOrCallback);
       return;
     }
+    const options = optionsOrCallback?.path === undefined ? { ...defaults, ...optionsOrCallback } : optionsOrCallback;
     if (callback) {
-      originalListen({ ...defaults, ...optionsOrCallback }, callback);
+      originalListen(options, callback);
       return;
     }
-    return originalListen({ ...defaults, ...optionsOrCallback });
+    return originalListen(options);
   };
   server.listen = listen as FastifyInstance['listen'];
   server.setErrorHandler((error, request, reply) => {

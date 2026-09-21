@@ -1,5 +1,5 @@
-import type { Node } from '../model.js';
-import { readPath } from '../model.js';
+import { readPath } from '../model/tree.js';
+import type { Node } from '../model/types.js';
 import { isRef, type Ref, resolveField } from '../records.js';
 import { hasOnlyKeys, isObject } from '../utils.js';
 import { compileWhere, type Predicate } from './filter.js';

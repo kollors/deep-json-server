@@ -1,5 +1,5 @@
 import { getBoolean } from '../config-values.js';
-import type { JsonObject, RecordSnapshot } from '../types.js';
+import type { RecordSnapshot } from '../types.js';
 import { isObject } from '../utils.js';
 
 export interface RecordOptions {
@@ -30,7 +30,7 @@ export function canChangeRecord(actor: Actor | undefined, record: RecordSnapshot
 /** Возвращает доступные пользователю операции над записью.
  * @example recordActions(undefined, { createdById: '1' }) → все флаги false; владелец → все флаги true.
  */
-export function recordActions(actor: Actor | undefined, record: JsonObject): RecordActions {
+export function recordActions(actor: Actor | undefined, record: RecordSnapshot): RecordActions {
   const allowed = canChangeRecord(actor, record);
   return { update: allowed, replace: allowed, delete: allowed };
 }

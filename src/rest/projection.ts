@@ -3,14 +3,14 @@ import type { Actor } from '../core/lifecycle/options.js';
 import type { Entity, Node } from '../core/model.js';
 import { childrenOf } from '../core/query/options.js';
 import { isRef, type Ref, resolveField } from '../core/records.js';
-import type { JsonObject, JsonValue } from '../core/types.js';
+import type { JsonObject, JsonPrimitive, JsonValue } from '../core/types.js';
 import { defined } from '../core/utils.js';
 import { isUnionScope, ownScope, type RestOptions, type Scope, scopeFor, type TupleScope, validateScope } from './options.js';
 
 /** Допускает в неявный выбор только примитивное значение, не скрытое метаданными поля.
  * @example wildcardValue({ relationKey: true, … }, 1) → false; wildcardValue(undefined, 'Анна') → true.
  */
-function wildcardValue(node: Node | undefined, value: unknown): boolean {
+function wildcardValue(node: Node | undefined, value: unknown): value is JsonPrimitive {
   return (
     !node?.writeOnly &&
     !node?.relation &&

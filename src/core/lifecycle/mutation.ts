@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { domainError } from '../errors.js';
-import type { Entity, Model } from '../model.js';
+import type { Entity, Model } from '../model/types.js';
 import { cloneSnapshot } from '../snapshot.js';
 import type { DatabaseData, DatabaseSnapshot, JsonObject, JsonValue, RecordSnapshot } from '../types.js';
 import { defined, isEqual, isObject, isSafeKey } from '../utils.js';
@@ -83,7 +83,7 @@ export class RecordMutation {
   /** Помечает выбранные записи временем удаления и общим случайным идентификатором операции.
    * @example Две записи с включённым мягким удалением → одинаковые дата и идентификатор каскада.
    */
-  deleteGroup(initial: { entity: Entity; value: JsonObject }, deleted: Set<JsonObject>): void {
+  deleteGroup(initial: { entity: Entity; value: JsonObject }, deleted: ReadonlySet<RecordSnapshot>): void {
     const id = randomUUID();
     for (const entity of this.model.entities)
       for (const record of this.data[entity.collection] ?? []) {

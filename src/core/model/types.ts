@@ -79,4 +79,4 @@ export interface Model {
   byCollection: Map<string, Entity>;
   explicit: boolean;
 }
-export type ValidationSchema = Record<string, unknown>;
+export type { ValidationSchema } from '../schema.js';

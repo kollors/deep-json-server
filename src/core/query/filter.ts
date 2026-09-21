@@ -1,12 +1,11 @@
 import { mentionsDeletedAt } from '../lifecycle/options.js';
-import type { Node } from '../model.js';
+import type { Node } from '../model/types.js';
 import { isEqual, isObject } from '../utils.js';
 import { operatorsFor } from './contract.js';
 import { badQuery, childrenOf } from './options.js';
 
 export type Predicate = (value: unknown) => boolean;
 const comparable = (value: unknown): value is string | number => typeof value === 'string' || typeof value === 'number';
-const equal = (left: unknown, right: unknown) => isEqual(left, right);
 /** Компилирует условие поля в предикат, проверяя операторы и их аргументы.
  * @example Для строкового узла condition(node, { contains: 'ан' }, 0)('Анна') → true.
  */
@@ -36,17 +35,17 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
       if (candidate === null && nullable) continue;
       const base = operand === 'text' ? 'string' : node.base;
       if (typeof candidate !== base || (typeof candidate === 'number' && !Number.isFinite(candidate))) badQuery(`Invalid value for ${operator}`);
-      if ((operand === 'value' || operand === 'values') && node.enum && !node.enum.some((v) => equal(v, candidate))) badQuery(`Invalid enum value for ${operator}`);
+      if ((operand === 'value' || operand === 'values') && node.enum && !node.enum.some((v) => isEqual(v, candidate))) badQuery(`Invalid enum value for ${operator}`);
     }
     switch (operator) {
       case 'eq':
-        return (field) => equal(field, value);
+        return (field) => isEqual(field, value);
       case 'ne':
-        return (field) => !equal(field, value);
+        return (field) => !isEqual(field, value);
       case 'in':
-        return (field) => (Array.isArray(field) ? field : [field]).some((item) => values.some((v) => equal(item, v)));
+        return (field) => (Array.isArray(field) ? field : [field]).some((item) => values.some((v) => isEqual(item, v)));
       case 'contains':
-        return (field) => (typeof field === 'string' ? field.toLowerCase().includes(String(value).toLowerCase()) : Array.isArray(field) && field.some((v) => equal(v, value)));
+        return (field) => (typeof field === 'string' ? field.toLowerCase().includes(String(value).toLowerCase()) : Array.isArray(field) && field.some((v) => isEqual(v, value)));
       case 'startsWith':
         return (field) => typeof field === 'string' && field.toLowerCase().startsWith(String(value).toLowerCase());
       case 'endsWith':

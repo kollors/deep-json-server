@@ -22,23 +22,35 @@ import { FILE_HEADERS, FILE_METADATA_SCHEMA, FILE_UPDATE_SCHEMA } from '../files
 import { AUTH_SCHEMAS, AUTH_SECURITY_SCHEMES, authOpenapiPaths } from './auth.js';
 import { createFilePaths } from './files.js';
 import { json, ref, response } from './helpers.js';
+import type { OpenapiInfo } from './options.js';
 import { OpenapiRegistry } from './registry.js';
-import type { OpenapiDocument, OpenapiSchema } from './types.js';
+import type { OpenapiDocument, OpenapiMethod, OpenapiOperation, OpenapiParameter, OpenapiSchema } from './types.js';
 
 /** Преобразует nullable-значения JSON Schema в представление OpenAPI 3.0, рекурсивно обрабатывая поля и элементы.
  * @example { anyOf: [{ type: 'string' }, { type: 'null' }] } → { type: 'string', nullable: true }.
  */
 function toOpenapi(schema: ValidationSchema): OpenapiSchema {
-  if (Array.isArray(schema.anyOf) && schema.anyOf.some((v) => isObject(v) && v.type === 'null')) {
-    const nonNull = schema.anyOf.find((v) => isObject(v) && v.type !== 'null') as ValidationSchema;
-    const converted = toOpenapi(nonNull);
-    if (!converted.type) return { anyOf: [converted, { type: 'object', nullable: true, enum: [null] }] };
-    return { ...converted, nullable: true, ...(converted.enum ? { enum: [...converted.enum.filter((value) => value !== null), null] } : {}) };
+  const { type, properties, items, additionalProperties, allOf, anyOf, oneOf, not, ...attributes } = schema;
+  const result: OpenapiSchema = { ...attributes };
+  if (Array.isArray(type)) return toOpenapi({ ...schema, type: undefined, allOf: [...(allOf ?? []), { anyOf: type.map((value) => ({ type: value })) }] });
+  if (type === 'null') return { type: 'object', nullable: true, enum: [null] };
+  if (type) result.type = type;
+  if (properties) result.properties = Object.fromEntries(Object.entries(properties).map(([key, value]) => [key, toOpenapi(value)]));
+  if (items) result.items = toOpenapi(items);
+  if (additionalProperties !== undefined) result.additionalProperties = typeof additionalProperties === 'boolean' ? additionalProperties : toOpenapi(additionalProperties);
+  if (allOf) result.allOf = allOf.map(toOpenapi);
+  if (oneOf) result.oneOf = oneOf.map(toOpenapi);
+  if (not) result.not = toOpenapi(not);
+  if (anyOf) {
+    const nonNull = anyOf.filter((value) => value.type !== 'null');
+    const single = nonNull[0];
+    if (anyOf.length === 2 && nonNull.length === 1 && single) {
+      const converted = toOpenapi(single);
+      if (converted.type) return { ...converted, ...result, nullable: true, ...(converted.enum ? { enum: [...converted.enum.filter((value) => value !== null), null] } : {}) };
+    }
+    result.anyOf = anyOf.map(toOpenapi);
   }
-  const result: Record<string, unknown> = { ...schema };
-  if (isObject(schema.properties)) result.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, toOpenapi(v as ValidationSchema)]));
-  if (isObject(schema.items)) result.items = toOpenapi(schema.items);
-  return result as OpenapiSchema;
+  return result;
 }
 /** Строит документ с маршрутами и схемами записей, включая выбранные дополнительные маршруты.
  * @example { model, files: true } → документ с paths['/_files/storage'].
@@ -56,7 +68,7 @@ export function buildOpenapiDocument({
   auth?: boolean;
   pageSize?: number;
   maxPageSize?: number;
-  info?: Record<string, unknown>;
+  info?: OpenapiInfo;
 }): OpenapiDocument {
   assertApi(model, 'openapi');
   ({ pageSize, maxPageSize } = normalizePagination({ pageSize, maxPageSize }));
@@ -71,7 +83,7 @@ export function buildOpenapiDocument({
   const { schemas } = registry;
   const reserve = (name: string, node: Node): boolean => registry.reserve(name, node);
   function annotate(schema: OpenapiSchema, node: Node): OpenapiSchema {
-    for (const key of ['description', 'example', 'default', 'readOnly', 'writeOnly'] as const) if (node[key] !== undefined) (schema as Record<string, unknown>)[key] = node[key];
+    for (const key of ['description', 'example', 'default', 'readOnly', 'writeOnly'] as const) if (node[key] !== undefined) Object.assign(schema, { [key]: node[key] });
     if (node.generated) schema.readOnly = true;
     return schema;
   }
@@ -81,7 +93,7 @@ export function buildOpenapiDocument({
   function annotateInput(schema: OpenapiSchema, node: Node, defaults: boolean): OpenapiSchema {
     for (const [key, property] of Object.entries(schema.properties ?? {})) {
       const child = defined(node.children[key], key);
-      for (const attribute of ['description', 'example', 'writeOnly'] as const) if (child[attribute] !== undefined) (property as Record<string, unknown>)[attribute] = child[attribute];
+      for (const attribute of ['description', 'example', 'writeOnly'] as const) if (child[attribute] !== undefined) Object.assign(property, { [attribute]: child[attribute] });
       if (defaults && child.default !== undefined) property.default = child.default;
       if (!child.relation && child.base === 'object') annotateInput(child.many ? (property.items as OpenapiSchema) : property, child, defaults);
     }
@@ -141,7 +153,7 @@ export function buildOpenapiDocument({
       items: list ? { anyOf: [ref(fieldsName), options(entity, node)] } : ref(fieldsName),
       description: list
         ? '[fields, arguments?]. The first object selects fields; the optional second object contains where, order and pager. OpenAPI 3.0 cannot express positional item schemas; the server validates their order.'
-        : '[fields]. * selects scalar fields except relation keys; arrays, objects, relations, their keys and writeOnly fields must be handled explicitly.',
+        : '[fields]. * selects scalar fields except relation keys; arrays, objects, relations and relation keys require explicit selection. writeOnly fields cannot be selected.',
     };
     schemas[name] = list
       ? {
@@ -152,7 +164,8 @@ export function buildOpenapiDocument({
               additionalProperties: false,
               required: ['union'],
               properties: { union: { type: 'array', minItems: 1, items: ref(name) } },
-              description: 'Combines list scopes in array order and keeps the first record for each primary key.',
+              description:
+                'Combines list scopes in array order. Entity records are deduplicated by primary key; embedded objects are deduplicated by source element, preserving distinct elements with equal contents.',
             },
           ],
         }
@@ -237,7 +250,7 @@ export function buildOpenapiDocument({
       reserve(key, entity.root);
       schemas[key] = writeInput(entity.root, mode, true);
     }
-    const selectionParameter = (list: boolean) => ({
+    const selectionParameter = (list: boolean): OpenapiParameter => ({
       in: 'query',
       name: 'scope',
       ...json(scope(entity, entity.root, list)),
@@ -246,9 +259,9 @@ export function buildOpenapiDocument({
     });
     const shape = [selectionParameter(false)];
     const list = [selectionParameter(true)];
-    const key = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...fieldAt(entity, entity.primary), generated: undefined }) };
+    const key: OpenapiParameter = { in: 'path', name: entity.primary, required: true, schema: baseField({ ...fieldAt(entity, entity.primary), generated: undefined }) };
     const errors = { 400: response('Invalid request', ref('Error')), 404: response('Not found', ref('Error')), 409: response('Conflict', ref('Error')) };
-    const make = (operationId: string, parameters: unknown[], schema: unknown, mutation?: Mutation) => {
+    const make = (operationId: string, parameters: OpenapiParameter[], schema: OpenapiSchema, mutation?: Mutation): OpenapiOperation => {
       if (operations.has(operationId)) throw new Error(`OpenAPI operation collision: ${operationId}`);
       operations.add(operationId);
       return {
@@ -270,7 +283,7 @@ export function buildOpenapiDocument({
     paths[collectionPath] = { get: make(`${op}List`, list, page(entity, entity.root)) };
     paths[itemPath] = { get: make(op, [key, ...shape], output(entity, entity.root)) };
     for (const mutation of MUTATIONS) {
-      defined(paths[mutation.hasKey ? itemPath : collectionPath], 'operation path')[mutation.method.toLowerCase()] = make(
+      defined(paths[mutation.hasKey ? itemPath : collectionPath], 'operation path')[mutation.method.toLowerCase() as OpenapiMethod] = make(
         `${op}${capitalize(mutation.mode)}`,
         mutation.hasKey ? [key, ...shape] : shape,
         output(entity, entity.root),
@@ -278,7 +291,7 @@ export function buildOpenapiDocument({
       );
     }
   }
-  const parameters: Record<string, unknown> = {};
+  const parameters: OpenapiDocument['components']['parameters'] = {};
   if (files) {
     for (const [name, schema] of Object.entries({ FileMetadata: FILE_METADATA_SCHEMA, FileUpdate: FILE_UPDATE_SCHEMA })) {
       if (schemas[name]) throw new Error(`OpenAPI schema collision: ${name}`);
@@ -309,7 +322,7 @@ export function buildOpenapiDocument({
     for (const [path, item] of Object.entries(authOpenapiPaths())) {
       if (paths[path] || model.entities.some((entity) => path.startsWith(`/${entity.collection}/`))) throw new Error(`Auth path collision: ${path}`);
       for (const operation of Object.values(item)) {
-        const id = (operation as { operationId: string }).operationId;
+        const id = operation.operationId;
         if (operations.has(id)) throw new Error(`OpenAPI operation collision: ${id}`);
         operations.add(id);
       }

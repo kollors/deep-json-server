@@ -2,6 +2,7 @@ import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { domainError } from '../errors.js';
 import { AUDIT_FIELDS } from '../lifecycle/options.js';
+import { defined } from '../utils.js';
 import { type InputMode, requiredInput, writable } from './policy.js';
 import { fieldAt, requireRelation } from './tree.js';
 import type { Entity, Node, ValidationSchema } from './types.js';
@@ -18,8 +19,9 @@ export const entityValidators = new WeakMap<Entity, Ajv>();
  * @example Для строкового узла без ограничений valueSchema(node) → { type: 'string' }.
  */
 export function valueSchema(node: Node): ValidationSchema {
+  if (node.base !== 'string' && node.base !== 'number' && node.base !== 'boolean' && node.base !== 'object') throw new Error(`Invalid value type ${node.base}`);
   let schema: ValidationSchema = node.base === 'object' ? objectSchema(node, 'stored') : { type: node.base };
-  for (const key of ['minLength', 'maxLength', 'pattern', 'format', 'minimum', 'maximum', 'enum']) if (node[key as keyof Node] !== undefined) schema[key] = node[key as keyof Node];
+  for (const key of ['minLength', 'maxLength', 'pattern', 'format', 'minimum', 'maximum', 'enum'] as const) if (node[key] !== undefined) Object.assign(schema, { [key]: node[key] });
   if (node.many) schema = { type: 'array', items: schema };
   if (node.nullable) schema = { anyOf: [schema, { type: 'null' }] };
   return schema;
@@ -66,7 +68,7 @@ const validators = new WeakMap<Entity, Map<string, ValidateFunction>>();
  * @example Обязательное строковое name: { name: 'Анна' } → undefined; { name: 2 } → ошибка.
  */
 export function validateRecord(entity: Entity, value: unknown, mode: InputMode, relations = false): void {
-  const ajv = entityValidators.get(entity) as Ajv;
+  const ajv = defined(entityValidators.get(entity), `validator for ${entity.name}`);
   let cache = validators.get(entity);
   if (!cache) {
     cache = new Map();

@@ -321,12 +321,10 @@ test('queued record mutations recheck auth instead of keeping the original admin
   const engine = new Engine(store, model);
   const entered = Promise.withResolvers();
   const released = Promise.withResolvers();
-  const update = store.update;
-  store.update = async (...args) => {
+  const blocker = store.update(async () => {
     entered.resolve();
     await released.promise;
-    return update(...args);
-  };
+  });
   const pending = engine.mutate(model.byName.get('Item'), 'update', 'one', { name: 'after' }, undefined, () => auth.me(root));
   const rejected = assert.rejects(pending, { code: 'FORBIDDEN' });
   await entered.promise;
@@ -335,6 +333,7 @@ test('queued record mutations recheck auth instead of keeping the original admin
   } finally {
     released.resolve();
   }
+  await blocker;
   await rejected;
   assert.equal((await store.read()).items[0].name, 'before');
 });

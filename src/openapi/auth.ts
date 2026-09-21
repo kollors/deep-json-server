@@ -1,6 +1,6 @@
 import { AUTH_PATHS, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH } from '../auth/contract.js';
 import { json, ref, response } from './helpers.js';
-import type { OpenapiDocument, OpenapiSchema } from './types.js';
+import type { OpenapiDocument, OpenapiParameter, OpenapiSchema, OpenapiSecurityScheme } from './types.js';
 
 const password: OpenapiSchema = { type: 'string', format: 'password', writeOnly: true, minLength: 1, maxLength: MAX_PASSWORD_LENGTH };
 export const AUTH_SCHEMAS: Record<string, OpenapiSchema> = {
@@ -43,7 +43,7 @@ export const AUTH_SCHEMAS: Record<string, OpenapiSchema> = {
   },
   AuthSuccess: { type: 'object', additionalProperties: false, required: ['success'], properties: { success: { type: 'boolean' } } },
 };
-export const AUTH_SECURITY_SCHEMES = {
+export const AUTH_SECURITY_SCHEMES: Record<string, OpenapiSecurityScheme> = {
   AuthBearer: {
     type: 'http',
     scheme: 'bearer',
@@ -60,7 +60,7 @@ export function authOpenapiPaths(): OpenapiDocument['paths'] {
   const missing = response('Auth user not found', ref('Error'));
   const busy = response('Too many simultaneous password operations or sessions', ref('Error'));
   const writeFailed = response('Failed to save auth users; changes were not applied', ref('Error'));
-  const userId = { in: 'path', name: 'id', required: true, schema: { type: 'string', minLength: 1 } };
+  const userId: OpenapiParameter = { in: 'path', name: 'id', required: true, schema: { type: 'string', minLength: 1 } };
   return {
     [AUTH_PATHS.login]: {
       post: {

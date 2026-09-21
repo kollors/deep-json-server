@@ -1,6 +1,6 @@
 import { domainError } from '../errors.js';
-import type { Node } from '../model.js';
-import { pathParts } from '../model.js';
+import { pathParts } from '../model/tree.js';
+import type { Node } from '../model/types.js';
 export interface Order {
   field: string;
   direction: 'ASC' | 'DESC';

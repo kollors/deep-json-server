@@ -156,6 +156,14 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
         if (!sourceField || !targetField || sourceField.relation || targetField.relation || !['string', 'number'].includes(sourceField.base) || sourceField.base !== targetField.base)
           throw new Error(`Incompatible relation keys: ${entity.name}.${node.path}`);
       } else {
+        if (node.enum) {
+          const scalar = valueSchema({ ...node, many: false, nullable: false });
+          const validateEnum = ajv.compile(scalar);
+          for (const [index, value] of node.enum.entries()) {
+            if (typeof value !== node.base || (typeof value === 'number' && !Number.isFinite(value)) || !validateEnum(value)) throw new Error(`Invalid enum[${index}]: ${entity.name}.${node.path}`);
+          }
+          ajv.removeSchema(scalar);
+        }
         const schema = valueSchema(node);
         const validate = ajv.compile(schema);
         for (const key of ['default', 'example'] as const) if (node[key] !== undefined && !validate(structuredClone(node[key]))) throw new Error(`Invalid ${key}: ${entity.name}.${node.path}`);

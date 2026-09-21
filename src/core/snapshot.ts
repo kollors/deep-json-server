@@ -1,11 +1,17 @@
 import type { DatabaseData, DatabaseSnapshot, JsonValue, SnapshotValue } from './types.js';
-/** Замораживает дерево JSON на месте; повторный вызов для готового снимка не обходит его заново.
+
+const frozenSnapshots = new WeakSet<object>();
+
+/** Замораживает дерево JSON на месте; пропускает только уже обработанные этой функцией поддеревья.
  * @example freezeSnapshot({ rows: [{ id: 1 }] }) → тот же объект; rows.push(...) затем выбрасывает TypeError.
  */
-export function freezeSnapshot<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+export function freezeSnapshot(value: DatabaseSnapshot): DatabaseSnapshot;
+export function freezeSnapshot(value: SnapshotValue): SnapshotValue;
+export function freezeSnapshot(value: unknown): unknown {
+  if (value && typeof value === 'object' && !frozenSnapshots.has(value)) {
     for (const child of Object.values(value)) freezeSnapshot(child);
     Object.freeze(value);
+    frozenSnapshots.add(value);
   }
   return value;
 }

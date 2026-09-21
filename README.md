@@ -12,7 +12,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@beta
 ```
 
-To install a specific version, use `@1.0.0-beta.3`.
+To install a specific version, use `@1.0.0-beta.4`.
 
 ## Quick start
 
@@ -178,6 +178,8 @@ The `type` property accepts `string`, `number`, `boolean`, `object`, or a model 
 | `source`, `target`, `onDelete` | Relation metadata |
 
 String and numeric constraints on `string[]`/`number[]` apply to every element. `required` and `nullable` apply to the entire array; `default` and `example` contain a complete array. Elements must match the array's type and be non-null. `required` requires the field to be present; an ordinary array may still be empty.
+
+Each `enum` value must match the field type and its constraints. Use `nullable: true` to allow `null` for the field; do not include `null` in `enum`. Invalid values are rejected when the schema is loaded.
 
 Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
 

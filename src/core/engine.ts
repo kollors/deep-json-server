@@ -3,13 +3,16 @@ import type { DatabaseStore } from './database.js';
 import { domainError } from './errors.js';
 import { RecordMutation } from './lifecycle/mutation.js';
 import type { ActorSource } from './lifecycle/options.js';
-import { type Entity, inferModel, isReverseRelation, type Model, type Node, readPath, validateRecord } from './model.js';
+import { inferModel } from './model/infer.js';
+import { isReverseRelation, readPath } from './model/tree.js';
+import type { Entity, Model, Node } from './model/types.js';
+import { validateRecord } from './model/validation.js';
 import { MutationWriter } from './mutations/write.js';
 import type { MutationMode } from './operations.js';
 import { executeList, type Page, type PreparedList, prepareList } from './query/execute.js';
 import type { ListOptions } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
-import type { DatabaseData, DatabaseSnapshot, JsonObject } from './types.js';
+import type { DatabaseData, DatabaseSnapshot, JsonObject, RecordSnapshot } from './types.js';
 import { defined, isObject } from './utils.js';
 
 export type { Page, PreparedList } from './query/execute.js';
@@ -47,13 +50,13 @@ export class Engine {
   /** Оборачивает все записи выбранной коллекции ссылками с контекстом.
    * @example Пустая коллекция → []; две записи → две ссылки Ref.
    */
-  records(context: Context, entity: Entity): Ref[] {
+  records<R extends RecordSnapshot>(context: Context<R>, entity: Entity): Ref<R>[] {
     return (context.data[entity.collection] ?? []).map((value) => rootRef(context, entity, value));
   }
   /** Ищет запись по строковому представлению первичного ключа, включая удалённые записи.
    * @example Ключ '1' находит запись с числовым ключом 1; отсутствующий ключ → undefined.
    */
-  find(context: Context, entity: Entity, key: unknown): Ref | undefined {
+  find<R extends RecordSnapshot>(context: Context<R>, entity: Entity, key: unknown): Ref<R> | undefined {
     const value = (context.data[entity.collection] ?? []).find((record) => String(record[entity.primary]) === String(key));
     return value ? rootRef(context, entity, value) : undefined;
   }
@@ -72,7 +75,7 @@ export class Engine {
   /** Проверяет коллекции, значения полей и целостность активных связей.
    * @example Согласованные записи → undefined; обязательная связь без цели → исключение.
    */
-  validateData(data: DatabaseData): void {
+  validateData(data: DatabaseSnapshot): void {
     if (!this.model.explicit) return;
     for (const collection of Object.keys(data)) if (!this.model.byCollection.has(collection)) throw domainError('INVALID_INPUT', `Undeclared collection ${collection}`);
     const context = makeContext(data, this.model);
@@ -102,19 +105,19 @@ export class Engine {
         if (!entity.softDelete || record.deletedAt == null) visit(rootRef(context, entity, record));
       }
   }
-  /** Выполняет одну операцию записи в транзакции, включая связи, права и подготовку ответа.
-   * @example Режим update с { name: 'Анна' } → обновлённая запись; ошибка проверки → прежние данные.
+  /** Выполняет одну операцию записи в транзакции, включая связи, права и ожидание подготовки ответа.
+   * @example await mutate(entity, 'update', '1', { name: 'Анна' }, ref => ref.value.name) → 'Анна'; ошибка обработчика → прежние данные.
    */
   mutate(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: undefined, actor?: ActorSource): Promise<Ref>;
-  mutate<T>(entity: Entity, mode: MutationMode, key: unknown, body: unknown, prepare: (ref: Ref) => T, actor?: ActorSource): Promise<T>;
-  async mutate<T>(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: (ref: Ref) => T, actor?: ActorSource): Promise<T | Ref> {
+  mutate<T>(entity: Entity, mode: MutationMode, key: unknown, body: unknown, prepare: (ref: Ref) => T | Promise<T>, actor?: ActorSource): Promise<T>;
+  async mutate<T>(entity: Entity, mode: MutationMode, key?: unknown, body?: unknown, prepare?: (ref: Ref) => T | Promise<T>, actor?: ActorSource): Promise<T | Ref> {
     const currentActor = () => (typeof actor === 'function' ? actor() : actor);
     if (this.model.options.auth && !currentActor()) throw domainError('UNAUTHENTICATED', 'Authentication required');
     if (mode !== 'delete') {
       if (!isObject(body)) throw domainError('INVALID_INPUT', 'Request body must be an object');
       if (!this.model.explicit && Object.hasOwn(body, 'id')) throw domainError('INVALID_INPUT', 'id is generated and immutable');
     }
-    const outcome = await this.store.update((database, before) => {
+    const outcome = await this.store.update(async (database, before) => {
       // Используем описание того же снимка, который хранилище прочитало внутри очереди.
       this.model = this.modelFor(before);
       const currentEntity = this.model.byCollection.get(entity.collection);
@@ -122,11 +125,11 @@ export class Engine {
       entity = currentEntity;
       // Пока запрос ждал очередь, токен мог быть отозван, а права пользователя — изменены.
       const lifecycle = new RecordMutation(database.data, this.model, currentActor(), before);
-      const finish = (data: DatabaseData, record: JsonObject) => {
+      const finish = async (data: DatabaseSnapshot, record: RecordSnapshot) => {
         const model = this.modelFor(data);
         const currentEntity = defined(model.byCollection.get(entity.collection), entity.collection);
         const ref = rootRef(makeContext(data, model), currentEntity, record);
-        const output = prepare ? prepare(ref) : ref;
+        const output = prepare ? await prepare(ref) : ref;
         return { model: data === database.data || this.model.explicit ? model : this.modelFor(database.data), output };
       };
       // Свой подтверждённый снимок уже содержит зарезервированные номера. Новый снимок с диска проверяем снова.
@@ -147,7 +150,7 @@ export class Engine {
         if (!current) throw domainError('NOT_FOUND', 'Record not found');
         lifecycle.check(entity, current.value);
         if (entity.softDelete && current.value.deletedAt != null) return finish(database.data, current.value);
-        this.cascade(context, current, lifecycle);
+        this.cascade(database.data, current, lifecycle);
         lifecycle.finish();
         this.validateData(database.data);
         return finish(entity.softDelete ? database.data : this.store.database.data, current.value);
@@ -166,21 +169,22 @@ export class Engine {
   /** Вычисляет каскад удаления, проверяет запрещающие связи и меняет только черновик данных.
    * @example Удаление родителя при cascade → удалённые зависимые записи; restrict → исключение.
    */
-  private cascade(context: Context, initial: Ref, lifecycle: RecordMutation): void {
+  private cascade(data: DatabaseData, initial: Ref<JsonObject>, lifecycle: RecordMutation): void {
+    const context = initial.context;
     if (!this.model.explicit) {
       lifecycle.deleteGroup(initial, new Set([initial.value]));
       if (!initial.entity.softDelete) {
-        const rows = defined(context.data[initial.entity.collection], initial.entity.collection);
+        const rows = defined(data[initial.entity.collection], initial.entity.collection);
         rows.splice(rows.indexOf(initial.value), 1);
       }
       lifecycle.capturePruned(initial);
       return;
     }
-    const deleted = new Set<JsonObject>([initial.value]);
+    const deleted = new Set<RecordSnapshot>([initial.value]);
     const survives = (ref: Ref) => !deleted.has(ref.value) && !deleted.has(ref.root) && !Object.values(ref.bindings).some((value) => deleted.has(value));
     type Dependency = { ref: Ref; node: Node; targets: Ref[] };
     const owners: Dependency[] = [];
-    const dependents = new Map<JsonObject, Dependency[]>();
+    const dependents = new Map<RecordSnapshot, Dependency[]>();
     const collect = (ref: Ref) => {
       for (const node of Object.values(ref.node.children)) {
         if (node.virtual) continue;
@@ -206,7 +210,7 @@ export class Engine {
       this.records(context, entity)
         .filter((ref) => !entity.softDelete || ref.value.deletedAt == null)
         .forEach(collect);
-    const pending = [initial.value];
+    const pending: RecordSnapshot[] = [initial.value];
     for (let index = 0; index < pending.length; index++) {
       for (const { ref, node } of dependents.get(defined(pending[index], 'cascade record')) ?? []) {
         if (node.onDelete !== 'cascade' || !survives(ref)) continue;
@@ -231,8 +235,8 @@ export class Engine {
         }
     };
     for (const entity of this.model.entities) {
-      const remaining = (context.data[entity.collection] ?? []).filter((record) => entity.softDelete || !deleted.has(record));
-      context.data[entity.collection] = remaining;
+      const remaining = (data[entity.collection] ?? []).filter((record) => entity.softDelete || !deleted.has(record));
+      data[entity.collection] = remaining;
       remaining.forEach((record) => {
         if (!deleted.has(record)) prune(entity.root, record);
       });

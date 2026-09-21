@@ -26,7 +26,7 @@ import { capitalize } from '../core/utils.js';
 /** Строит типы, фильтры, аргументы и операции по модели, проверяя конфликты имён.
  * @example Модель с сущностью Note → GraphQLSchema с типом Note; повторяющееся имя типа → ошибка.
  */
-export function buildGraphql(model: Model): GraphQLSchema {
+export function buildGraphql(model: Model | undefined): GraphQLSchema {
   assertApi(model, 'graphql');
   const names = new Set(['String', 'Float', 'Int', 'Boolean', 'ID', 'Query', 'Mutation', 'Pager', 'OrderDirection']);
   const reserve = (name: string): string => {

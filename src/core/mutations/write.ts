@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { createId, type DatabaseContainer } from '../database.js';
 import { domainError } from '../errors.js';
 import { AUDIT_FIELDS } from '../lifecycle/options.js';
-import { bindingFor, canWriteKey, type Entity, isReverseRelation, type Model, type Node, pathParts, type RelationNode, readPath, validateRecord } from '../model.js';
+import { bindingFor, canWriteKey, isReverseRelation, pathParts, readPath } from '../model/tree.js';
+import type { Entity, Model, Node, RelationNode } from '../model/types.js';
+import { validateRecord } from '../model/validation.js';
 import type { WriteMode } from '../operations.js';
 import { keyOf, makeContext, type Ref, related, rootRef, sourceValues } from '../records.js';
 import type { JsonObject, JsonValue } from '../types.js';
@@ -14,7 +16,7 @@ interface Slot {
   field: Node;
 }
 interface Selection {
-  ref: Ref;
+  ref: Ref<JsonObject>;
   node: RelationNode;
   value: unknown;
   omitted: boolean;
@@ -24,7 +26,7 @@ interface Selection {
 export class MutationWriter {
   private indexes = new Map<Entity, Map<string, JsonObject>>();
   private active = new Set<JsonObject>();
-  private selections: Array<{ ref: Ref; node: Node; targets: JsonObject[] }> = [];
+  private selections: Array<{ ref: Ref<JsonObject>; node: Node; targets: JsonObject[] }> = [];
   constructor(
     private database: DatabaseContainer,
     private model: Model,
@@ -83,7 +85,7 @@ export class MutationWriter {
   /** Удаляет виртуальные связи из черновика и собирает отдельные операции их подключения.
    * @example { user: '1' } → операция связи; одновременный userId в том же теле → ошибка.
    */
-  private extract(ref: Ref, input: JsonObject, inputBindings: Record<string, JsonObject>, pending: Selection[], replace: boolean, depth: number): void {
+  private extract(ref: Ref<JsonObject>, input: JsonObject, inputBindings: Record<string, JsonObject>, pending: Selection[], replace: boolean, depth: number): void {
     if (depth > 32) throw domainError('INVALID_INPUT', 'Nested writes are too deep');
     for (const [name, node] of Object.entries(ref.node.children)) {
       if (node.relation) {

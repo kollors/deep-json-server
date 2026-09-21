@@ -1,4 +1,4 @@
-import type { Node } from '../model.js';
+import type { Node } from '../model/types.js';
 export type Operand = 'value' | 'values' | 'comparison' | 'text' | 'element' | 'condition';
 /** Возвращает допустимые операторы и виды их аргументов для типа значения.
  * @example Для boolean без массива → { not: 'condition', eq: 'value', ne: 'value', in: 'values' }.

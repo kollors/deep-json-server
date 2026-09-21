@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import type { ValidationSchema } from '../core/schema.js';
 import { type FileRecord, getFileKey, type StoredFileMetadata } from './contract.js';
 export interface FileMetadata extends FileRecord {
   downloadUrl: string;
@@ -18,7 +19,7 @@ export const FILE_ROUTES = {
 } as const;
 
 export const PATCH_BODY_LIMIT = 64 * 1024;
-export const FILE_METADATA_SCHEMA: Record<string, unknown> = {
+export const FILE_METADATA_SCHEMA = {
   properties: {
     directory: { type: 'string' },
     downloadUrl: { format: 'uri-reference', type: 'string' },
@@ -30,14 +31,14 @@ export const FILE_METADATA_SCHEMA: Record<string, unknown> = {
   },
   required: ['directory', 'downloadUrl', 'metadataUrl', 'mimeType', 'name', 'size', 'url'],
   type: 'object',
-};
+} satisfies ValidationSchema;
 
-export const FILE_UPDATE_SCHEMA: Record<string, unknown> = {
+export const FILE_UPDATE_SCHEMA = {
   additionalProperties: false,
   anyOf: [{ required: ['directory'] }, { required: ['name'] }],
   properties: { directory: { type: 'string' }, name: { type: 'string' } },
   type: 'object',
-};
+} satisfies ValidationSchema;
 
 /** Кодирует каждый сегмент пути для URL, сохраняя разделители каталогов.
  * @example { directory: 'my photos', name: 'a.jpg' } → 'my%20photos/a.jpg'.

@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import { domainError } from './errors.js';
-import type { ModelSchema } from './model.js';
-import { freezeSnapshot } from './snapshot.js';
+import type { ModelSchema } from './model/types.js';
+import { cloneSnapshot, freezeSnapshot } from './snapshot.js';
 import type { Source, Storage } from './storage.js';
 import type { DatabaseData, DatabaseRecord, DatabaseSnapshot } from './types.js';
 import { createSerialQueue, createUniqueId, isObject, isSafeKey, isSystemError, resolveDatabasePath } from './utils.js';
@@ -19,18 +19,19 @@ export interface DatabaseContainer {
   counters?: Record<string, number>;
 }
 export interface DatabaseStore {
-  database: DatabaseContainer;
-  path?: string;
-  read(): Promise<DatabaseData>;
-  /** Передаёт изменяемый черновик и исходные данные только для чтения; сохраняет черновик после проверки.
-   * @example update((draft, before) => { draft.data.notes = []; return before.notes.length; }) → прежнее число записей.
+  readonly database: { readonly data: DatabaseSnapshot };
+  readonly path?: string;
+  read(): Promise<DatabaseSnapshot>;
+  /** Передаёт изменяемый черновик и исходные данные только для чтения; ожидает обработчик и сохраняет черновик после проверки.
+   * @example update((draft, before) => { draft.data.notes = []; return before.notes?.length ?? 0; }) → прежнее число записей.
    */
-  update<T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T>;
+  update<T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T | Promise<T>): Promise<T>;
 }
 
 const RESOURCE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 /** Проверяет сериализуемое JSON-значение; отвергает циклы, разреженные массивы, NaN и бесконечности.
+ * При freeze = true замораживает проверенные объекты на месте, в том числе до возможной ошибки в соседней ветке.
  * @example validateJsonValue({ a: [1, null] }, 'data') → undefined; NaN → ошибка.
  */
 export const validateJsonValue = (value: unknown, path: string, ancestors = new WeakSet<object>(), freeze = false): void => {
@@ -81,6 +82,7 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
 };
 
 /** Проверяет объект коллекций, записи и уникальность ключей; возвращает исходный объект.
+ * При freeze = true замораживает JSON-дерево перед проверкой коллекций; ошибка не отменяет заморозку.
  * @example validateDatabase({ notes: [{ id: '1' }] }) → тот же объект; повторный id → ошибка.
  */
 export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>, freeze = false): DatabaseData => {
@@ -170,7 +172,7 @@ const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => 
 const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseStore> => {
   const resolvedDatabasePath = resolveDatabasePath(databasePath);
   const initialData = freezeSnapshot(await readDatabaseFile(resolvedDatabasePath, keys));
-  const database = new Low(new JSONFile<DatabaseData>(resolvedDatabasePath), initialData);
+  const database = new Low(new JSONFile<DatabaseSnapshot>(resolvedDatabasePath), initialData);
   const schedule = createSerialQueue();
   const counterStore = new Low(new JSONFile<Record<string, number>>(`${resolvedDatabasePath}.counters.json`), {});
   await counterStore.read();
@@ -181,13 +183,13 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
     return database.data;
   };
 
-  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T> =>
+  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T | Promise<T>): Promise<T> =>
     schedule(async () => {
       await read();
 
       await counterStore.read();
-      const draft = { data: structuredClone(database.data), counters: structuredClone(counterStore.data) };
-      const result = operation(draft, database.data);
+      const draft = { data: cloneSnapshot(database.data), counters: structuredClone(counterStore.data) };
+      const result = await operation(draft, database.data);
       validateDraft(draft.data, keys);
       // Сначала сохраняем счётчики: ошибка записи может оставить пропуск, но не повторный номер.
       if (JSON.stringify(draft.counters) !== JSON.stringify(counterStore.data)) {
@@ -200,7 +202,16 @@ const createDiskDatabaseStore = async (databasePath: string, keys?: Map<string, 
       return result;
     });
 
-  return { database, path: resolvedDatabasePath, read, update };
+  return Object.freeze({
+    database: Object.freeze({
+      get data() {
+        return database.data;
+      },
+    }),
+    path: resolvedDatabasePath,
+    read,
+    update,
+  });
 };
 
 const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, string>): DatabaseStore => {
@@ -210,10 +221,10 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
   const schedule = createSerialQueue();
 
   const read = async () => database.data;
-  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T): Promise<T> =>
-    schedule(() => {
-      const draft = structuredClone(database);
-      const result = operation(draft, database.data);
+  const update = <T>(operation: (database: DatabaseContainer, before: DatabaseSnapshot) => T | Promise<T>): Promise<T> =>
+    schedule(async () => {
+      const draft = { data: cloneSnapshot(database.data), counters: structuredClone(database.counters) };
+      const result = await operation(draft, database.data);
 
       validateDraft(draft.data, keys);
       database.data = freezeSnapshot(draft.data);
@@ -222,7 +233,15 @@ const createMemoryDatabaseStore = (sourceData: DatabaseData, keys?: Map<string, 
       return result;
     });
 
-  return { database, read, update };
+  return Object.freeze({
+    database: Object.freeze({
+      get data() {
+        return database.data;
+      },
+    }),
+    read,
+    update,
+  });
 };
 
 /** Создаёт дисковое хранилище или хранилище в памяти по настройкам.
