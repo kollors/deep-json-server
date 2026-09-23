@@ -103,10 +103,6 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 
 ```json
 {
-  "api": [
-    "openapi",
-    "graphql"
-  ],
   "models": {
     "Country": {
       "collection": "countries",
@@ -148,7 +144,7 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 }
 ```
 
-Model definitions belong in `models`. The schema root can define `timestamps` and `softDelete`; a model can override each setting. The `openapi` and `graphql` configuration sections enable the corresponding API. A model's `api` array only limits these enabled formats: `[]` excludes the model from GraphQL and OpenAPI while REST remains available. If no model enables a requested format, generation fails with a clear error. Related models must allow the same format. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+Model definitions belong in `models`. The schema root accepts `models`, `timestamps` and `softDelete`, but not `api`. A model can override the global timestamp and soft-deletion settings. The `openapi` and `graphql` configuration sections enable the corresponding API. By default, every model is included in each enabled format; a model's optional `api` array can restrict this: `[]` excludes the model from GraphQL and OpenAPI while REST remains available. If no model enables a requested format, generation fails with a clear error. Related models must allow the same format. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
 
 | Capability | With schema | Without schema |
 |---|---|---|

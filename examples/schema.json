@@ -2,7 +2,6 @@
   "models": {
     "Country": {
       "collection": "countries",
-      "api": ["openapi", "graphql"],
       "fields": {
         "id": {
           "type": "string",
@@ -23,7 +22,6 @@
     },
     "Genre": {
       "collection": "genres",
-      "api": ["openapi", "graphql"],
       "fields": {
         "id": {
           "type": "string",
@@ -48,7 +46,6 @@
     },
     "Movie": {
       "collection": "movies",
-      "api": ["openapi", "graphql"],
       "fields": {
         "id": {
           "type": "string",
@@ -95,7 +92,6 @@
     },
     "Publisher": {
       "collection": "publishers",
-      "api": ["openapi", "graphql"],
       "fields": {
         "id": {
           "type": "string",
@@ -116,7 +112,6 @@
     },
     "User": {
       "collection": "users",
-      "api": ["openapi", "graphql"],
       "fields": {
         "id": {
           "type": "string",
