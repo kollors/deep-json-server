@@ -47,7 +47,7 @@ test('schema generators and accessors need no database, file store or unrelated 
   await assert.rejects(() => fs.access(openapiPath), { code: 'ENOENT' });
   await assert.rejects(() => facade.graphql(), /collision/);
   const s = facade.fastify();
-  await assert.rejects(() => s.ready(), /не найден/);
+  await assert.rejects(() => s.ready(), /not found/);
   await s.close();
   const doc = await generateOpenapi(model(), { packagePath });
   const sdl = await generateGraphql(model());

@@ -169,11 +169,11 @@ export async function readConfigModule(configPath: string): Promise<{ config: Re
   } catch (error) {
     const message = errorMessage(error);
 
-    throw new Error(`Не удалось загрузить конфигурацию ${resolvedConfigPath}: ${message}`, { cause: error });
+    throw new Error(`Cannot load configuration ${resolvedConfigPath}: ${message}`, { cause: error });
   }
 
   if (!isObject(config)) {
-    throw new Error('Конфигурация сервера должна экспортировать JSON-объект через export default');
+    throw new Error('Server configuration must export a JSON object as default');
   }
 
   return { config, directory: dirname(resolvedConfigPath), path: resolvedConfigPath };

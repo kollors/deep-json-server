@@ -14,12 +14,12 @@ export async function readDiskMetadata(metadataPath: string): Promise<Map<string
     if (isSystemError(error) && error.code === 'ENOENT') return new Map();
     throw error;
   }
-  if (!Array.isArray(source)) throw new Error(`Файл метаданных ${metadataPath} должен содержать JSON-массив`);
+  if (!Array.isArray(source)) throw new Error(`Metadata file ${metadataPath} must contain a JSON array`);
   const files = new Map<string, StoredFileMetadata>();
   source.forEach((value, index) => {
-    const file = normalizeStoredFileMetadata(value, `Запись ${index} в файле метаданных ${metadataPath}`);
+    const file = normalizeStoredFileMetadata(value, `Record ${index} in metadata file ${metadataPath}`);
     const path = getFileKey(file);
-    if (files.has(path)) throw new Error(`Файл метаданных ${metadataPath} содержит повторяющийся путь «${path}»`);
+    if (files.has(path)) throw new Error(`Metadata file ${metadataPath} contains duplicate path "${path}"`);
     files.set(path, file);
   });
   return files;

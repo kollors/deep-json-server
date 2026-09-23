@@ -19,7 +19,7 @@ const isPathInside = (rootPath: string, targetPath: string): boolean => {
 };
 
 const assertRegularFile = (stats: { isFile(): boolean }): void => {
-  if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
+  if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Path must point to a regular file');
 };
 
 /** Готовит и проверяет пути дискового хранилища, не выполняя операций с содержимым файлов.
@@ -28,14 +28,14 @@ const assertRegularFile = (stats: { isFile(): boolean }): void => {
 export async function createDiskPaths({ directory, metadata, staging, protectedPaths }: { directory: string; metadata: string; staging: string; protectedPaths: Set<string> }) {
   const realDirectory = await realpath(directory);
   const assertContained = (path: string): void => {
-    if (!isPathInside(realDirectory, path)) throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
+    if (!isPathInside(realDirectory, path)) throw domainError('INVALID_INPUT', 'File path escapes the storage directory');
   };
   const resolveFilePath = (path: string): string => {
     const filePath = resolve(directory, path);
     const canonical = resolve(realDirectory, relative(directory, filePath));
     if (protectedPaths.has(canonical)) throw domainError('INVALID_INPUT', 'Path is reserved for a server input file');
     if (filePath === directory || !isPathInside(directory, filePath) || filePath === metadata || isPathInside(staging, filePath))
-      throw domainError('INVALID_INPUT', 'Путь файла выходит за пределы директории хранения');
+      throw domainError('INVALID_INPUT', 'File path escapes the storage directory');
     return filePath;
   };
   const assertNoSymlinks = async (targetPath: string): Promise<void> => {
@@ -45,7 +45,7 @@ export async function createDiskPaths({ directory, metadata, staging, protectedP
     for (const part of parts) {
       currentPath = resolve(currentPath, part);
       try {
-        if ((await lstat(currentPath)).isSymbolicLink()) throw domainError('INVALID_INPUT', 'Путь файла не должен содержать символические ссылки');
+        if ((await lstat(currentPath)).isSymbolicLink()) throw domainError('INVALID_INPUT', 'File path must not contain symbolic links');
       } catch (error) {
         if (!isSystemError(error) || error.code !== 'ENOENT') throw error;
       }
@@ -64,7 +64,7 @@ export async function createDiskPaths({ directory, metadata, staging, protectedP
         if (!isSystemError(error) || error.code !== 'EEXIST') throw error;
       }
       const currentStats = await lstat(currentPath);
-      if (currentStats.isSymbolicLink() || !currentStats.isDirectory()) throw domainError('INVALID_INPUT', 'Путь файла должен содержать только обычные директории');
+      if (currentStats.isSymbolicLink() || !currentStats.isDirectory()) throw domainError('INVALID_INPUT', 'File path must contain only regular directories');
       assertContained(await realpath(currentPath));
     }
     if (await pathExists(filePath)) {
@@ -81,7 +81,7 @@ export async function createDiskPaths({ directory, metadata, staging, protectedP
       assertContained(await realpath(filePath));
       assertRegularFile(await lstat(filePath));
     } catch (error) {
-      if (isSystemError(error) && error.code === 'ENOENT') throw domainError('NOT_FOUND', 'Файл не найден');
+      if (isSystemError(error) && error.code === 'ENOENT') throw domainError('NOT_FOUND', 'File not found');
       throw error;
     }
     return filePath;

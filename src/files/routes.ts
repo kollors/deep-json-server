@@ -13,24 +13,24 @@ interface FilePathParams {
  */
 const decodeHeader = (value: unknown, name: string): string => {
   if (typeof value !== 'string') {
-    throw createHttpError(400, `Заголовок ${name} обязателен`);
+    throw createHttpError(400, `Header ${name} is required`);
   }
 
   try {
     return decodeURIComponent(value);
   } catch {
-    throw createHttpError(400, `Заголовок ${name} содержит некорректное значение`);
+    throw createHttpError(400, `Header ${name} has an invalid value`);
   }
 };
 
 /** Декодирует и проверяет имя файла из заголовка.
  * @example getContentName('a%20b.txt') → 'a b.txt'.
  */
-const getContentName = (value: unknown): string => validateName(decodeHeader(value, FILE_HEADERS.name.name), `Заголовок ${FILE_HEADERS.name.name}`);
+const getContentName = (value: unknown): string => validateName(decodeHeader(value, FILE_HEADERS.name.name), `Header ${FILE_HEADERS.name.name}`);
 /** Декодирует относительный каталог; отсутствующее значение заменяет пустой строкой.
  * @example getContentDirectory(undefined) → ''; getContentDirectory('my%20photos') → 'my photos'.
  */
-const getContentDirectory = (value: unknown): string => (value == null ? '' : validateDirectory(decodeHeader(value, FILE_HEADERS.directory.name), `Заголовок ${FILE_HEADERS.directory.name}`));
+const getContentDirectory = (value: unknown): string => (value == null ? '' : validateDirectory(decodeHeader(value, FILE_HEADERS.directory.name), `Header ${FILE_HEADERS.directory.name}`));
 
 /** Читает строковый логический флаг перезаписи; отсутствие означает false.
  * @example getContentOverride('true') → true; getContentOverride(undefined) → false; 'yes' → ошибка.
@@ -44,7 +44,7 @@ const getContentOverride = (value: unknown): boolean => {
     return true;
   }
 
-  throw createHttpError(400, `Заголовок ${FILE_HEADERS.override.name} должен содержать true или false`);
+  throw createHttpError(400, `Header ${FILE_HEADERS.override.name} must be true or false`);
 };
 
 /** Извлекает и проверяет путь из параметра маршрута.
@@ -56,8 +56,8 @@ const getRequestPath = (request: FastifyRequest): string => getFileKey(getPathLo
  * @example normalizeUpdate({ name: 'a.txt' }) → { name: 'a.txt' }.
  */
 const normalizeUpdate = (body: FileUpdate): FileUpdate => ({
-  ...(body.directory != null && { directory: validateDirectory(body.directory, 'Ключ body.directory') }),
-  ...(body.name != null && { name: validateName(body.name, 'Ключ body.name') }),
+  ...(body.directory != null && { directory: validateDirectory(body.directory, 'body.directory') }),
+  ...(body.name != null && { name: validateName(body.name, 'body.name') }),
 });
 
 /** Читает поток из хранилища и отправляет его с MIME-типом и заголовком скачивания или просмотра.
@@ -87,7 +87,7 @@ export const registerFileRoutes = (fastify: FastifyInstance, { getStore, maxFile
         const contentLength = Number(request.headers['content-length']);
 
         if (Number.isFinite(contentLength) && contentLength > maxFileSize) {
-          throw createHttpError(413, `Размер файла не должен превышать ${maxFileSize} байт`);
+          throw createHttpError(413, `File size must not exceed ${maxFileSize} bytes`);
         }
 
         const result = await store.upload({
@@ -116,7 +116,7 @@ export const registerFileRoutes = (fastify: FastifyInstance, { getStore, maxFile
         bodyLimit: PATCH_BODY_LIMIT,
         preValidation: async (request) => {
           if (normalizeMimeType(request.headers['content-type']) !== 'application/json') {
-            throw createHttpError(415, 'Для изменения файла используйте Content-Type: application/json');
+            throw createHttpError(415, 'Use Content-Type: application/json to update a file');
           }
         },
         schema: { body: FILE_UPDATE_SCHEMA },

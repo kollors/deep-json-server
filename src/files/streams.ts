@@ -12,7 +12,7 @@ export const createSizeLimiter = (maxFileSize: number, onSize: (size: number) =>
       size += chunk.length;
 
       if (size > maxFileSize) {
-        callback(domainError('PAYLOAD_TOO_LARGE', `Размер файла не должен превышать ${maxFileSize} байт`));
+        callback(domainError('PAYLOAD_TOO_LARGE', `File size must not exceed ${maxFileSize} bytes`));
         return;
       }
 

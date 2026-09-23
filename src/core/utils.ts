@@ -11,7 +11,7 @@ export const assertKnownKeys = (value: object, keys: Set<string>, path: string):
   const unknownKey = Object.keys(value).find((key) => !keys.has(key));
 
   if (unknownKey != null) {
-    throw new Error(`Неизвестный ключ ${path}.${unknownKey}`);
+    throw new Error(`Unknown key ${path}.${unknownKey}`);
   }
 };
 
@@ -84,7 +84,7 @@ export const isEqual = (left: unknown, right: unknown): boolean => {
  */
 export const resolveDatabasePath = (databasePath: string): string => {
   if (typeof databasePath !== 'string' || databasePath === '') {
-    throw new Error('Укажите путь к JSON-базе данных');
+    throw new Error('Provide a path to the JSON database');
   }
 
   return resolve(databasePath);

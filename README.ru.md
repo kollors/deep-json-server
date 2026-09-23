@@ -2,17 +2,19 @@
 
 [English](README.md)
 
-JSON-сервер для имитации API: REST, GraphQL, связанные записи, загрузка файлов и экспорт схем. Поддерживает вход пользователей, права владельца и администратора, даты записей и мягкое удаление. Требуется Node.js 22 или новее.
+[История выпусков](CHANGELOG.md) · [Переход с 0.9.0](MIGRATION.md)
 
-**Breaking changes: 1.0.0-beta.2.** `*` в REST `scope` выбирает только скалярные поля, которые не хранят ключи связей. Массивы, объекты, связи и их ключи указываются явно. При включённом auth права на запись доступны через виртуальное поле `actions`.
+JSON-сервер для создания тестового API с REST, GraphQL, связями между записями, загрузкой файлов и экспортом схем. Поддерживает вход пользователей, права владельца и администратора, даты записей и мягкое удаление. Требуется Node.js 22 или новее.
+
+**Изменения в 1.0.0, нарушающие совместимость.** При переходе с 0.9.0 воспользуйтесь [инструкцией по миграции](MIGRATION.md). `*` в REST `scope` выбирает только скалярные поля, которые не хранят ключи связей. Массивы, объекты, связи и их ключи нужно указывать явно. При включённой аутентификации права на запись доступны через виртуальное поле `actions`.
 
 ## Установка
 
 ```sh
-npm install @kollors/deep-json-server@beta
+npm install @kollors/deep-json-server@rc
 ```
 
-Для установки конкретной версии укажите `@1.0.0-beta.6`.
+Для установки этого релиз-кандидата укажите `@1.0.0-rc.1`.
 
 ## Быстрый старт
 
@@ -23,7 +25,7 @@ npm install @kollors/deep-json-server@beta
 ```json
 {
   "users": [
-    { "id": "1", "fullName": "Мира Волкова" }
+    { "id": "1", "fullName": "Mira Volkova" }
   ]
 }
 ```
@@ -44,7 +46,7 @@ npx deep-json-server server.config.js
 
 ## Конфигурация
 
-При `storage: 'file'` все источники и схема задаются путями, при `'memory'` — данными в памяти. Режимы нельзя смешивать. Наличие секций `auth`, `files`, `graphql` и `openapi` включает соответствующие модули. `graphql: {}` и `openapi: {}` включают только HTTP-маршруты со стандартными адресами; для экспорта добавьте `target`.
+При `storage: 'file'` задайте пути для всех источников и схемы, при `'memory'` — передайте данные напрямую. Используйте один режим во всей конфигурации. Секции `auth`, `files`, `graphql` и `openapi` включают соответствующие возможности. `graphql: {}` и `openapi: {}` открывают HTTP-маршруты по стандартным адресам; для экспорта схемы добавьте `target`.
 
 ```js
 export default {
@@ -78,7 +80,7 @@ export default {
 | `server.cors`, `server.logger` | По умолчанию `true`; logger принимает также настройки Fastify |
 | `server.maxFileSize` | По умолчанию 100 МиБ |
 
-`package.source` подчиняется режиму хранения. При `storage: 'file'` укажите путь к `package.json`. При `storage: 'memory'` передайте метаданные напрямую: `{ name: 'example-api', version: '1.0.0', description: 'Example API' }`; `name` и `version` обязательны, `description` необязателен.
+Формат `package.source` зависит от режима хранения. При `storage: 'file'` укажите путь к `package.json`. При `storage: 'memory'` передайте метаданные напрямую: `{ name: 'example-api', version: '1.0.0', description: 'Example API' }`; `name` и `version` обязательны, `description` необязателен.
 
 Относительные пути разрешаются от каталога файла конфигурации; при вызове `createServer(config)` — от рабочего каталога. Данные в памяти, включая схему и метаданные пакета, копируются. Порт `0` позволяет системе выбрать свободный порт.
 
@@ -225,37 +227,37 @@ REST без схемы создаёт ключ `id` и сохраняет про
     {
       "id": "1",
       "isArchived": false,
-      "name": "Ардения"
+      "name": "Ardenia"
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Велория"
+      "name": "Veloria"
     }
   ],
   "genres": [
     {
       "id": "1",
       "isArchived": false,
-      "name": "Криминал",
+      "name": "Crime",
       "parentIds": []
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Гангстер",
+      "name": "Gangster",
       "parentIds": ["1"]
     },
     {
       "id": "3",
       "isArchived": false,
-      "name": "Драма",
+      "name": "Drama",
       "parentIds": []
     },
     {
       "id": "4",
       "isArchived": false,
-      "name": "Комедия",
+      "name": "Comedy",
       "parentIds": []
     }
   ],
@@ -274,20 +276,20 @@ REST без схемы создаёт ключ `id` и сохраняет про
         }
       ],
       "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
-      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
+      "description": "An heiress in a port city uncovers a plot involving two rival families.",
       "id": "1",
       "isArchived": false,
       "publisherIds": ["2"],
-      "title": "Тени Ардении"
+      "title": "Shadows of Ardenia"
     },
     {
       "actors": [],
       "coverSrc": "https://example.com/covers/northern-star.jpg",
-      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
+      "description": "A night clerk at an old hotel gets drawn into the search for a missing painting.",
       "id": "2",
       "isArchived": false,
       "publisherIds": ["1"],
-      "title": "Полночь в «Северной звезде»"
+      "title": "Midnight at the Northern Star"
     }
   ],
   "publishers": [
@@ -306,14 +308,14 @@ REST без схемы создаёт ключ `id` и сохраняет про
     {
       "bornAt": "1988-03-14",
       "countryId": "1",
-      "fullName": "Мира Волкова",
+      "fullName": "Mira Volkova",
       "id": "1",
       "isArchived": false
     },
     {
       "bornAt": "1991-11-02",
       "countryId": "2",
-      "fullName": "Леон Ветров",
+      "fullName": "Leon Vetrov",
       "id": "2",
       "isArchived": false
     }
@@ -374,11 +376,11 @@ npx deep-json-server examples/server.config.js
 
 Имя параметра пути соответствует первичному ключу. POST, PUT и PATCH принимают JSON-объект записи. PUT заменяет запись с сохранением ключа и серверных полей. PATCH объединяет поля на верхнем уровне; переданные вложенные объекты заменяются с сохранением их полей `readOnly`. Создание и замена требуют всех обязательных полей. При обновлении проверяются переданные значения и итоговая запись. Отсутствующая запись — `404`, конфликт — `409`.
 
-POST возвращает созданную запись со статусом `201`; PUT, PATCH и DELETE — результат со статусом `200`. Ошибки REST имеют вид `{ "error": "Описание ошибки" }`.
+POST возвращает созданную запись со статусом `201`; PUT, PATCH и DELETE — результат со статусом `200`. Ошибки REST имеют вид `{ "error": "Error description" }`.
 
 ### Параметры REST-запросов
 
-Для запросов к записям REST принимает один параметр URL `scope` с JSON-массивом `[поля, аргументы?]`. Первый объект выбирает поля, второй задаёт `where`, `order` и `pager` для списка. Этот формат одинаков для корневого запроса, вложенных объектов и связей.
+Для запросов к записям REST принимает один параметр URL `scope` с JSON-массивом `[fields, arguments?]`. Первый объект выбирает поля, второй задаёт `where`, `order` и `pager` для списка. Этот формат одинаков для корневого запроса, вложенных объектов и связей.
 
 Пример выбора пользователей и их фильмов с отдельной сортировкой и пагинацией:
 
@@ -393,7 +395,7 @@ const scope = [
     ],
   },
   {
-    where: { fullName: { contains: 'Мира' } },
+    where: { fullName: { contains: 'Mira' } },
     order: [{ field: 'fullName', direction: 'ASC' }],
     pager: { page: 1, pageSize: 20 },
   },
@@ -441,8 +443,8 @@ Content-Type: application/json
       "userId": "1",
       "genres": [
         { "id": "1" },
-        { "id": "2", "name": "Обновлённый жанр" },
-        { "name": "Новый жанр" }
+        { "id": "2", "name": "Updated genre" },
+        { "name": "New genre" }
       ]
     }
   ]
@@ -479,7 +481,7 @@ mutation {
   movieUpdate(id: "1", data: {
     actors: [{
       userId: "1"
-      genres: [{ id: "2", name: "Обновлённый жанр" }, { name: "Новый жанр" }]
+      genres: [{ id: "2", name: "Updated genre" }, { name: "New genre" }]
     }]
   }) {
     actors { data { genres { data { id name } } } }
@@ -500,7 +502,7 @@ npx deep-json-server server.config.js
 ```graphql
 query {
   userList(
-    where: { fullName: { contains: "Мира" } }
+    where: { fullName: { contains: "Mira" } }
     order: [{ field: fullName, direction: ASC }]
     pager: { page: 1, pageSize: 20 }
   ) {
@@ -509,7 +511,7 @@ query {
       id
       fullName
       movies(
-        where: { title: { contains: "Тени" } }
+        where: { title: { contains: "Shadows" } }
         order: [{ field: title, direction: ASC }]
         pager: { pageSize: 5 }
       ) {
@@ -717,7 +719,7 @@ OpenAPI описывает маршруты auth, необязательную B
 
 При включённом auth создавать записи может любой вошедший пользователь. Изменять, удалять и восстанавливать — владелец по `createdById` или пользователь с `isAdmin: true`. Записи без владельца изменяет только администратор. Его правки не меняют владельца. Правила действуют на вложенные записи, изменение ключей связей, каскады и восстановление. Ссылка на существующую запись без её изменения не требует владения ею. Каждая мутация атомарна: отказ сохраняет прежнее состояние всех затронутых записей.
 
-REST возвращает 401 при отсутствии действительного токена и 403 при недостатке прав. GraphQL проверяет мутации по тем же правилам и возвращает коды `UNAUTHENTICATED` или `FORBIDDEN`; токен получают через REST-вход и передают в `Authorization: Bearer <токен>`. GraphQL-запросы чтения, OPTIONS и все операции с файлами остаются открытыми.
+REST возвращает 401 при отсутствии действительного токена и 403 при недостатке прав. GraphQL проверяет мутации по тем же правилам и возвращает коды `UNAUTHENTICATED` или `FORBIDDEN`; токен получают через REST-вход и передают в `Authorization: Bearer <token>`. GraphQL-запросы чтения, OPTIONS и все операции с файлами остаются открытыми.
 
 ## Файлы
 
@@ -769,13 +771,13 @@ Content-Type: image/jpeg
 Сочетание `directory` и `name` идентифицирует файл. Повторная загрузка по существующему пути возвращает `409`. Чтобы заменить файл, передайте `Content-Override: true`; успешная перезапись возвращает `200`. Сервер поддерживает следующие файловые маршруты:
 
 ```text
-POST   /_files/storage      Загрузка или перезапись файла
-GET    /_files/storage/*    Просмотр содержимого файла
-PATCH  /_files/storage/*    Переименование или перемещение файла
-DELETE /_files/storage/*    Удаление файла
+POST   /_files/storage      Upload or replace a file
+GET    /_files/storage/*    Return file contents inline
+PATCH  /_files/storage/*    Rename or move a file
+DELETE /_files/storage/*    Delete a file
 
-GET    /_files/metadata/*   Получение метаданных в JSON
-GET    /_files/download/*   Скачивание файла
+GET    /_files/metadata/*   Return file metadata as JSON
+GET    /_files/download/*   Download a file as an attachment
 ```
 
 Для переименования, перемещения либо обеих операций отправьте JSON-объект. Нужно указать хотя бы одно поле:
@@ -832,7 +834,7 @@ await writeGraphql(sdl, './generated/schema.graphql');
 
 ## Хранение данных
 
-Изменения выполняются последовательно внутри экземпляра сервера и проверяются на копии данных до сохранения. Для одного файла базы используйте один процесс сервера. Счётчики `increment` хранятся рядом с базой в `<путь базы>.counters.json`; сохраняйте этот файл вместе с базой. Номера резервируются до записи данных: сбой может оставить пропуск, но не приводит к повторной выдаче номера.
+Изменения выполняются последовательно внутри экземпляра сервера и проверяются на копии данных до сохранения. Для одного файла базы используйте один процесс сервера. Счётчики `increment` хранятся рядом с базой в `<database path>.counters.json`; сохраняйте этот файл вместе с базой. Номера резервируются до записи данных: сбой может оставить пропуск, но не приводит к повторной выдаче номера.
 
 ## Разработка
 
@@ -843,8 +845,8 @@ npm ci
 npm run verify
 ```
 
-Команда проверяет типы, стиль кода, покрытие тестами и установку пакета из архива.
+`npm run verify` проверяет типы, стиль кода, покрытие тестами и установку пакета из архива.
 
-Для публикации предварительной версии обновите номер в `package.json`, `package-lock.json` и `src/core/constants.ts`, затем отправьте коммит в `main`. GitHub Actions создаст тег `v<версия>` и опубликует пакет через trusted publishing в канал `alpha`, `beta` или `rc`. Стабильные версии публикуются в `latest` из явно отправленного тега версии.
+Для публикации предварительной версии обновите номер в `package.json`, `package-lock.json` и `src/core/constants.ts`, затем отправьте коммит в `main`. GitHub Actions создаст тег `v<version>` и опубликует пакет через trusted publishing в канал `alpha`, `beta` или `rc`. Стабильные версии публикуются в `latest` из явно отправленного тега версии.
 
 Лицензия: MIT.

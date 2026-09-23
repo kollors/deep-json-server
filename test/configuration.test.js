@@ -42,7 +42,7 @@ test('storage discriminates every source and the schema, with independent input 
 test('removed config keys and malformed section values are rejected before opening resources', async () => {
   for (const storage of [undefined, null, true, 'disk']) assert.throws(() => normalizeServerConfig({ ...memory, storage }), /storage/);
   for (const database of [{ data: {} }, { path: 'db.json' }, { source: {}, timestamps: true }, { source: {}, softDelete: false }])
-    assert.throws(() => normalizeServerConfig({ ...memory, database }), /Неизвестный/);
+    assert.throws(() => normalizeServerConfig({ ...memory, database }), /Unknown/);
   for (const extra of [
     { auth: { users: [] } },
     { files: { data: [] } },
@@ -53,8 +53,8 @@ test('removed config keys and malformed section values are rejected before openi
     { openapi: { enabled: false } },
     { openapi: { path: 'openapi.yaml' } },
   ])
-    assert.throws(() => normalizeServerConfig({ ...memory, ...extra }), /Неизвестный/);
-  for (const name of ['auth', 'files', 'graphql', 'openapi']) for (const value of [false, null, [], 'yes']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: value }), /JSON-объект/);
+    assert.throws(() => normalizeServerConfig({ ...memory, ...extra }), /Unknown/);
+  for (const name of ['auth', 'files', 'graphql', 'openapi']) for (const value of [false, null, [], 'yes']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: value }), /JSON object/);
   for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, database: { source: {} }, [name]: {} }), /explicit/);
   for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: {} }), /config.package/);
   for (const source of [{}, { name: '', version: '1' }, { name: 'api', version: '' }, { name: 'api', version: '1', description: 2 }])
@@ -105,8 +105,8 @@ test('API defaults follow configured sections and direct generators without acti
   }
   assert.ok((await generateOpenapi(schema, { packagePath })).paths['/items']);
   assert.match(await generateGraphql(schema), /itemList/);
-  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }, { packagePath }), /Неизвестный/);
-  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /Неизвестный/);
+  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }, { packagePath }), /Unknown/);
+  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /Unknown/);
   const disabledSchema = { models: { Item: { ...item, api: [] } } };
   await assert.rejects(() => generateOpenapi(disabledSchema, { packagePath }), /No models enable openapi/);
   await assert.rejects(() => generateGraphql(disabledSchema), /No models enable graphql/);
@@ -119,7 +119,7 @@ test('API defaults follow configured sections and direct generators without acti
 });
 
 test('schema rejects the old root layout and invalid global or entity overrides', async () => {
-  await assert.rejects(() => loadModel(schema.models), /Неизвестный/);
+  await assert.rejects(() => loadModel(schema.models), /Unknown/);
   for (const models of [undefined, null, [], {}]) await assert.rejects(() => loadModel({ models }), /models/);
   for (const api of [null, true, false, 'graphql', ['rest'], ['graphql', 'graphql']]) {
     await assert.rejects(() => loadModel({ ...schema, api }), /api/);
@@ -127,10 +127,10 @@ test('schema rejects the old root layout and invalid global or entity overrides'
   }
   for (const key of ['timestamps', 'softDelete']) {
     await assert.rejects(() => loadModel({ ...schema, [key]: 'yes' }), /boolean/);
-    await assert.rejects(() => generateGraphql(schema, { [key]: true }), /Неизвестный/);
-    await assert.rejects(() => generateOpenapi(schema, { [key]: true, packagePath }), /Неизвестный/);
+    await assert.rejects(() => generateGraphql(schema, { [key]: true }), /Unknown/);
+    await assert.rejects(() => generateOpenapi(schema, { [key]: true, packagePath }), /Unknown/);
   }
-  await assert.rejects(() => loadModel({ ...schema, typo: true }), /Неизвестный/);
+  await assert.rejects(() => loadModel({ ...schema, typo: true }), /Unknown/);
 });
 
 test('public TypeScript types correlate all sources with the one storage discriminant', async (t) => {

@@ -37,7 +37,7 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
   for (const format of ['openapi', 'graphql'] as const) {
     if (!config[format]) continue;
     const target = config[format].target;
-    if (!target) throw new Error(`Укажите config.${format}.target`);
+    if (!target) throw new Error(`Provide config.${format}.target`);
     outputs.push(target);
   }
   await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
@@ -77,11 +77,11 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
       positional.push(arg);
       continue;
     }
-    if (!['--generate', '--generate-only', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Неизвестный параметр или повтор: ${arg}`);
+    if (!['--generate', '--generate-only', '--host', '--port'].includes(arg) || seen.has(arg)) throw new Error(`Unknown or duplicate option: ${arg}`);
     seen.add(arg);
     if (arg === '--host' || arg === '--port') {
       const value = args[++index];
-      if (!value || value.startsWith('-')) throw new Error(`Укажите значение ${arg}`);
+      if (!value || value.startsWith('-')) throw new Error(`Provide a value for ${arg}`);
       if (arg === '--host') host = value;
       else {
         if (!/^\d+$/.test(value)) throw new Error('Invalid --port');
@@ -90,10 +90,10 @@ export async function runCli(args = process.argv.slice(2), services: { createSer
     }
   }
   if (seen.has('--generate') && seen.has('--generate-only')) throw new Error('--generate and --generate-only are mutually exclusive');
-  if (!positional.length) throw new Error('Укажите путь к файлу конфигурации');
-  if (positional.length !== 1) throw new Error('Можно указать только один файл конфигурации');
+  if (!positional.length) throw new Error('Provide a configuration file path');
+  if (positional.length !== 1) throw new Error('Provide exactly one configuration file');
   const configPath = positional[0];
-  if (configPath === undefined) throw new Error('Укажите путь к файлу конфигурации');
+  if (configPath === undefined) throw new Error('Provide a configuration file path');
   const source = await readConfigModule(configPath);
   const server = source.config.server ?? {};
   if (!isObject(server)) throw new Error('config.server must be an object');

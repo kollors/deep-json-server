@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-beta.6",
+  "version": "1.0.0-rc.1",
   "description": "JSON mock server with schema-driven REST, GraphQL, OpenAPI generation and file uploads",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,7 +34,10 @@
     "dist",
     "LICENSE",
     "README.md",
-    "README.ru.md"
+    "README.ru.md",
+    "CHANGELOG.md",
+    "MIGRATION.md",
+    "examples"
   ],
   "scripts": {
     "build": "node scripts/clean-dist.js && tsc && node scripts/prepare-dist.js",

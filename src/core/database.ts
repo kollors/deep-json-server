@@ -41,24 +41,24 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
 
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new Error(`${path} должен содержать конечное число`);
+      throw new Error(`${path} must contain a finite number`);
     }
 
     return;
   }
 
   if (typeof value !== 'object') {
-    throw new Error(`${path} содержит значение, несовместимое с JSON`);
+    throw new Error(`${path} contains a value incompatible with JSON`);
   }
 
   if (ancestors.has(value)) {
-    throw new Error(`${path} содержит циклическую ссылку`);
+    throw new Error(`${path} contains a circular reference`);
   }
 
   const prototype = Object.getPrototypeOf(value);
 
   if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
-    throw new Error(`${path} должен содержать обычный JSON-объект`);
+    throw new Error(`${path} must contain a plain JSON object`);
   }
 
   ancestors.add(value);
@@ -66,7 +66,7 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
       if (!Object.hasOwn(value, index)) {
-        throw new Error(`${path}[${index}] отсутствует; разреженные массивы несовместимы с JSON`);
+        throw new Error(`${path}[${index}] is missing; sparse arrays are incompatible with JSON`);
       }
 
       validateJsonValue(value[index], `${path}[${index}]`, ancestors, freeze);
@@ -87,18 +87,18 @@ export const validateJsonValue = (value: unknown, path: string, ancestors = new 
  */
 export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string>, freeze = false): DatabaseData => {
   if (!isObject(data)) {
-    throw new Error('База данных должна содержать JSON-объект');
+    throw new Error('The database must contain a JSON object');
   }
 
-  validateJsonValue(data, 'База данных', new WeakSet(), freeze);
+  validateJsonValue(data, 'Database', new WeakSet(), freeze);
 
   Object.entries(data).forEach(([resource, records]) => {
     if (!RESOURCE_NAME_PATTERN.test(resource) || !isSafeKey(resource)) {
-      throw new Error(`Недопустимое имя ресурса «${resource}»`);
+      throw new Error(`Invalid resource name "${resource}"`);
     }
 
     if (!Array.isArray(records)) {
-      throw new Error(`Ресурс «${resource}» должен содержать JSON-массив`);
+      throw new Error(`Resource "${resource}" must contain a JSON array`);
     }
 
     const primary = primaryKeys?.get(resource) ?? 'id';
@@ -106,21 +106,21 @@ export const validateDatabase = (data: unknown, primaryKeys?: Map<string, string
 
     records.forEach((record, index) => {
       if (!isObject(record)) {
-        throw new Error(`Запись ${index} ресурса «${resource}» должна содержать JSON-объект`);
+        throw new Error(`Record ${index} in resource "${resource}" must contain a JSON object`);
       }
 
       if (typeof record[primary] !== 'string' && !(typeof record[primary] === 'number' && Number.isFinite(record[primary]))) {
-        throw new Error(`Запись ${index} ресурса «${resource}» должна содержать строковый или числовой id`);
+        throw new Error(`Record ${index} in resource "${resource}" must have a string or numeric id`);
       }
 
       if (String(record[primary]) === '') {
-        throw new Error(`Запись ${index} ресурса «${resource}» должна содержать непустой id`);
+        throw new Error(`Record ${index} in resource "${resource}" must have a nonempty id`);
       }
 
       const id = String(record[primary]);
 
       if (ids.has(id)) {
-        throw new Error(`Ресурс «${resource}» содержит повторяющийся id «${id}»`);
+        throw new Error(`Resource "${resource}" has duplicate id "${id}"`);
       }
 
       ids.add(id);
@@ -141,7 +141,7 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
     source = await readFile(resolvedPath, 'utf8');
   } catch (error) {
     if (isSystemError(error) && error.code === 'ENOENT') {
-      throw new Error(`${label} не найден: ${resolvedPath}`);
+      throw new Error(`${label} not found: ${resolvedPath}`);
     }
 
     throw error;
@@ -150,7 +150,7 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
   const value: unknown = JSON.parse(source);
 
   if (!isObject(value)) {
-    throw new Error(`${label} должен содержать JSON-объект`);
+    throw new Error(`${label} must contain a JSON object`);
   }
 
   return value;
@@ -159,7 +159,7 @@ export const readJsonObjectFile = async (path: string, label: string): Promise<R
 /** Читает файл и проверяет коллекции и первичные ключи.
  * @example Файл с {"notes":[]} → Promise<{ notes: [] }>.
  */
-export const readDatabaseFile = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Файл базы данных'), keys);
+export const readDatabaseFile = async (databasePath: string, keys?: Map<string, string>): Promise<DatabaseData> => validateDatabase(await readJsonObjectFile(databasePath, 'Database file'), keys);
 
 const validateDraft = (data: DatabaseData, keys?: Map<string, string>): void => {
   try {

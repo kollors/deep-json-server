@@ -3,37 +3,37 @@
     {
       "id": "1",
       "isArchived": false,
-      "name": "Ардения"
+      "name": "Ardenia"
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Велория"
+      "name": "Veloria"
     }
   ],
   "genres": [
     {
       "id": "1",
       "isArchived": false,
-      "name": "Криминал",
+      "name": "Crime",
       "parentIds": []
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Гангстер",
+      "name": "Gangster",
       "parentIds": ["1"]
     },
     {
       "id": "3",
       "isArchived": false,
-      "name": "Драма",
+      "name": "Drama",
       "parentIds": []
     },
     {
       "id": "4",
       "isArchived": false,
-      "name": "Комедия",
+      "name": "Comedy",
       "parentIds": []
     }
   ],
@@ -52,20 +52,20 @@
         }
       ],
       "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
-      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
+      "description": "An heiress in a port city uncovers a plot involving two rival families.",
       "id": "1",
       "isArchived": false,
       "publisherIds": ["2"],
-      "title": "Тени Ардении"
+      "title": "Shadows of Ardenia"
     },
     {
       "actors": [],
       "coverSrc": "https://example.com/covers/northern-star.jpg",
-      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
+      "description": "A night clerk at an old hotel gets drawn into the search for a missing painting.",
       "id": "2",
       "isArchived": false,
       "publisherIds": ["1"],
-      "title": "Полночь в «Северной звезде»"
+      "title": "Midnight at the Northern Star"
     }
   ],
   "publishers": [
@@ -84,14 +84,14 @@
     {
       "bornAt": "1988-03-14",
       "countryId": "1",
-      "fullName": "Мира Волкова",
+      "fullName": "Mira Volkova",
       "id": "1",
       "isArchived": false
     },
     {
       "bornAt": "1991-11-02",
       "countryId": "2",
-      "fullName": "Леон Ветров",
+      "fullName": "Leon Vetrov",
       "id": "2",
       "isArchived": false
     }

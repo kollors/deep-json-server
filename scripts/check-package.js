@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
@@ -16,6 +17,9 @@ try {
   assert(paths.includes('dist/index.js'));
   assert(paths.includes('dist/index.d.ts'));
   assert(paths.includes('dist/bin/deep-json-server.js'));
+  assert(paths.includes('CHANGELOG.md'));
+  assert(paths.includes('MIGRATION.md'));
+  assert(paths.includes('examples/database.json'));
   assert(paths.every((path) => !path.startsWith('src/') && !path.startsWith('types/')));
 
   await writeFile(join(temporaryDirectory, 'package.json'), JSON.stringify({ name: 'deep-json-server-package-check', private: true, type: 'module', version: '1.0.0' }));
@@ -53,6 +57,37 @@ try {
     { cwd: temporaryDirectory },
   );
   await execute(join(temporaryDirectory, 'node_modules/.bin/deep-json-server'), ['--help'], { cwd: temporaryDirectory });
+  await writeFile(
+    join(temporaryDirectory, 'consumer.mts'),
+    `import { createServer, type DeepJsonServerConfig, type ModelSchema } from '@kollors/deep-json-server';
+import { hashPassword } from '@kollors/deep-json-server/auth';
+import { generateGraphql } from '@kollors/deep-json-server/graphql';
+import { generateOpenapi } from '@kollors/deep-json-server/openapi';
+
+const schema: ModelSchema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
+const config: DeepJsonServerConfig = {
+  storage: 'memory',
+  database: { source: { items: [] }, schema },
+  openapi: {},
+  package: { source: { name: 'consumer-api', version: '1.0.0' } },
+};
+void createServer(config);
+void generateGraphql(schema);
+void generateOpenapi(schema, { packagePath: './package.json' });
+void hashPassword('secret');
+
+// @ts-expect-error File storage requires a path, not a collection object.
+const invalid: DeepJsonServerConfig = { storage: 'file', database: { source: { items: [] } } };
+void invalid;
+`,
+  );
+  await execute(
+    fileURLToPath(new URL('../node_modules/.bin/tsc', import.meta.url)),
+    ['--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', 'consumer.mts'],
+    {
+      cwd: temporaryDirectory,
+    },
+  );
 } finally {
   await rm(temporaryDirectory, { force: true, recursive: true });
 }

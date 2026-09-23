@@ -88,18 +88,18 @@ test('generate exports before starting and never starts after a generation error
 test('CLI rejects removed commands, flags, repetitions and ambiguous modes', async (t) => {
   const f = await fixture(t);
   for (const flag of ['--files', '--auth', '--graphql', '--openapi', '--timestamps', '--soft-delete', '--unknown']) {
-    await assert.rejects(() => runCli([flag, f.path]), /Неизвестный/);
+    await assert.rejects(() => runCli([flag, f.path]), /Unknown/);
   }
   for (const args of [
     ['--generate', '--generate'],
     ['--generate-only', '--generate-only'],
     ['--host', 'a', '--host', 'b'],
   ])
-    await assert.rejects(() => runCli([...args, f.path]), /повтор/);
+    await assert.rejects(() => runCli([...args, f.path]), /duplicate/);
   await assert.rejects(() => runCli(['--generate', '--generate-only', f.path]), /mutually exclusive/);
-  await assert.rejects(() => runCli(['generate', 'openapi', f.path]), /только один/);
-  await assert.rejects(() => runCli([]), /файлу конфигурации/);
-  for (const flag of ['--host', '--port']) await assert.rejects(() => runCli([f.path, flag]), /Укажите значение/);
+  await assert.rejects(() => runCli(['generate', 'openapi', f.path]), /exactly one/);
+  await assert.rejects(() => runCli([]), /configuration file path/);
+  for (const flag of ['--host', '--port']) await assert.rejects(() => runCli([f.path, flag]), /Provide a value/);
   for (const port of ['abc', '2.2', '65536']) await assert.rejects(() => runCli([f.path, '--port', port]), /port/);
   await runCli(['--help']);
   await runCli(['-h']);
@@ -144,7 +144,7 @@ test('CLI loads fresh ES module configuration and uses environment address defau
   await runCli([f.path], services(calls));
   assert.equal(calls[1].server.port, 5000);
   await writeFile(f.path, 'export default [];');
-  await assert.rejects(() => runCli([f.path]), /JSON-объект/);
+  await assert.rejects(() => runCli([f.path]), /JSON object/);
   await writeFile(f.path, 'throw new Error("broken config");');
   await assert.rejects(() => runCli([f.path]), /broken config/);
 });

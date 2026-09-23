@@ -337,7 +337,7 @@ test('nested writes and reverse reconnections cannot bypass ownership or forge a
 
 test('schema roots supply lifecycle settings for CLI and standalone generators', async (t) => {
   for (const flags of [{ timestamps: 'yes' }, { softDelete: 1 }]) {
-    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, ...flags } }), /Неизвестный/);
+    assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, ...flags } }), /Unknown/);
     await assert.rejects(() => generateOpenapi({ ...model, ...flags }, { packagePath }), /boolean/);
   }
   await assert.rejects(() => generateOpenapi({ models: { Item: { ...item, timestamps: 'yes' } } }, { packagePath }), /boolean/);

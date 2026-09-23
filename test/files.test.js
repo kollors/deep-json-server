@@ -162,7 +162,7 @@ test('keeps file routes independent from an invalid resource database', async ()
 
     assert.equal(metadataResponse.statusCode, 200);
     assert.equal(resourceResponse.statusCode, 500);
-    assert.deepEqual(resourceResponse.json(), { error: 'Внутренняя ошибка сервера' });
+    assert.deepEqual(resourceResponse.json(), { error: 'Internal server error' });
   });
 });
 
@@ -249,7 +249,7 @@ test('supports update and delete in memory and validates stored MIME types', asy
 
   await assert.rejects(
     () => startServer({ storage: 'memory', database: { source: { items: [] } }, files: { source: [{ content: new Uint8Array(), mimeType: 'invalid', name: 'file.bin' }] } }),
-    /mimeType.*MIME-тип/,
+    /mimeType.*MIME type/,
   );
 });
 

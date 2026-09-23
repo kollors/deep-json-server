@@ -43,7 +43,7 @@ export function createHttpServer({
     const candidate = error instanceof DomainError ? domainStatus[error.code] : isObject(error) ? error.statusCode : undefined;
     const status = typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599 ? candidate : 500;
     if (status === 500) request.log.error(error);
-    return reply.code(status).send({ error: status === 500 ? 'Внутренняя ошибка сервера' : errorMessage(error) });
+    return reply.code(status).send({ error: status === 500 ? 'Internal server error' : errorMessage(error) });
   });
   if (cors) {
     server.addHook('onRequest', async (_request, reply) => {

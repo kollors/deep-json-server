@@ -2,17 +2,19 @@
 
 [Русский](README.ru.md)
 
+[Release notes](CHANGELOG.md) · [Migration from 0.9.0](MIGRATION.md)
+
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**Breaking changes: 1.0.0-beta.2.** The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and their keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
+**Breaking changes in 1.0.0.** See the [migration guide](MIGRATION.md) when upgrading from 0.9.0. The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and their keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
 
 ## Installation
 
 ```sh
-npm install @kollors/deep-json-server@beta
+npm install @kollors/deep-json-server@rc
 ```
 
-To install a specific version, use `@1.0.0-beta.6`.
+To install this release candidate, use `@1.0.0-rc.1`.
 
 ## Quick start
 
@@ -23,7 +25,7 @@ Create two files in the same directory.
 ```json
 {
   "users": [
-    { "id": "1", "fullName": "Мира Волкова" }
+    { "id": "1", "fullName": "Mira Volkova" }
   ]
 }
 ```
@@ -44,7 +46,7 @@ Add a [model schema](#model-schema) to define relations and validation. See [que
 
 ## Configuration
 
-With `storage: 'file'`, all sources and the schema are paths. With `'memory'`, they are in-memory data. Modes cannot be mixed. The presence of `auth`, `files`, `graphql` and `openapi` enables those modules. `graphql: {}` and `openapi: {}` enable only the HTTP endpoints at their defaults; add `target` to export a schema.
+With `storage: 'file'`, provide paths for every source and the schema. With `'memory'`, provide data directly. Use the same mode throughout the configuration. Add `auth`, `files`, `graphql` or `openapi` to enable those features. `graphql: {}` and `openapi: {}` expose HTTP endpoints at their default paths; add `target` to export a schema.
 
 ```js
 export default {
@@ -225,37 +227,37 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
     {
       "id": "1",
       "isArchived": false,
-      "name": "Ардения"
+      "name": "Ardenia"
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Велория"
+      "name": "Veloria"
     }
   ],
   "genres": [
     {
       "id": "1",
       "isArchived": false,
-      "name": "Криминал",
+      "name": "Crime",
       "parentIds": []
     },
     {
       "id": "2",
       "isArchived": false,
-      "name": "Гангстер",
+      "name": "Gangster",
       "parentIds": ["1"]
     },
     {
       "id": "3",
       "isArchived": false,
-      "name": "Драма",
+      "name": "Drama",
       "parentIds": []
     },
     {
       "id": "4",
       "isArchived": false,
-      "name": "Комедия",
+      "name": "Comedy",
       "parentIds": []
     }
   ],
@@ -274,20 +276,20 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
         }
       ],
       "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
-      "description": "Наследница портового города раскрывает заговор двух соперничающих семей.",
+      "description": "An heiress in a port city uncovers a plot involving two rival families.",
       "id": "1",
       "isArchived": false,
       "publisherIds": ["2"],
-      "title": "Тени Ардении"
+      "title": "Shadows of Ardenia"
     },
     {
       "actors": [],
       "coverSrc": "https://example.com/covers/northern-star.jpg",
-      "description": "Ночной администратор старого отеля случайно становится участником поисков пропавшей картины.",
+      "description": "A night clerk at an old hotel gets drawn into the search for a missing painting.",
       "id": "2",
       "isArchived": false,
       "publisherIds": ["1"],
-      "title": "Полночь в «Северной звезде»"
+      "title": "Midnight at the Northern Star"
     }
   ],
   "publishers": [
@@ -306,14 +308,14 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
     {
       "bornAt": "1988-03-14",
       "countryId": "1",
-      "fullName": "Мира Волкова",
+      "fullName": "Mira Volkova",
       "id": "1",
       "isArchived": false
     },
     {
       "bornAt": "1991-11-02",
       "countryId": "2",
-      "fullName": "Леон Ветров",
+      "fullName": "Leon Vetrov",
       "id": "2",
       "isArchived": false
     }
@@ -393,7 +395,7 @@ const scope = [
     ],
   },
   {
-    where: { fullName: { contains: 'Мира' } },
+    where: { fullName: { contains: 'Mira' } },
     order: [{ field: 'fullName', direction: 'ASC' }],
     pager: { page: 1, pageSize: 20 },
   },
@@ -468,7 +470,7 @@ Use either the relation field or its storage key in an object, for example `genr
 }
 ```
 
-The server neither gives one field priority nor merges the values; the entire operation is rolled back. Relation fields accept objects only; use `genreIds` to change links without creating or updating related records. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
+The server rejects both fields together and rolls back the operation. Relation fields accept objects only; use `genreIds` to change links without creating or updating related records. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
 
 All nested changes belong to the main record's transaction. A validation error, missing record or invalid response selection rolls back the entire operation. Updating a shared record affects every record linked to it.
 
@@ -500,7 +502,7 @@ Send requests to `/graphql` using POST with `Content-Type: application/json` and
 ```graphql
 query {
   userList(
-    where: { fullName: { contains: "Мира" } }
+    where: { fullName: { contains: "Mira" } }
     order: [{ field: fullName, direction: ASC }]
     pager: { page: 1, pageSize: 20 }
   ) {
@@ -509,7 +511,7 @@ query {
       id
       fullName
       movies(
-        where: { title: { contains: "Тени" } }
+        where: { title: { contains: "Shadows" } }
         order: [{ field: title, direction: ASC }]
         pager: { pageSize: 5 }
       ) {
@@ -836,14 +838,14 @@ Updates run sequentially within one server instance and are validated on a copy 
 
 ## Development
 
-Source modules: `rest`, `graphql`, `openapi`, `auth`, `files`, `cli` and `server`. Shared models, storage, queries and mutation rules live in `core`. `server` connects the modules; API generators load independently of the HTTP runtime.
+The source code is organized into `rest`, `graphql`, `openapi`, `auth`, `files`, `cli` and `server`. Shared models, storage, queries and mutation rules live in `core`. The `server` module connects them; API generators load independently of the HTTP runtime.
 
 ```sh
 npm ci
 npm run verify
 ```
 
-The command checks types, code style, test coverage and installation from the package archive.
+`npm run verify` checks types, code style, test coverage and installation from the package archive.
 
 To publish a prerelease, update the version in `package.json`, `package-lock.json` and `src/core/constants.ts`, then push the commit to `main`. GitHub Actions creates its `v<version>` tag and publishes through trusted publishing to the `alpha`, `beta` or `rc` channel. Stable versions publish to `latest` from an explicitly pushed version tag.
 

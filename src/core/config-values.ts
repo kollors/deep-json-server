@@ -12,7 +12,7 @@ export function getObject(value: unknown, path: string, required = false): Recor
   }
 
   if (!isObject(value)) {
-    throw new Error(`Ключ ${path} должен быть JSON-объектом`);
+    throw new Error(`${path} must be a JSON object`);
   }
 
   return value;
@@ -29,7 +29,7 @@ export function getString(value: unknown, path: string, required = false): strin
   }
 
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`Ключ ${path} должен содержать непустую строку`);
+    throw new Error(`${path} must be a nonempty string`);
   }
 
   return value;
@@ -44,7 +44,7 @@ export const getPositiveInteger = (value: unknown, path: string): number | undef
   }
 
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`Ключ ${path} должен быть положительным целым числом`);
+    throw new Error(`${path} must be a positive integer`);
   }
 
   return value;
@@ -64,6 +64,6 @@ export function getBoolean(value: unknown, path: string): boolean | undefined {
 export function normalizeAddress(options: { host?: unknown; port?: unknown }): { host: string; port: number } {
   const host = getString(options.host, 'config.server.host') ?? DEFAULT_HOST;
   const port = options.port ?? DEFAULT_PORT;
-  if (!isPortNumber(port)) throw new Error('Ключ config.server.port должен быть целым числом от 0 до 65535');
+  if (!isPortNumber(port)) throw new Error('config.server.port must be an integer from 0 to 65535');
   return { host, port };
 }

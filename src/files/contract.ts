@@ -70,7 +70,7 @@ export const validateName = (value: unknown, source: string): string => {
     hasControlCharacter(value) ||
     WINDOWS_RESERVED_NAME.test(value)
   ) {
-    throw domainError('INVALID_INPUT', `${source} должен содержать безопасное имя файла`);
+    throw domainError('INVALID_INPUT', `${source} must contain a safe file name`);
   }
 
   return value;
@@ -81,7 +81,7 @@ export const validateName = (value: unknown, source: string): string => {
  */
 export const validateDirectory = (value: unknown, source: string): string => {
   if (typeof value !== 'string') {
-    throw domainError('INVALID_INPUT', `${source} должен содержать безопасный относительный путь`);
+    throw domainError('INVALID_INPUT', `${source} must contain a safe relative path`);
   }
 
   if (value === '') {
@@ -91,7 +91,7 @@ export const validateDirectory = (value: unknown, source: string): string => {
   const parts = value.split('/');
 
   if (value.startsWith('/') || value.endsWith('/') || value.includes('\\') || value.includes('\0') || parts.some((part) => part === '' || part === '.' || part === '..')) {
-    throw domainError('INVALID_INPUT', `${source} должен содержать безопасный относительный путь`);
+    throw domainError('INVALID_INPUT', `${source} must contain a safe relative path`);
   }
 
   for (const part of parts) validateName(part, source);
@@ -101,11 +101,11 @@ export const validateDirectory = (value: unknown, source: string): string => {
 /** Удаляет параметры MIME-типа, приводит его к нижнему регистру и проверяет формат.
  * @example normalizeMimeType('Text/Plain; charset=utf-8') → 'text/plain'.
  */
-export const normalizeMimeType = (value: unknown, source = 'Заголовок Content-Type'): string => {
+export const normalizeMimeType = (value: unknown, source = 'Header Content-Type'): string => {
   const mimeType = typeof value === 'string' ? (value.split(';', 1)[0] ?? '').trim().toLowerCase() : '';
 
   if (mimeType === '' || !MIME_TYPE_PATTERN.test(mimeType)) {
-    throw domainError('INVALID_INPUT', `${source} должен содержать корректный MIME-тип`);
+    throw domainError('INVALID_INPUT', `${source} must contain a valid MIME type`);
   }
 
   return mimeType;
@@ -116,7 +116,7 @@ export const normalizeMimeType = (value: unknown, source = 'Заголовок C
  */
 export const normalizeStoredFileMetadata = (value: unknown, source: string): StoredFileMetadata => {
   if (!isObject(value)) {
-    throw new Error(`${source} должна содержать JSON-объект`);
+    throw new Error(`${source} must contain a JSON object`);
   }
 
   try {
@@ -134,9 +134,9 @@ export const normalizeStoredFileMetadata = (value: unknown, source: string): Sto
  * @example getPathLocation('photos/a.jpg') → { directory: 'photos', name: 'a.jpg' }.
  */
 export const getPathLocation = (path: string): Pick<StoredFileMetadata, 'directory' | 'name'> => {
-  const normalizedPath = validateDirectory(path, 'Путь файла');
+  const normalizedPath = validateDirectory(path, 'File path');
   const parts = normalizedPath.split('/');
-  const name = validateName(parts.pop(), 'Путь файла');
+  const name = validateName(parts.pop(), 'File path');
 
   return { directory: parts.join('/'), name };
 };

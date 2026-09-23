@@ -302,7 +302,7 @@ test('rejects missing files, unsafe resources and malformed or ambiguous records
   const databasePath = join(directory, 'database.json');
 
   try {
-    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false } }), /не найден/);
+    await assert.rejects(() => startServer({ storage: 'file', database: { source: databasePath }, server: { logger: false } }), /not found/);
 
     for (const data of [[], { items: {} }, { items: [null] }, { items: [{ name: 'Missing ID' }] }, { items: [{ id: true }] }, { items: [{ id: 1 }, { id: '1' }] }, { 'bad/name': [] }]) {
       await writeFile(databasePath, JSON.stringify(data));
@@ -328,10 +328,10 @@ test('rejects values that cannot be represented in JSON', async () => {
   for (const value of [1n, undefined, () => undefined, Symbol('value'), Number.NaN, Number.POSITIVE_INFINITY, new Date(), cyclicRecord]) {
     const data = value === cyclicRecord ? { items: [value] } : { items: [{ id: '1', value }] };
 
-    await assert.rejects(() => startServer({ storage: 'memory', database: { source: data }, server: { logger: false } }), /structured data|JSON|конечное число|обычный JSON-объект|циклическую ссылку/);
+    await assert.rejects(() => startServer({ storage: 'memory', database: { source: data }, server: { logger: false } }), /structured data|JSON|finite number|plain JSON object|circular reference/);
   }
 
-  await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: Array(1) } }, server: { logger: false } }), /разреженные массивы/);
+  await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: Array(1) } }, server: { logger: false } }), /sparse arrays/);
 });
 
 test('validates feature switches before initializing the server', async () => {

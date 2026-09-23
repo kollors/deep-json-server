@@ -18,11 +18,11 @@ const getFileSize = async (path: string): Promise<number> => {
   try {
     const stats = await stat(path);
 
-    if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
+    if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Path must point to a regular file');
     return stats.size;
   } catch (error) {
     if (isSystemError(error) && error.code === 'ENOENT') {
-      throw domainError('NOT_FOUND', 'Файл не найден');
+      throw domainError('NOT_FOUND', 'File not found');
     }
 
     throw error;
@@ -89,7 +89,7 @@ export const createDiskFileStore = async ({
     const file = files.get(path);
 
     if (file == null) {
-      throw domainError('NOT_FOUND', 'Файл не найден');
+      throw domainError('NOT_FOUND', 'File not found');
     }
 
     return file;
@@ -112,7 +112,7 @@ export const createDiskFileStore = async ({
       try {
         const stats = await handle.stat();
 
-        if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Путь должен указывать на обычный файл');
+        if (!stats.isFile()) throw domainError('INVALID_INPUT', 'Path must point to a regular file');
         const size = stats.size;
 
         return { file: { ...file, size }, stream: handle.createReadStream() };
@@ -127,7 +127,7 @@ export const createDiskFileStore = async ({
     const key = getFileKey(storedFile);
 
     if (files.has(key) && !override) {
-      throw domainError('CONFLICT', 'Файл уже существует');
+      throw domainError('CONFLICT', 'File already exists');
     }
 
     const stagedPath = resolve(stagingPath, `${randomBytes(12).toString('hex')}.upload`);
@@ -150,7 +150,7 @@ export const createDiskFileStore = async ({
         const exists = files.has(key) || existsOnDisk;
 
         if (exists && !override) {
-          throw domainError('CONFLICT', 'Файл уже существует');
+          throw domainError('CONFLICT', 'File already exists');
         }
 
         const backupPath = `${path}.${randomBytes(6).toString('hex')}.backup`;
@@ -187,7 +187,7 @@ export const createDiskFileStore = async ({
           }
 
           if (rollbackErrors.length > 0) {
-            throw new AggregateError([error, ...rollbackErrors], 'Не удалось сохранить файл и полностью откатить операцию');
+            throw new AggregateError([error, ...rollbackErrors], 'Could not save the file or fully roll back the operation');
           }
 
           throw error;
@@ -218,7 +218,7 @@ export const createDiskFileStore = async ({
       const targetFilePath = await paths.prepareTargetPath(targetPath);
 
       if (files.has(targetPath) || (await paths.pathExists(targetFilePath))) {
-        throw domainError('CONFLICT', 'Файл с таким путём уже существует');
+        throw domainError('CONFLICT', 'A file already exists at this path');
       }
 
       await rename(sourceFilePath, targetFilePath);
@@ -228,7 +228,7 @@ export const createDiskFileStore = async ({
       nextFiles.delete(sourcePath);
       nextFiles.set(targetPath, updatedFile);
 
-      await commitMetadata(nextFiles, () => rename(targetFilePath, sourceFilePath), 'Не удалось обновить файл и откатить перемещение');
+      await commitMetadata(nextFiles, () => rename(targetFilePath, sourceFilePath), 'Could not update the file or roll back the move');
 
       return { ...updatedFile, size: await getFileSize(targetFilePath) };
     });
@@ -247,7 +247,7 @@ export const createDiskFileStore = async ({
 
       nextFiles.delete(path);
 
-      await commitMetadata(nextFiles, () => rename(temporaryPath, filePath), 'Не удалось удалить файл и откатить операцию');
+      await commitMetadata(nextFiles, () => rename(temporaryPath, filePath), 'Could not delete the file or roll back the operation');
       await cleanupLater(temporaryPath);
     });
 
