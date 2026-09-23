@@ -83,6 +83,60 @@ test('REST, GraphQL and files coexist with consistent parsers and error envelope
   assert.equal((await specOnly.server.inject('/graphql')).statusCode, 404);
 });
 
+test('database API selection controls routes and OpenAPI without hiding auth or files', async (t) => {
+  const schema = model({ name: { type: 'string' } });
+  for (const api of [['rest'], ['graphql'], ['rest', 'graphql']]) {
+    const selectedSchema = { ...schema, api };
+    const { server, facade } = await setup(
+      t,
+      selectedSchema,
+      { items: [{ id: '1', name: 'one' }] },
+      {
+        database: { source: { items: [{ id: '1', name: 'one' }] }, schema: selectedSchema },
+        ...(api.includes('graphql') ? { graphql: {} } : {}),
+        openapi: {},
+        auth: { source: [] },
+        files: { source: [] },
+      },
+    );
+    const rest = api.includes('rest');
+    const graph = api.includes('graphql');
+    assert.equal((await server.inject('/items/1')).statusCode, rest ? 200 : 404);
+    assert.equal((await server.inject({ method: 'POST', url: '/items', payload: { name: 'two' } })).statusCode, rest ? 401 : 404);
+    assert.equal((await gql(server, '{itemList{total}}')).statusCode, graph ? 200 : 404);
+    assert.equal((await server.inject('/auth/me')).statusCode, 401);
+    assert.equal((await server.inject({ method: 'POST', url: '/_files/storage', headers: { 'content-name': 'one.txt', 'content-type': 'text/plain' }, payload: 'hello' })).statusCode, 201);
+    const document = await facade.openapi();
+    assert.equal(Boolean(document.paths['/items']), rest);
+    assert.ok(document.paths['/auth/login']);
+    assert.ok(document.paths['/_files/storage']);
+  }
+});
+
+test('model API selection cannot exceed database API and hides individual routes', async (t) => {
+  const schema = {
+    models: {
+      Item: { ...model().models.Item, api: ['rest'] },
+      Other: { collection: 'others', api: ['graphql'], fields: { id: { type: 'string', primary: true } } },
+    },
+  };
+  const data = { items: [{ id: '1' }], others: [{ id: '2' }] };
+  const { server, facade } = await setup(t, schema, data, { graphql: {}, openapi: {} });
+  assert.equal((await server.inject('/items/1')).statusCode, 200);
+  assert.equal((await server.inject('/others/2')).statusCode, 404);
+  assert.deepEqual((await server.inject('/')).json().resources, ['items']);
+  assert.ok((await facade.openapi()).paths['/items']);
+  assert.equal((await facade.openapi()).paths['/others'], undefined);
+  const graphql = await facade.graphql();
+  assert.match(graphql, /otherList/);
+  assert.doesNotMatch(graphql, /itemList/);
+  await assert.rejects(() => createServer({ storage: 'memory', database: { source: data, schema: { ...schema, api: ['rest'] } }, package: { source: packageSource } }), /Other.api includes graphql/);
+  await assert.rejects(
+    () => createServer({ storage: 'memory', database: { source: data, schema: { ...schema, api: ['graphql'] } }, graphql: {}, package: { source: packageSource } }),
+    /Item.api includes rest/,
+  );
+});
+
 test('API endpoints cannot shadow collections, records or one another', async () => {
   for (const extra of [
     { graphql: { endpoint: '/items' } },

@@ -10,7 +10,7 @@ import type { Entity, Model } from './types.js';
 export function inferModel(database: DatabaseSnapshot, settings: RecordOptions = {}): Model {
   const options = recordOptions(settings);
   const valueType = (value: unknown) => (isObject(value) ? 'object' : ['string', 'number', 'boolean'].includes(typeof value) ? typeof value : 'string');
-  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: false, options };
+  const model: Model = { api: ['rest'], entities: [], byName: new Map(), byCollection: new Map(), explicit: false, options };
   for (const [collection, records] of Object.entries(database)) {
     const name = toPascalCase(singularize(collection));
     const entity: Entity = {
@@ -18,7 +18,7 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
       softDelete: options.softDelete,
       name,
       collection,
-      api: [],
+      api: ['rest'],
       primary: 'id',
       fields: Object.create(null),
       root: newNode('', { type: 'object' }),

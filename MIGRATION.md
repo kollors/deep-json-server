@@ -1,4 +1,4 @@
-# Migrating from 0.9.0 to 1.0.0-rc.1
+# Migrating from 0.9.0 to 1.0.0-rc.2
 
 Version 1.0 changes configuration and request syntax. Update the server configuration and client requests together. Back up any file database, auth records, and file metadata before changing the running server.
 
@@ -6,7 +6,7 @@ Version 1.0 changes configuration and request syntax. Update the server configur
 
 Declare a storage mode and use `source` for each enabled component:
 
-| 0.9.0 | 1.0.0-rc.1 |
+| 0.9.0 | 1.0.0-rc.2 |
 |---|---|
 | `database.path` | `storage: 'file'`, `database.source` |
 | `database.data` | `storage: 'memory'`, `database.source` |
@@ -14,7 +14,7 @@ Declare a storage mode and use `source` for each enabled component:
 | `files.data` | `files.source` in memory mode |
 | `openapi.path` | `openapi.target` |
 
-The `storage` mode applies to the database, schema, auth records, files, and package metadata. GraphQL and OpenAPI require a model schema and `package.source`. The schema format has changed: define models under `models`, with a `collection`, fields, and one primary key per model. The schema root does not accept `api`; use the optional `api` array on a model to limit its enabled formats. Start with the [current schema example](examples/schema.json), then validate your existing records against it. The [configuration example](examples/server.config.js) shows all required paths.
+The `storage` mode applies to the database, schema, auth records, files, and package metadata. GraphQL and OpenAPI require a model schema; OpenAPI also requires `package.source`. The schema format has changed: define models under `models`, with a `collection`, fields, and one primary key per model. Use root `api` to enable REST, GraphQL, or both for the database; a model's optional `api` array can narrow that choice. Start with the [current schema example](examples/schema.json), then validate your existing records against it. The [configuration example](examples/server.config.js) shows all required paths.
 
 ## CLI
 

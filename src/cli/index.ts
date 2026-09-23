@@ -43,7 +43,7 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
   await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
   const model = await configuredModel(config);
   if (config.openapi && !openapiInfo) throw new Error('OpenAPI package metadata is not configured');
-  const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config, openapiInfo as OpenapiInfo)) : undefined;
+  const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config, openapiInfo as OpenapiInfo, model)) : undefined;
   const graphql = config.graphql ? (await import('../graphql/generate.js')).graphqlFromModel(model) : undefined;
   if (openapi && config.openapi?.target) {
     await writeOpenapi(openapi, config.openapi.target);

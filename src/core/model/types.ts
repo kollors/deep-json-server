@@ -26,12 +26,13 @@ export interface EntityDefinition {
   timestamps?: boolean;
   softDelete?: boolean;
   collection: string;
-  api?: ('openapi' | 'graphql')[];
+  api?: ApiFormat[];
   fields: Record<string, Field>;
 }
-export type ApiFormat = 'openapi' | 'graphql';
+export type ApiFormat = 'rest' | 'graphql';
 export interface ModelSchema {
   models: Record<string, EntityDefinition>;
+  api?: ApiFormat[];
   timestamps?: boolean;
   softDelete?: boolean;
 }
@@ -66,12 +67,13 @@ export interface Entity {
   softDelete: boolean;
   name: string;
   collection: string;
-  api: ('openapi' | 'graphql')[];
+  api: ApiFormat[];
   primary: string;
   fields: Record<string, Node>;
   root: Node;
 }
 export interface Model {
+  api: ApiFormat[];
   options: Required<RecordOptions>;
   entities: Entity[];
   byName: Map<string, Entity>;

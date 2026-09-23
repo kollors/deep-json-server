@@ -13,12 +13,13 @@ export function writable(node: Node, mode: InputMode, relations = false): boolea
 /** Проверяет наличие явной модели и доступность выбранного формата для её связей.
  * @example assertApi(undefined, 'graphql') → ошибка; согласованная модель → undefined.
  */
-export function assertApi(model: Model | undefined, api: 'graphql' | 'openapi'): asserts model is Model {
+export function assertApi(model: Model | undefined, api: 'rest' | 'graphql' | 'openapi'): asserts model is Model {
   if (!model?.explicit) throw new Error(`${api} requires an explicit model schema`);
-  if (!model.entities.some((entity) => entity.api.includes(api))) throw new Error(`No models enable ${api}`);
-  for (const entity of model.entities.filter((e) => e.api.includes(api)))
+  const format = api === 'openapi' ? 'rest' : api;
+  if (!model.entities.some((entity) => entity.api.includes(format))) throw new Error(`No models enable ${api}`);
+  for (const entity of model.entities.filter((e) => e.api.includes(format)))
     for (const node of Object.values(entity.fields))
-      if (node.relation && !node.relation.api.includes(api)) throw new Error(`${entity.name}.${node.path}: ${node.relation.name} does not enable ${api}`);
+      if (node.relation && !node.relation.api.includes(format)) throw new Error(`${entity.name}.${node.path}: ${node.relation.name} does not enable ${api}`);
 }
 /** Определяет обязательность поля в теле операции, независимо от формата API.
  * @example Обязательное поле без default: create → true; корневое update → false.

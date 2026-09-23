@@ -29,10 +29,11 @@ export async function registerConfiguredModules(
   engine.validateData(store.database.data);
   const graphqlPath = config.graphql?.endpoint;
   const openapiPath = config.openapi?.endpoint;
-  validateEndpoints(
-    model.entities.map((entity) => entity.collection),
-    [...(graphqlPath ? [graphqlPath] : []), ...(openapiPath ? [openapiPath] : []), ...(enabled.auth ? Object.values(AUTH_PATHS) : [])],
-  );
+  validateEndpoints(model.api.includes('rest') ? model.entities.filter((entity) => entity.api.includes('rest')).map((entity) => entity.collection) : [], [
+    ...(graphqlPath ? [graphqlPath] : []),
+    ...(openapiPath ? [openapiPath] : []),
+    ...(enabled.auth ? Object.values(AUTH_PATHS) : []),
+  ]);
   const auth = enabled.auth && config.auth ? await (await import('../auth/service.js')).createAuthService(config.auth) : undefined;
   if (auth) {
     app.addHook('onClose', async () => auth.close());
@@ -40,7 +41,7 @@ export async function registerConfiguredModules(
     registerAuthRoutes(app, auth);
   }
   const authenticate = auth ? (header: unknown) => auth.me(header) : undefined;
-  registerRestRoutes(app, engine, authenticate);
+  if (model.api.includes('rest')) registerRestRoutes(app, engine, authenticate);
   if (graphqlPath) {
     const [{ registerGraphqlRoutes }, { buildGraphql }] = await Promise.all([import('../graphql/routes.js'), import('../graphql/schema.js')]);
     registerGraphqlRoutes(app, buildGraphql(model), engine, graphqlPath, authenticate);

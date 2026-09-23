@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-rc.2
+
+- Added root schema `api` to select REST, GraphQL, or both for database routes, and per-model `api` selection with matching formats. Authentication and file routes remain REST endpoints; OpenAPI includes only enabled REST routes.
+- GraphQL-only server configurations no longer require package metadata. OpenAPI keeps authentication and file routes when no database model enables REST.
+- Added installed-package coverage for per-model API selection and checks for code examples in both READMEs.
+
 ## 1.0.0-rc.1
 
 First release candidate for the 1.0 API. This release includes schema-driven REST, GraphQL, OpenAPI export, authentication, record ownership, timestamps, soft deletion, and file storage. It also makes CLI and API error messages consistently English and checks TypeScript declarations from an installed package archive.

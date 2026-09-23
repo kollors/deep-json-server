@@ -72,7 +72,7 @@ test('combined CLI export reads one model and validates both formats before writ
   const originalYaml = await fs.readFile(join(directory, 'api.yaml'), 'utf8');
   const originalGraphql = await fs.readFile(join(directory, 'api.graphql'), 'utf8');
   assert.equal(originalGraphql, `${await generateGraphql({ ...schema, timestamps: true, softDelete: true })}\n`);
-  await fs.writeFile(schemaPath, JSON.stringify({ models: { Item: { ...schema.models.Item, api: ['openapi'] } } }));
+  await fs.writeFile(schemaPath, JSON.stringify({ models: { Item: { ...schema.models.Item, api: ['rest'] } } }));
   await assert.rejects(() => runCli(['--generate-only', configPath]), /graphql/);
   assert.equal(await fs.readFile(join(directory, 'api.yaml'), 'utf8'), originalYaml);
   assert.equal(await fs.readFile(join(directory, 'api.graphql'), 'utf8'), originalGraphql);

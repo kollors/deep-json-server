@@ -43,7 +43,7 @@ export async function createConfiguredServer(normalized: NormalizedServerConfig,
   const openapi = async () => {
     if (!normalized.openapi) throw new Error('OpenAPI is not configured');
     if (!packageInfo) throw new Error('OpenAPI package metadata is not configured');
-    return (await import('../openapi/generate.js')).openapiFromModel(explicitModel, openapiOptions(normalized, packageInfo));
+    return (await import('../openapi/generate.js')).openapiFromModel(explicitModel, openapiOptions(normalized, packageInfo, explicitModel));
   };
   let instance: FastifyInstance | undefined;
   const getFastify = (): FastifyInstance => {

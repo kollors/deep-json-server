@@ -9,7 +9,7 @@ import { createValidator, entityValidators, valueSchema } from './validation.js'
  */
 export function apiFormats(value: unknown, fallback: ApiFormat[], label: string): ApiFormat[] {
   if (value === undefined) return [...fallback];
-  if (!Array.isArray(value) || value.some((format) => !['openapi', 'graphql'].includes(format)) || new Set(value).size !== value.length) throw new Error(`Invalid api for ${label}`);
+  if (!Array.isArray(value) || value.some((format) => !['rest', 'graphql'].includes(format)) || new Set(value).size !== value.length) throw new Error(`Invalid api for ${label}`);
   return [...value] as ApiFormat[];
 }
 const PRIMITIVES = new Set(['string', 'number', 'boolean', 'object']);
@@ -73,17 +73,19 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
   const schema: unknown = typeof source === 'string' ? JSON.parse(await readFile(source, 'utf8')) : structuredClone(source);
   const ajv = createValidator();
   if (!isObject(schema) || !Object.keys(schema).length) throw new Error('Model schema must be a nonempty object');
-  assertKnownKeys(schema, new Set(['models', 'timestamps', 'softDelete']), 'schema');
+  assertKnownKeys(schema, new Set(['models', 'api', 'timestamps', 'softDelete']), 'schema');
   if (!isObject(schema.models) || !Object.keys(schema.models).length) throw new Error('schema.models must be a nonempty object');
   const options = recordOptions({ auth: settings.auth, timestamps: schema.timestamps as boolean | undefined, softDelete: schema.softDelete as boolean | undefined });
-  const defaults = apiFormats(settings.api, ['openapi', 'graphql'], 'defaults');
-  const model: Model = { entities: [], byName: new Map(), byCollection: new Map(), explicit: true, options };
+  const defaults = apiFormats(schema.api, apiFormats(settings.api, ['rest', 'graphql'], 'defaults'), 'schema');
+  if (!defaults.length) throw new Error('schema.api must enable rest, graphql, or both');
+  const model: Model = { api: defaults, entities: [], byName: new Map(), byCollection: new Map(), explicit: true, options };
   for (const [name, definition] of Object.entries(schema.models)) {
     if (!NAME.test(name) || !isSafeKey(name) || PRIMITIVES.has(name) || !isObject(definition)) throw new Error(`Invalid model ${name}`);
     assertKnownKeys(definition, new Set(['collection', 'api', 'fields', 'timestamps', 'softDelete']), name);
     if (typeof definition.collection !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(definition.collection) || !isSafeKey(definition.collection)) throw new Error(`Invalid collection for ${name}`);
     if (model.byCollection.has(definition.collection)) throw new Error(`Duplicate collection ${definition.collection}`);
     const api = apiFormats(definition.api, defaults, name);
+    for (const format of api) if (!defaults.includes(format)) throw new Error(`${name}.api includes ${format}, but schema.api does not`);
     if (!isObject(definition.fields)) throw new Error(`${name}.fields must be an object`);
     const flags = recordOptions({ timestamps: definition.timestamps as boolean | undefined, softDelete: definition.softDelete as boolean | undefined });
     const entity: Entity = {

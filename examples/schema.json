@@ -1,4 +1,5 @@
 {
+  "api": ["rest", "graphql"],
   "models": {
     "Country": {
       "collection": "countries",

@@ -35,10 +35,7 @@ export interface ServerConfig {
   pageSize?: number;
   port?: number;
 }
-type ApiConfig<S extends Storage> =
-  | { openapi?: undefined; graphql?: undefined; package?: PackageConfig<S> }
-  | { openapi: OpenapiConfig; graphql?: GraphqlConfig; package: PackageConfig<S> }
-  | { openapi?: OpenapiConfig; graphql: GraphqlConfig; package: PackageConfig<S> };
+type ApiConfig<S extends Storage> = { openapi?: undefined; graphql?: GraphqlConfig; package?: PackageConfig<S> } | { openapi: OpenapiConfig; graphql?: GraphqlConfig; package: PackageConfig<S> };
 export type DeepJsonServerConfig = {
   [S in Storage]: {
     storage: S;
@@ -121,11 +118,11 @@ function normalizeSources(config: Record<string, unknown>, directory: string): N
 function normalizeConfig(value: unknown, directory = '.'): NormalizedServerConfig {
   const config = getObject(value, 'config', true);
   assertKnownKeys(config, CONFIG_KEYS, 'config');
-  const sources = normalizeSources(config, directory);
   const openapi = section(config.openapi, 'openapi', ['target', 'endpoint']);
   const graphql = section(config.graphql, 'graphql', ['target', 'endpoint']);
+  const sources = normalizeSources(config, directory);
   if ((openapi || graphql) && sources.database.schema === undefined) throw new Error('GraphQL and OpenAPI require an explicit model schema');
-  if ((openapi || graphql) && !sources.package) throw new Error('GraphQL and OpenAPI require config.package');
+  if (openapi && !sources.package) throw new Error('OpenAPI requires config.package');
   const exportPath = (value: unknown, name: string) => (value === undefined ? undefined : resolve(directory, getString(value, name, true)));
   const openapiEndpoint = getString(openapi?.endpoint, 'config.openapi.endpoint') ?? '/openapi.json';
   const graphqlEndpoint = getString(graphql?.endpoint, 'config.graphql.endpoint') ?? '/graphql';

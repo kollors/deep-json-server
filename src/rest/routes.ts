@@ -19,8 +19,8 @@ function entityFor(engine: Engine, collection: string): Entity {
  * @example После регистрации GET / → { resources: [...] }; функция возвращает undefined.
  */
 export function registerRestRoutes(server: FastifyInstance, engine: Engine, authenticate?: Authenticate): void {
-  server.get('/', async () => ({ resources: engine.model.entities.map((entity) => entity.collection) }));
-  for (const initial of engine.model.entities) {
+  server.get('/', async () => ({ resources: engine.model.entities.filter((entity) => entity.api.includes('rest')).map((entity) => entity.collection) }));
+  for (const initial of engine.model.entities.filter((entity) => entity.api.includes('rest'))) {
     const path = `/${initial.collection}`;
     const itemPath = `${path}/:${initial.primary}`;
     server.get(path, async (request) => {

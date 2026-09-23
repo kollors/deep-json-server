@@ -28,4 +28,4 @@ export interface OpenapiOptions {
   packagePath: string;
 }
 
-export type OpenapiDocumentOptions = Omit<OpenapiOptions, 'packagePath'> & { info: OpenapiInfo };
+export type OpenapiDocumentOptions = Omit<OpenapiOptions, 'packagePath'> & { database?: boolean; info: OpenapiInfo };

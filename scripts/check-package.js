@@ -52,7 +52,29 @@ try {
       assert.equal(me.json().username, 'admin');
       assert.doesNotMatch(await facade.graphql(), /authLogin|authMe|authLogout|AuthSession/);
       assert.equal((await facade.openapi()).components.securitySchemes.AuthBearer.scheme, 'bearer');
-      await server.close();`,
+      await server.close();
+      const selected = await createServer({
+        storage: 'memory',
+        database: {
+          source: { restItems: [], graphItems: [] },
+          schema: {
+            api: ['rest', 'graphql'],
+            models: {
+              RestItem: { collection: 'restItems', api: ['rest'], fields: { id: { type: 'string', primary: true } } },
+              GraphItem: { collection: 'graphItems', api: ['graphql'], fields: { id: { type: 'string', primary: true } } },
+            },
+          },
+        },
+        graphql: {}, openapi: {}, package: { source: { name: 'selected-api', version: '1.0.0' } }, server: { logger: false },
+      });
+      const selectedServer = selected.fastify();
+      assert.equal((await selectedServer.inject('/restItems')).statusCode, 200);
+      assert.equal((await selectedServer.inject('/graphItems')).statusCode, 404);
+      assert.ok((await selected.openapi()).paths['/restItems']);
+      assert.equal((await selected.openapi()).paths['/graphItems'], undefined);
+      assert.match(await selected.graphql(), /graphItemList/);
+      assert.doesNotMatch(await selected.graphql(), /restItemList/);
+      await selectedServer.close();`,
     ],
     { cwd: temporaryDirectory },
   );

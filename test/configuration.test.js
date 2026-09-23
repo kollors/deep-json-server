@@ -56,13 +56,31 @@ test('removed config keys and malformed section values are rejected before openi
     assert.throws(() => normalizeServerConfig({ ...memory, ...extra }), /Unknown/);
   for (const name of ['auth', 'files', 'graphql', 'openapi']) for (const value of [false, null, [], 'yes']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: value }), /JSON object/);
   for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, database: { source: {} }, [name]: {} }), /explicit/);
-  for (const name of ['graphql', 'openapi']) assert.throws(() => normalizeServerConfig({ ...memory, [name]: {} }), /config.package/);
+  assert.throws(() => normalizeServerConfig({ ...memory, openapi: {} }), /config.package/);
+  assert.equal(normalizeServerConfig({ ...memory, graphql: {} }).package, undefined);
   for (const source of [{}, { name: '', version: '1' }, { name: 'api', version: '' }, { name: 'api', version: '1', description: 2 }])
     assert.throws(() => normalizeServerConfig({ ...memory, graphql: {}, package: { source } }), /package/);
   await assert.rejects(() => createServer(memory, packagePath), /only a configuration/);
 });
 
-test('root schema settings are inherited and model api values exclude individual formats', async (t) => {
+test('schema API selection is validated and keeps the existing default', async () => {
+  assert.deepEqual((await loadModel(schema, { api: ['rest'] })).api, ['rest']);
+  assert.deepEqual((await loadModel(schema, { api: ['rest', 'graphql'] })).api, ['rest', 'graphql']);
+  const selected = ['graphql'];
+  const loaded = await loadModel({ ...schema, api: selected });
+  assert.deepEqual(loaded.api, ['graphql']);
+  selected.push('rest');
+  assert.deepEqual(loaded.api, ['graphql']);
+  for (const api of [[], ['openapi'], ['rest', 'rest'], 'graphql', null]) await assert.rejects(() => loadModel({ ...schema, api }), /api/);
+  assert.throws(() => normalizeServerConfig({ ...memory, database: { ...memory.database, api: ['rest'] } }), /Unknown/);
+  await assert.rejects(() => createServer({ ...memory, database: { ...memory.database, schema: { ...schema, api: ['graphql'] } } }), /schema.api and config.graphql/);
+  await assert.rejects(
+    () => createServer({ ...memory, database: { ...memory.database, schema: { ...schema, api: ['rest'] } }, graphql: {}, package: { source: packageSource } }),
+    /schema.api and config.graphql/,
+  );
+});
+
+test('root schema settings are inherited and model api values select individual routes', async (t) => {
   const definition = {
     timestamps: true,
     softDelete: true,
@@ -82,7 +100,8 @@ test('root schema settings are inherited and model api values exclude individual
   });
   const app = facade.fastify();
   t.after(() => app.close());
-  assert.equal((await app.inject('/plain/2')).statusCode, 200);
+  assert.equal((await app.inject('/plain/2')).statusCode, 404);
+  assert.equal((await app.inject('/graphs')).statusCode, 404);
   const spec = await facade.openapi();
   assert.ok(spec.paths['/items']);
   assert.equal(spec.paths['/plain'], undefined);
@@ -91,6 +110,35 @@ test('root schema settings are inherited and model api values exclude individual
   assert.match(graphql, /graphList/);
   assert.match(graphql, /itemList/);
   assert.doesNotMatch(graphql, /plainList/);
+});
+
+test('GraphQL-only configuration needs no package metadata', async (t) => {
+  const facade = await createServer({ ...memory, database: { source: { items: [] }, schema: { ...schema, api: ['graphql'] } }, graphql: {} });
+  const app = facade.fastify();
+  t.after(() => app.close());
+  assert.match(await facade.graphql(), /itemList/);
+  assert.equal((await app.inject('/items')).statusCode, 404);
+  assert.equal((await app.inject({ method: 'POST', url: '/graphql', payload: { query: '{ itemList { total } }' } })).statusCode, 200);
+});
+
+test('OpenAPI keeps auth and file routes when every model uses GraphQL', async (t) => {
+  const facade = await createServer({
+    ...memory,
+    database: { source: { items: [] }, schema: { ...schema, api: ['rest', 'graphql'], models: { Item: { ...item, api: ['graphql'] } } } },
+    auth: { source: [] },
+    files: { source: [] },
+    graphql: {},
+    openapi: {},
+    package: { source: packageSource },
+  });
+  const app = facade.fastify();
+  t.after(() => app.close());
+  const document = await facade.openapi();
+  assert.equal(document.paths['/items'], undefined);
+  assert.ok(document.paths['/auth/login']);
+  assert.ok(document.paths['/_files/storage']);
+  assert.equal((await app.inject('/items')).statusCode, 404);
+  assert.equal((await app.inject('/openapi.json')).statusCode, 200);
 });
 
 test('API defaults follow configured sections and direct generators without activating absent endpoints', async (t) => {
@@ -105,26 +153,23 @@ test('API defaults follow configured sections and direct generators without acti
   }
   assert.ok((await generateOpenapi(schema, { packagePath })).paths['/items']);
   assert.match(await generateGraphql(schema), /itemList/);
-  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }, { packagePath }), /Unknown/);
-  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /Unknown/);
+  await assert.rejects(() => generateOpenapi({ ...schema, api: [] }, { packagePath }), /schema.api/);
+  await assert.rejects(() => generateGraphql({ ...schema, api: [] }), /schema.api/);
   const disabledSchema = { models: { Item: { ...item, api: [] } } };
   await assert.rejects(() => generateOpenapi(disabledSchema, { packagePath }), /No models enable openapi/);
   await assert.rejects(() => generateGraphql(disabledSchema), /No models enable graphql/);
   const graphqlSchema = { models: { Item: { ...item, api: ['graphql'] } } };
-  const facade = await createServer({ ...memory, database: { ...memory.database, schema: graphqlSchema } });
-  const app = facade.fastify();
-  t.after(() => app.close());
-  assert.equal((await app.inject('/graphql')).statusCode, 404);
-  assert.equal((await app.inject('/items')).statusCode, 200);
+  await assert.rejects(() => createServer({ ...memory, database: { ...memory.database, schema: graphqlSchema } }), /Item.api includes graphql/);
 });
 
 test('schema rejects the old root layout and invalid global or entity overrides', async () => {
   await assert.rejects(() => loadModel(schema.models), /Unknown/);
   for (const models of [undefined, null, [], {}]) await assert.rejects(() => loadModel({ models }), /models/);
-  for (const api of [null, true, false, 'graphql', ['rest'], ['graphql', 'graphql']]) {
+  for (const api of [null, true, false, 'graphql', ['openapi'], ['graphql', 'graphql']]) {
     await assert.rejects(() => loadModel({ ...schema, api }), /api/);
     await assert.rejects(() => loadModel({ models: { Item: { ...item, api } } }), /api/);
   }
+  await assert.rejects(() => loadModel({ ...schema, api: ['rest'], models: { Item: { ...item, api: ['graphql'] } } }), /schema.api/);
   for (const key of ['timestamps', 'softDelete']) {
     await assert.rejects(() => loadModel({ ...schema, [key]: 'yes' }), /boolean/);
     await assert.rejects(() => generateGraphql(schema, { [key]: true }), /Unknown/);

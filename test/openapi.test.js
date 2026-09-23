@@ -131,14 +131,14 @@ test('writes YAML and SDL to nested output paths with independent API settings',
   assert.match(await readFile(graphqlPath, 'utf8'), /itemList/);
   for (const bad of [{ host: '' }, { port: -1 }, { port: 70000 }]) assert.throws(() => createOpenapi({ document: doc, ...bad }));
   assert.deepEqual(createOpenapi({ document: doc, port: 0 }).servers, [{ url: '/' }]);
-  model.models.Item.api = ['openapi'];
+  model.models.Item.api = ['rest'];
   const only = await facadeFor(model);
   assert.ok((await only.openapi()).paths['/items']);
   await assert.rejects(() => only.graphql(), /No models/);
   model.models.Item.api = [];
   const internal = await facadeFor(model, { openapi: undefined, graphql: undefined });
   const server = internal.fastify();
-  assert.equal((await server.inject('/items')).statusCode, 200);
+  assert.equal((await server.inject('/items')).statusCode, 404);
   await server.close();
 });
 
@@ -146,9 +146,8 @@ test('rejects disabled API targets, operation/type collisions, and sort enum col
   const models = {
     models: { A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B' } } }, B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true } } } },
   };
-  let facade = await facadeFor(models);
-  await assert.rejects(() => facade.openapi(), /does not enable/);
-  await assert.rejects(() => facade.graphql(), /does not enable/);
+  await assert.rejects(() => facadeFor(models), /does not enable rest/);
+  let facade;
   for (const name of ['Error', 'Pager', 'ItemPage', 'ItemCreate']) {
     const model = definition({});
     model.models[name] = { collection: `other${name}`, fields: { id: { type: 'string', primary: true } } };

@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.1`.
+To install this release candidate, use `@1.0.0-rc.2`.
 
 ## Quick start
 
@@ -46,7 +46,7 @@ Add a [model schema](#model-schema) to define relations and validation. See [que
 
 ## Configuration
 
-With `storage: 'file'`, provide paths for every source and the schema. With `'memory'`, provide data directly. Use the same mode throughout the configuration. Add `auth`, `files`, `graphql` or `openapi` to enable those features. `graphql: {}` and `openapi: {}` expose HTTP endpoints at their default paths; add `target` to export a schema.
+With `storage: 'file'`, provide paths for every source and the schema. With `'memory'`, provide data directly. Use the same mode throughout the configuration. Add `auth` or `files` to enable those REST services. Add `graphql` to configure the GraphQL endpoint and `openapi` to serve the REST specification. `graphql: {}` and `openapi: {}` use default endpoint paths; add `target` to export a schema. GraphQL must also be enabled by root `api` in the model schema.
 
 ```js
 export default {
@@ -74,7 +74,7 @@ export default {
 | `graphql.target` | GraphQL SDL export destination |
 | `openapi.endpoint` | HTTP endpoint; default `/openapi.json` |
 | `openapi.target` | OpenAPI export destination |
-| `package.source` | Project `package.json`; required when `openapi` or `graphql` is configured |
+| `package.source` | Project `package.json`; required when `openapi` is configured |
 | `server.host`, `server.port` | Defaults `127.0.0.1`, `4001`; CLI also reads `HOST`/`PORT` |
 | `server.pageSize`, `server.maxPageSize` | Defaults 10 and 100; default size is capped by the maximum |
 | `server.cors`, `server.logger` | Default `true`; logger also accepts Fastify logger options |
@@ -83,6 +83,36 @@ export default {
 `package.source` follows the storage mode. With `storage: 'file'`, pass a path to `package.json`. With `storage: 'memory'`, pass its metadata directly: `{ name: 'example-api', version: '1.0.0', description: 'Example API' }`; `name` and `version` are required, while `description` is optional.
 
 Relative paths resolve from the configuration file directory, or from the working directory with `createServer(config)`. In-memory data, including the schema and package metadata, is copied. Port `0` lets the system choose an available port.
+
+To expose the database only through GraphQL while keeping authentication and files as REST endpoints documented by OpenAPI, use:
+
+```js
+export default {
+  storage: 'file',
+  database: { source: './database.json', schema: './schema.json' },
+  auth: { source: './users.json' },
+  files: { source: './uploads' },
+  graphql: {},
+  openapi: {},
+  package: { source: './package.json' },
+};
+```
+
+Set the root `api` in `schema.json`:
+
+```json
+{
+  "api": ["graphql"],
+  "models": {
+    "Item": {
+      "collection": "items",
+      "fields": { "id": { "type": "string", "primary": true } }
+    }
+  }
+}
+```
+
+Use `"api": ["rest"]` with `openapi: {}` for REST and its OpenAPI description, or `["rest", "graphql"]` with both sections for both database APIs. The `graphql` section is required exactly when the schema root includes `graphql`. OpenAPI describes database routes only when REST is enabled; authentication and file routes are included whenever their sections are configured.
 
 ### CLI
 
@@ -103,6 +133,7 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 
 ```json
 {
+  "api": ["rest", "graphql"],
   "models": {
     "Country": {
       "collection": "countries",
@@ -144,7 +175,11 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 }
 ```
 
-Model definitions belong in `models`. The schema root accepts `models`, `timestamps` and `softDelete`, but not `api`. A model can override the global timestamp and soft-deletion settings. The `openapi` and `graphql` configuration sections enable the corresponding API. By default, every model is included in each enabled format; a model's optional `api` array can restrict this: `[]` excludes the model from GraphQL and OpenAPI while REST remains available. If no model enables a requested format, generation fails with a clear error. Related models must allow the same format. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+Model definitions belong in `models`. The schema root accepts `models`, `api`, `timestamps` and `softDelete`. Root `api` selects database routes. When omitted, it defaults to REST and also GraphQL if the server config has a `graphql` section. A model can override the global timestamp and soft-deletion settings. A model's optional `api` array can narrow access to `['rest']`, `['graphql']`, both, or `[]` to hide it from both. A model cannot enable an API absent from root `api`. OpenAPI includes models with REST enabled. GraphQL generation needs at least one GraphQL model; REST OpenAPI generation needs at least one REST model. On a GraphQL-only server, OpenAPI can still describe configured auth and file routes. Related models must allow the same API. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+
+For example, with root `api: ['rest', 'graphql']`, a model set to `api: ['rest']` has REST routes and OpenAPI paths but no GraphQL operations; a model set to `api: ['graphql']` has GraphQL operations but no REST routes or OpenAPI paths.
+
+An excluded model remains part of the database schema and its stored records are still validated. Its `api` setting controls how clients can access it.
 
 | Capability | With schema | Without schema |
 |---|---|---|
@@ -157,7 +192,7 @@ Explicit schemas are strict: undeclared fields and collections are rejected, exc
 
 Schemaless REST generates an `id` and preserves arbitrary JSON fields. Newly inferred relations are available to subsequent reads and writes without restarting the server. Filters and individual field selections use identifier-style names. `scope=[{"*":true}]` returns top-level JSON scalars; arrays and objects must be selected by name. Fields with mixed value types can be read explicitly, but filtering, ordering and paging heterogeneous lists require an explicit schema.
 
-Each model requires `collection`, the database collection and REST path name, and `fields`, its field definitions. The model name (`User`) determines GraphQL type and operation names. `api` controls format availability; `timestamps` and `softDelete` override global settings for that model.
+Each model requires `collection` (the database collection name, also used as its REST path when REST is enabled) and `fields` (field definitions). The model name (`User`) determines GraphQL type and operation names. `api` controls route availability; `timestamps` and `softDelete` override global settings for that model.
 
 ### Fields
 
@@ -359,7 +394,7 @@ Root `where` selects records from the main collection. `where` inside a relation
 
 ### REST
 
-`GET /` returns collection names: `{ "resources": ["users", "movies"] }`. Each collection has these routes:
+When REST is enabled by root `api`, `GET /` lists only REST-enabled models: `{ "resources": ["users", "movies"] }`. A GraphQL-only server has no `GET /` database route. Each REST-enabled collection has these routes:
 
 | Method | Path | Operation |
 |---|---|---|
@@ -487,7 +522,7 @@ mutation {
 
 ### GraphQL
 
-Set `database.schema` and add `graphql: {}` plus `package.source` to the configuration:
+Set `database.schema`, include `graphql` in the schema's root `api`, and add `graphql: {}` to the configuration:
 
 ```sh
 npx deep-json-server server.config.js
@@ -527,7 +562,7 @@ Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`,
 
 ## OpenAPI and schema exports
 
-Exports use OpenAPI 3.0.3. Add `openapi: {}`, `database.schema` and `package.source` to serve the specification at `/openapi.json`. Change the route with `openapi.endpoint`. OpenAPI `info.title`, `info.version` and optional `info.description` come from the configured `package.json`. Open the document in Swagger UI or import it into an API client.
+Exports use OpenAPI 3.0.3. Add `openapi: {}`, `database.schema` and `package.source` to serve the specification at `/openapi.json`. Change the route with `openapi.endpoint`. Database paths appear only for REST-enabled models; a GraphQL-only database can still produce a document for configured auth and file routes. OpenAPI `info.title`, `info.version` and optional `info.description` come from the configured `package.json`. Open the document in Swagger UI or import it into an API client.
 
 Set output paths to save schemas:
 
@@ -546,7 +581,7 @@ npx deep-json-server server.config.js --generate-only
 npx deep-json-server server.config.js --generate
 ```
 
-`--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `target`. Missing sections, missing targets or generation errors fail the command before server startup.
+`--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `target`. The OpenAPI HTTP endpoint returns JSON; file exports from `writeOpenapi()` and the CLI are YAML. Missing sections, missing targets or generation errors fail the command before server startup.
 
 Export does not open the database, user records or files. Every selected `target` is checked before writing and cannot overwrite the configuration, database, schema, users, counters or file metadata.
 
@@ -655,7 +690,7 @@ query {
 
 `actions` is available on root and related model records, including mutation results. It cannot be written, filtered or ordered. Plain embedded objects and auth user responses do not receive it.
 
-OpenAPI describes auth routes, optional Bearer authentication on record reads, required authentication on record changes and the `actions` response field. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when reading permissions or changing records. GraphQL and OpenAPI require `database.schema`.
+When `openapi` is configured, its document describes auth routes, optional Bearer authentication on record reads, required authentication on record changes and the `actions` response field. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when reading permissions or changing records. GraphQL and OpenAPI require `database.schema`.
 
 ## Record dates, deletion and ownership
 
@@ -719,7 +754,7 @@ REST returns 401 for an invalid or missing token and 403 for insufficient permis
 
 ## Files
 
-Files are available through REST and documented in OpenAPI. Add storage to the configuration:
+Files are available through REST and appear in the OpenAPI document when `openapi` is configured. Add storage to the configuration:
 
 ```js
 export default {
@@ -810,7 +845,9 @@ await server.listen();
 
 The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup.
 
-`createServer(config)` takes the same configuration object as the CLI. When `openapi` or `graphql` is configured, `package.source` is required. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
+`createServer(config)` takes the same configuration object as the CLI. When `openapi` is configured, `package.source` is required. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
+
+The returned Fastify instance accepts standard `listen()` options, including a Unix socket path. Calling `listen()` without options uses `server.host` and `server.port`.
 
 The root import `@kollors/deep-json-server` also provides these functions. Server adapters load when enabled. Generators can be used independently:
 
@@ -824,7 +861,7 @@ await writeOpenapi(document, './generated/openapi.yaml');
 await writeGraphql(sdl, './generated/schema.graphql');
 ```
 
-Standalone generators accept a schema path or object without a server configuration. The selected function supplies the default format; a model's `api` setting can restrict it. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership and `actions` fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
+Standalone generators accept a schema path or object without a server configuration. If root `api` is omitted, `generateOpenapi()` defaults it to REST and `generateGraphql()` to GraphQL. Explicit root and model `api` values still apply; the selected format must have an enabled model. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership and `actions` fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
 `generateOpenapi()` requires `packagePath` and also accepts `host`, `port`, `pageSize` and `maxPageSize`. It reads OpenAPI metadata from that package. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 

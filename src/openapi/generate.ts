@@ -9,11 +9,15 @@ import type { OpenapiDocument } from './types.js';
  * @example Модель с коллекцией notes → документ с paths['/notes'].
  */
 export function openapiFromModel(model: Model | undefined, options: OpenapiDocumentOptions): OpenapiDocument {
-  assertApi(model, 'openapi');
+  if (options.database !== false) assertApi(model, 'openapi');
   const auth = getBoolean(options.auth, 'auth');
   const files = getBoolean(options.files, 'files');
   const info = normalizeOpenapiInfo(options.info);
-  return createOpenapi({ document: buildOpenapiDocument({ model, auth, files, info, pageSize: options.pageSize, maxPageSize: options.maxPageSize }), host: options.host, port: options.port });
+  return createOpenapi({
+    document: buildOpenapiDocument({ model, database: options.database, auth, files, info, pageSize: options.pageSize, maxPageSize: options.maxPageSize }),
+    host: options.host,
+    port: options.port,
+  });
 }
 /** Загружает описание из объекта или файла и возвращает документ спецификации.
  * @example Корректное описание → Promise<OpenapiDocument> с openapi: '3.0.3'.
@@ -21,7 +25,7 @@ export function openapiFromModel(model: Model | undefined, options: OpenapiDocum
 export async function generateOpenapi(schema: ModelSchema | string, options: OpenapiOptions): Promise<OpenapiDocument> {
   assertKnownKeys(options, new Set(['auth', 'files', 'host', 'port', 'pageSize', 'maxPageSize', 'packagePath']), 'options');
   const { packagePath, ...documentOptions } = options;
-  return openapiFromModel(await loadModel(schema, { auth: options.auth, api: ['openapi'] }), { ...documentOptions, info: projectPackageToOpenapiInfo(await loadProjectPackage(packagePath)) });
+  return openapiFromModel(await loadModel(schema, { auth: options.auth, api: ['rest'] }), { ...documentOptions, info: projectPackageToOpenapiInfo(await loadProjectPackage(packagePath)) });
 }
 
 /** Строит HTTP-адрес, оборачивая IPv6 в квадратные скобки; нулевой порт даёт относительный адрес.

@@ -57,20 +57,22 @@ function toOpenapi(schema: ValidationSchema): OpenapiSchema {
  */
 export function buildOpenapiDocument({
   model,
+  database = true,
   files = false,
   auth = false,
   pageSize,
   maxPageSize,
   info = { title: 'Deep JSON Server API', version: VERSION },
 }: {
-  model: Model;
+  model: Model | undefined;
+  database?: boolean;
   files?: boolean;
   auth?: boolean;
   pageSize?: number;
   maxPageSize?: number;
   info?: OpenapiInfo;
 }): OpenapiDocument {
-  assertApi(model, 'openapi');
+  if (database) assertApi(model, 'openapi');
   ({ pageSize, maxPageSize } = normalizePagination({ pageSize, maxPageSize }));
   const registry = new OpenapiRegistry({
     Error: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] },
@@ -241,7 +243,7 @@ export function buildOpenapiDocument({
   }
   const paths: OpenapiDocument['paths'] = {};
   const operations = new Set<string>();
-  for (const entity of model.entities.filter((e) => e.api.includes('openapi'))) {
+  for (const entity of database ? (model?.entities ?? []).filter((e) => e.api.includes('rest')) : []) {
     const name = entity.name;
     const op = operationName(entity);
     for (const { mode, hasBody } of MUTATIONS) {
@@ -320,7 +322,7 @@ export function buildOpenapiDocument({
       schemas[name] = structuredClone(schema);
     }
     for (const [path, item] of Object.entries(authOpenapiPaths())) {
-      if (paths[path] || model.entities.some((entity) => path.startsWith(`/${entity.collection}/`))) throw new Error(`Auth path collision: ${path}`);
+      if (paths[path] || (database && model?.entities.some((entity) => path.startsWith(`/${entity.collection}/`)))) throw new Error(`Auth path collision: ${path}`);
       for (const operation of Object.values(item)) {
         const id = operation.operationId;
         if (operations.has(id)) throw new Error(`OpenAPI operation collision: ${id}`);
