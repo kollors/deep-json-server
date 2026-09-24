@@ -263,17 +263,27 @@ test('custom primary keys use the model key and require generated keys for neste
   assert.equal((await get(app, '/countries')).total, 1);
 });
 
-test('required and protected relation keys reject disconnects atomically', async (t) => {
+test('required list relations accept empty arrays but reject missing source keys', async (t) => {
   const requiredModel = structuredClone(model);
   requiredModel.models.Movie.fields.genres.required = true;
+  const missingData = structuredClone(data);
+  delete missingData.movies[0].genreIds;
+  await assert.rejects(() => setup(t, requiredModel, missingData), /Required relation Movie.genres is missing/);
   const { app } = await setup(t, requiredModel);
-  for (const [method, body] of [
-    ['PATCH', { genres: [] }],
-    ['PUT', { title: 'missing relation' }],
-  ]) {
-    assert.equal((await mutate(app, method, body)).statusCode, 400);
-    assert.equal((await get(app, '/movies/1')).title, 'original');
-  }
+  const empty = await mutate(app, 'PATCH', { genres: [] }, '/movies/1', [{ genreIds: true, genres: [{ id: true }] }]);
+  assert.equal(empty.statusCode, 200, empty.body);
+  assert.deepEqual(empty.json().genreIds, []);
+  assert.equal(empty.json().genres.total, 0);
+  const graph = await gql(app, 'mutation { movieUpdate(id:1,data:{genres:[]}) { genres { total } } }');
+  assert.equal(graph.json().errors, undefined, graph.body);
+  assert.equal(graph.json().data.movieUpdate.genres.total, 0);
+  const missing = await mutate(app, 'PUT', { title: 'missing relation' });
+  assert.equal(missing.statusCode, 400, missing.body);
+  assert.equal((await get(app, '/movies/1')).title, 'original');
+  const nestedEmpty = await mutate(app, 'PATCH', { actors: [{ userId: 1, genreIds: [] }] });
+  assert.equal(nestedEmpty.statusCode, 200, nestedEmpty.body);
+  const nestedMissing = await mutate(app, 'PATCH', { actors: [{ userId: 1 }] });
+  assert.equal(nestedMissing.statusCode, 400, nestedMissing.body);
   const schema = {
     models: { A: { collection: 'a', fields: { id: primary, locked: { type: 'number', readOnly: true }, other: { type: 'B', source: 'locked' } } }, B: { collection: 'b', fields: { id: primary } } },
   };

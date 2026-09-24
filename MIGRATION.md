@@ -1,4 +1,4 @@
-# Migrating from 0.9.0 to 1.0.0-rc.4
+# Migrating from 0.9.0 to 1.0.0-rc.5
 
 Version 1.0 changes configuration and request syntax. Update the server configuration and client requests together. Back up any file database, auth records, and file metadata before changing the running server.
 
@@ -6,7 +6,7 @@ Version 1.0 changes configuration and request syntax. Update the server configur
 
 Declare a storage mode and use `source` for each enabled component:
 
-| 0.9.0 | 1.0.0-rc.4 |
+| 0.9.0 | 1.0.0-rc.5 |
 |---|---|
 | `database.path` | `storage: 'file'`, `database.source` |
 | `database.data` | `storage: 'memory'`, `database.source` |

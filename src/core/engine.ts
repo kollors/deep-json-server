@@ -11,7 +11,7 @@ import { MutationWriter } from './mutations/write.js';
 import type { MutationMode } from './operations.js';
 import { executeList, type Page, type PreparedList, prepareList } from './query/execute.js';
 import type { ListOptions } from './query/options.js';
-import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourceValues } from './records.js';
+import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourcePresent, sourceValues } from './records.js';
 import type { DatabaseData, DatabaseSnapshot, JsonObject, RecordSnapshot } from './types.js';
 import { defined, isObject } from './utils.js';
 
@@ -85,7 +85,9 @@ export class Engine {
         if (node.relation) {
           const matches = related(ref, node).filter((match) => !match.entity.softDelete || match.value.deletedAt == null);
           if (!node.many && matches.length > 1) throw domainError('INVALID_INPUT', `Multiple targets for ${ref.entity.name}.${node.path}`);
-          if (node.required && !matches.length) throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is empty`);
+          if (node.required && !node.many && !matches.length) throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is empty`);
+          if (node.required && node.many && !isReverseRelation(ref.entity, node) && ref.entity.fields[node.source]?.many && !sourcePresent(ref, node))
+            throw domainError('INVALID_INPUT', `Required relation ${ref.entity.name}.${node.path} is missing`);
           const values = sourceValues(ref, node);
           if (!isReverseRelation(ref.entity, node) && values.some((value) => !matches.some((match) => readPath(match.value, node.target).some((target) => keyOf(target) === keyOf(value)))))
             throw domainError('INVALID_INPUT', `Dangling relation ${ref.entity.name}.${node.path}`);

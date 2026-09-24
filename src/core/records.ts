@@ -39,6 +39,18 @@ export function sourceValues(ref: Ref, node: Node): unknown[] {
   const binding = bindingFor(ref.bindings, path);
   return binding ? readPath(ref.bindings[binding], path === binding ? [] : path.slice(binding.length + 1)) : readPath(ref.root, path);
 }
+/** Проверяет наличие ключа прямой связи, отличая пустой массив от отсутствующего поля. */
+export function sourcePresent(ref: Ref, node: Node): boolean {
+  const path = requireRelation(node).source;
+  const binding = bindingFor(ref.bindings, path);
+  const parts = (binding ? (path === binding ? '' : path.slice(binding.length + 1)) : path).split('.').filter(Boolean);
+  const present = (value: unknown, remaining: string[]): boolean => {
+    if (Array.isArray(value)) return value.every((item) => present(item, remaining));
+    const [head, ...tail] = remaining;
+    return head === undefined || (isObject(value) && Object.hasOwn(value, head) && present(value[head], tail));
+  };
+  return present(binding ? ref.bindings[binding] : ref.root, parts);
+}
 /** Находит связанные записи по сопоставленным ключам и кеширует индекс в контексте; убирает повторы.
  * @example Ключи [1, 1, 2] при двух совпавших записях → две ссылки на записи.
  */

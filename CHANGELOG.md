@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0-rc.5
+
+- Make `required` on list relations consistent with stored arrays: empty lists are valid, while list relations backed by an array of source keys still require that array to be present. Computed lists may be empty.
+
 ## 1.0.0-rc.4
 
 - Prevent concurrent servers from writing to the same file-backed database and recover its lock after a process crash, using built-in Node.js APIs.

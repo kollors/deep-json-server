@@ -210,20 +210,23 @@ test('custom protected source keys support reverse PUT clearing and PATCH preser
   }
 });
 
-test('required reverse relations with custom keys cannot be cleared', async (t) => {
+test('required reverse list relations can be empty in REST and GraphQL', async (t) => {
   const schema = {
     models: {
       Parent: { collection: 'parents', fields: { id: primary, code: { type: 'string', readOnly: true }, children: { type: 'Child[]', source: 'code', target: 'parentCode', required: true } } },
       Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
     },
   };
-  const { app } = await setup(t, schema, { parents: [{ id: 1, code: 'P' }], children: [{ id: 1, parentCode: 'P' }] });
-  for (const payload of [{}, { children: [] }]) {
-    const result = await app.inject({ method: 'PUT', url: '/parents/1', payload });
-    assert.equal(result.statusCode, 400, result.body);
-    assert.match(result.json().error, /Required relation/);
-    assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, 'P');
-  }
+  const { app } = await setup(t, schema, { parents: [{ id: 1, code: 'P' }], children: [{ id: 1, parentCode: 'P' }] }, true);
+  const result = await app.inject({ method: 'PUT', url: url('/parents/1', [{ children: [{ id: true }] }]), payload: { children: [] } });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.equal(result.json().children.total, 0);
+  assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, null);
+  const relink = await app.inject({ method: 'PATCH', url: '/parents/1', payload: { children: [{ id: 1 }] } });
+  assert.equal(relink.statusCode, 200, relink.body);
+  const graph = await app.inject({ method: 'POST', url: '/graphql', payload: { query: 'mutation {parentReplace(id:1,data:{}){children{total}}}' } });
+  assert.equal(graph.json().errors, undefined, graph.body);
+  assert.equal(graph.json().data.parentReplace.children.total, 0);
 });
 
 test('transaction key indexes see earlier creates and do not outlive rolled back writes', async (t) => {
