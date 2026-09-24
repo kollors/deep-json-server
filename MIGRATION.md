@@ -1,4 +1,4 @@
-# Migrating from 0.9.0 to 1.0.0-rc.5
+# Migrating from 0.9.0 to 1.0.0-rc.6
 
 Version 1.0 changes configuration and request syntax. Update the server configuration and client requests together. Back up any file database, auth records, and file metadata before changing the running server.
 
@@ -6,7 +6,7 @@ Version 1.0 changes configuration and request syntax. Update the server configur
 
 Declare a storage mode and use `source` for each enabled component:
 
-| 0.9.0 | 1.0.0-rc.5 |
+| 0.9.0 | 1.0.0-rc.6 |
 |---|---|
 | `database.path` | `storage: 'file'`, `database.source` |
 | `database.data` | `storage: 'memory'`, `database.source` |
@@ -15,6 +15,14 @@ Declare a storage mode and use `source` for each enabled component:
 | `openapi.path` | `openapi.target` |
 
 The `storage` mode applies to the database, schema, auth records, files, and package metadata. GraphQL and OpenAPI require a model schema; OpenAPI also requires `package.source`. The schema format has changed: define models under `models`, with a `collection`, fields, and one primary key per model. Use root `api` to enable REST, GraphQL, or both for the database; a model's optional `api` array can narrow that choice. Start with the [current schema example](examples/schema.json), then validate your existing records against it. The [configuration example](examples/server.config.js) shows all required paths.
+
+## Relation declarations
+
+Current schemas require each explicit relation in both models and `keyOn` on each relation field. Use `current` where the stored key lives and `related` on the inverse. For example, `User.country = {"type":"Country","keyOn":"current"}` pairs with `Country.users = {"type":"User[]","keyOn":"related"}`. The server infers `User.countryId` referencing the primary key of `Country`, even if `countryId` is omitted from `fields`; existing records still keep their stored keys.
+
+Previously, a relation could be declared on only one side, and `source` defaulted to the current model's primary key. Add the inverse declaration and review any relation that relied on that default. A list such as `Genre.parents` now infers `parentIds` from the relation name, while `Genre.children` with `keyOn: "related"` reads the same key. Keep explicit `source` or `target` for custom key paths. If multiple relations connect the same two models, specify the inverse `target` to pair each one unambiguously. Missing or ambiguous pairs now fail during schema loading.
+
+Omitting a `related` inverse field from `PUT` leaves its links unchanged, because their keys are stored in other records. Supply the inverse field explicitly when replacing those links, for example `"users": []` to detach all users from a country.
 
 ## CLI
 

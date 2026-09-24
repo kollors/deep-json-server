@@ -19,9 +19,22 @@ const model = {
         state: { type: 'string', default: 'new' },
         stamp: { type: 'string', readOnly: true, default: 'server' },
         token: { type: 'string', generated: 'uuid' },
+        movies: { type: 'Movie[]', keyOn: 'related', target: 'genreIds' },
+        actorMovies: { type: 'Movie[]', keyOn: 'related', target: 'actors.genreIds' },
       },
     },
-    User: { collection: 'users', fields: { id: primary, name: { type: 'string', required: true }, role: { type: 'string', default: 'guest' }, password: { type: 'string', writeOnly: true } } },
+    User: {
+      collection: 'users',
+      fields: {
+        id: primary,
+        name: { type: 'string', required: true },
+        role: { type: 'string', default: 'guest' },
+        password: { type: 'string', writeOnly: true },
+        userMovies: { type: 'Movie[]', keyOn: 'related', target: 'userIds' },
+        ownedMovies: { type: 'Movie[]', keyOn: 'related', target: 'ownerId' },
+        movies: { type: 'Movie[]', keyOn: 'related', target: 'actors.userId' },
+      },
+    },
     Movie: {
       collection: 'movies',
       fields: {
@@ -31,14 +44,14 @@ const model = {
         genreIds: { type: 'number[]' },
         userIds: { type: 'number[]' },
         ownerId: { type: 'number', nullable: true },
-        genres: { type: 'Genre[]', source: 'genreIds' },
-        users: { type: 'User[]', source: 'userIds' },
-        owner: { type: 'User', source: 'ownerId', nullable: true },
+        genres: { type: 'Genre[]', keyOn: 'current', source: 'genreIds' },
+        users: { type: 'User[]', keyOn: 'current', source: 'userIds' },
+        owner: { type: 'User', keyOn: 'current', source: 'ownerId', nullable: true },
         actors: { type: 'object[]' },
         'actors.userId': { type: 'number' },
         'actors.genreIds': { type: 'number[]' },
-        'actors.user': { type: 'User', source: 'actors.userId', required: true },
-        'actors.genres': { type: 'Genre[]', source: 'actors.genreIds', required: true },
+        'actors.user': { type: 'User', keyOn: 'current', source: 'actors.userId', required: true },
+        'actors.genres': { type: 'Genre[]', keyOn: 'current', source: 'actors.genreIds', required: true },
       },
     },
   },
@@ -211,15 +224,20 @@ test('GraphQL nested input keeps PUT/PATCH semantics and creates records without
 
 const reverseModel = (array = false, required = false) => ({
   models: {
-    Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string', required: true }, children: { type: 'Child[]', target: array ? 'parentIds' : 'parentId' } } },
+    Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string', required: true }, children: { type: 'Child[]', keyOn: 'related', target: array ? 'parentIds' : 'parentId' } } },
     Child: {
       collection: 'children',
-      fields: { id: primary, name: { type: 'string', required: true }, [array ? 'parentIds' : 'parentId']: { type: array ? 'number[]' : 'number', required, nullable: !array } },
+      fields: {
+        id: primary,
+        name: { type: 'string', required: true },
+        [array ? 'parentIds' : 'parentId']: { type: array ? 'number[]' : 'number', required, nullable: !array },
+        parent: { type: array ? 'Parent[]' : 'Parent', keyOn: 'current', source: array ? 'parentIds' : 'parentId' },
+      },
     },
   },
 });
 
-test('reverse links attach new records and replace only the selected parent membership', async (t) => {
+test('reverse links attach new records and keep omitted links on parent replacement', async (t) => {
   const { app } = await setup(t, reverseModel(true), {
     parents: [
       { id: 1, name: 'one' },
@@ -234,6 +252,9 @@ test('reverse links attach new records and replace only the selected parent memb
   assert.equal((await mutate(app, 'PATCH', { name: 'changed' }, '/parents/1')).statusCode, 200);
   assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2, 1]);
   assert.equal((await mutate(app, 'PUT', { name: 'replaced' }, '/parents/1')).statusCode, 200);
+  assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2, 1]);
+  assert.deepEqual((await get(app, url('/children/2', [{ '*': true, parentIds: true }]))).parentIds, [1]);
+  assert.equal((await mutate(app, 'PUT', { name: 'replaced', children: [] }, '/parents/1')).statusCode, 200);
   assert.deepEqual((await get(app, url('/children/1', [{ '*': true, parentIds: true }]))).parentIds, [2]);
   assert.deepEqual((await get(app, url('/children/2', [{ '*': true, parentIds: true }]))).parentIds, []);
   assert.equal((await get(app, '/children')).total, 2);
@@ -251,8 +272,11 @@ test('reverse scalar keys can be supplied by a nested parent creation', async (t
 test('custom primary keys use the model key and require generated keys for nested creation', async (t) => {
   const schema = {
     models: {
-      Country: { collection: 'countries', fields: { code: { type: 'string', primary: true }, name: { type: 'string', required: true } } },
-      User: { collection: 'users', fields: { id: primary, country: { type: 'Country', source: 'countryCode' } } },
+      Country: {
+        collection: 'countries',
+        fields: { code: { type: 'string', primary: true }, name: { type: 'string', required: true }, users: { type: 'User[]', keyOn: 'related', target: 'countryCode' } },
+      },
+      User: { collection: 'users', fields: { id: primary, country: { type: 'Country', keyOn: 'current', source: 'countryCode' } } },
     },
   };
   const { app } = await setup(t, schema, { countries: [{ code: 'US', name: 'old' }], users: [{ id: 1, countryCode: 'US' }] });
@@ -285,7 +309,10 @@ test('required list relations accept empty arrays but reject missing source keys
   const nestedMissing = await mutate(app, 'PATCH', { actors: [{ userId: 1 }] });
   assert.equal(nestedMissing.statusCode, 400, nestedMissing.body);
   const schema = {
-    models: { A: { collection: 'a', fields: { id: primary, locked: { type: 'number', readOnly: true }, other: { type: 'B', source: 'locked' } } }, B: { collection: 'b', fields: { id: primary } } },
+    models: {
+      A: { collection: 'a', fields: { id: primary, locked: { type: 'number', readOnly: true }, other: { type: 'B', keyOn: 'current', source: 'locked' } } },
+      B: { collection: 'b', fields: { id: primary, as: { type: 'A[]', keyOn: 'related', target: 'locked' } } },
+    },
   };
   const protectedServer = await setup(t, schema, { a: [{ id: 1, locked: 1 }], b: [{ id: 1 }, { id: 2 }] });
   const result = await mutate(protectedServer.app, 'PATCH', { other: 2 }, '/a/1');
@@ -296,7 +323,6 @@ test('required list relations accept empty arrays but reject missing source keys
 
 test('reverse paths through arrays require an unambiguous target and preserve other links', async (t) => {
   const schema = structuredClone(model);
-  schema.models.User.fields.movies = { type: 'Movie[]', target: 'actors.userId' };
   const initial = structuredClone(data);
   initial.users.push({ id: 3, name: 'third' });
   initial.movies[0].actors = [
@@ -335,7 +361,7 @@ test('reverse paths through arrays require an unambiguous target and preserve ot
 test('nested source bindings work below multiple levels of arrays', async (t) => {
   const schema = {
     models: {
-      Genre: model.models.Genre,
+      Genre: { ...model.models.Genre, fields: { id: primary, name: { type: 'string', required: true }, groupMovies: { type: 'Movie[]', keyOn: 'related', target: 'groups.actors.genreIds' } } },
       Movie: {
         collection: 'movies',
         fields: {
@@ -343,7 +369,7 @@ test('nested source bindings work below multiple levels of arrays', async (t) =>
           groups: { type: 'object[]' },
           'groups.actors': { type: 'object[]' },
           'groups.actors.genreIds': { type: 'number[]' },
-          'groups.actors.genres': { type: 'Genre[]', source: 'groups.actors.genreIds' },
+          'groups.actors.genres': { type: 'Genre[]', keyOn: 'current', source: 'groups.actors.genreIds' },
         },
       },
     },
@@ -364,8 +390,11 @@ test('nested source bindings work below multiple levels of arrays', async (t) =>
 test('custom target keys reject ambiguous matches without modifying other records', async (t) => {
   const schema = {
     models: {
-      Owner: { collection: 'owners', fields: { id: primary, targetCode: { type: 'string' }, target: { type: 'Target', source: 'targetCode', target: 'code' } } },
-      Target: { collection: 'targets', fields: { id: primary, code: { type: 'string', required: true }, name: { type: 'string' } } },
+      Owner: { collection: 'owners', fields: { id: primary, targetCode: { type: 'string' }, target: { type: 'Target', keyOn: 'current', source: 'targetCode', target: 'code' } } },
+      Target: {
+        collection: 'targets',
+        fields: { id: primary, code: { type: 'string', required: true }, name: { type: 'string' }, owners: { type: 'Owner[]', keyOn: 'related', source: 'code', target: 'targetCode' } },
+      },
     },
   };
   const { app } = await setup(t, schema, {
@@ -388,7 +417,14 @@ test('nested GraphQL errors and excessive depth do not persist partial writes', 
   const failed = await gql(app, 'mutation { movieUpdate(id:1,data:{genres:[{name:"rolled back"},{id:999}]}){id} }');
   assert.equal(failed.json().errors[0].extensions.code, 'NOT_FOUND');
   assert.equal((await get(app, '/genres')).total, 2);
-  const cyclicModel = { models: { Node: { collection: 'nodes', fields: { id: primary, childIds: { type: 'number[]' }, children: { type: 'Node[]', source: 'childIds' } } } } };
+  const cyclicModel = {
+    models: {
+      Node: {
+        collection: 'nodes',
+        fields: { id: primary, childIds: { type: 'number[]' }, children: { type: 'Node[]', keyOn: 'current', source: 'childIds' }, parents: { type: 'Node[]', keyOn: 'related', target: 'childIds' } },
+      },
+    },
+  };
   const cyclic = await setup(t, cyclicModel, { nodes: [{ id: 1 }] });
   const tooDeep = Array.from({ length: 34 }).reduce((node) => ({ children: [node] }), {});
   const response = await mutate(cyclic.app, 'PATCH', tooDeep, '/nodes/1');

@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.5`.
+To install this release candidate, use `@1.0.0-rc.6`.
 
 ## Quick start
 
@@ -151,7 +151,7 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
         },
         "users": {
           "type": "User[]",
-          "target": "countryId"
+          "keyOn": "related"
         }
       }
     },
@@ -169,7 +169,7 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
         },
         "country": {
           "type": "Country",
-          "source": "countryId"
+          "keyOn": "current"
         }
       }
     }
@@ -213,7 +213,7 @@ The `type` property accepts `string`, `number`, `boolean`, `object`, or a model 
 | `minLength`, `maxLength`, `pattern` | String constraints |
 | `format` | `date`, `date-time`, `email`, `uri`, `uuid` |
 | `minimum`, `maximum` | Inclusive numeric bounds |
-| `source`, `target`, `onDelete` | Relation metadata |
+| `keyOn`, `source`, `target`, `onDelete` | Relation metadata |
 
 String and numeric constraints on `string[]`/`number[]` apply to every element. `required` and `nullable` apply to the entire array; `default` and `example` contain a complete array. Elements must match the array's type and be non-null. `required` requires a stored array field to be present but does not require any elements.
 
@@ -231,26 +231,33 @@ Objects used in GraphQL must have at least one field visible in responses; REST 
 {
   "actors.genres": {
     "type": "Genre[]",
+    "keyOn": "current",
     "source": "actors.genreIds",
     "required": true
   }
 }
 ```
 
-`Genre` returns an object; `Genre[]` returns a list. `source` defaults to the current model's primary key, `target` to the target model's primary key. These defaults also apply to nested relations. Paths start at the root of their respective records: in this example, `actors.genreIds` contains the current actor's genre keys.
+`Genre` returns an object; `Genre[]` returns a list. Every explicit relation needs a matching declaration on the other model. Both declarations require `keyOn`: `current` marks the side that stores the key, and `related` marks its inverse. The pair must contain one of each. For this example, add `Genre.movies = {"type":"Movie[]","keyOn":"related","target":"actors.genreIds"}`.
+
+On the `current` side, `target` defaults to the related model's primary key. `source` defaults to the relation field name plus that target key: `User.country` → `User.countryId`; a list uses the singular field name and a plural key: `Genre.parents` → `Genre.parentIds`. Thus `Genre.parents = {"type":"Genre[]","keyOn":"current"}` and `Genre.children = {"type":"Genre[]","keyOn":"related"}` share `Genre.parentIds`. Nested relations keep their parent path: `Movie.actors.genres` → `Movie.actors.genreIds`. A custom primary key also changes the suffix: `Movie.publishers` targeting `Publisher.ref` → `Movie.publisherRefs`.
+
+`source` is always a path in the current model, and `target` is always a path in the model named by `type`. For an inverse relation, the paths are swapped: `Country.users` has `source: "id"` and `target: "countryId"`. Specify a path when the stored key has a custom name. If multiple relations connect the same models, disambiguate the inverse declarations, for example `Country.birthUsers = {"type":"User[]","keyOn":"related","target":"birthCountryId"}` and `Country.residenceUsers = {"type":"User[]","keyOn":"related","target":"residenceCountryId"}`. Missing, inconsistent, or ambiguous pairs fail when the schema loads.
 
 Relation keys remain in the database even when they are absent from `fields`. A `source` field pointing to a target primary key can be omitted: the server infers an array of keys for a list relation or a scalar key for a single relation. An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available. Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
 
-Reverse example: `User.movies = {"type":"Movie[]","target":"actors.userId"}`. A movie is returned once even if several actors match. A single relation that matches multiple records causes an error.
+Reverse example: `User.movies = {"type":"Movie[]","keyOn":"related","target":"actors.userId"}` pairs with `Movie.actors.user = {"type":"User","keyOn":"current","source":"actors.userId"}`. A movie is returned once even if several actors match. A single relation that matches multiple records causes an error.
 
 Every directly supplied, explicitly declared relation key must point to an existing record. `required: true` on a single relation requires a target. On a list relation backed by its own array of source keys, it requires that array to be present, but `[]` is valid. A list computed without its own source-key array, including a reverse relation, is always available and may be empty even with `required: true`. Missing single relations return `null`.
+
+Omitting a `related` relation from `PUT` leaves its existing links unchanged, because those keys live in other records. Supply the relation explicitly to replace its links; for example, `"users": []` removes every user from that country's inverse list.
 
 `onDelete` describes what happens **when a target record is deleted**:
 
 - `restrict` (default): refuse deletion while a retained record refers to the target.
 - `cascade`: delete the referring record. For `User.country`, deleting the country deletes its users. For `Movie.actors.user`, deleting the user removes matching actor elements and retains the movie.
 
-Cascading deletion runs as one operation, including cyclic relations. A validation failure cancels the entire operation. `onDelete` rules also apply to explicitly declared reverse relations; account for both rules when defining both directions.
+Cascading deletion runs as one operation, including cyclic relations. A validation failure cancels the entire operation. A `related` inverse without `onDelete` does not restrict deletion merely because the other side stores a key; set `onDelete` on that inverse to define an additional rule.
 
 ## Example database
 

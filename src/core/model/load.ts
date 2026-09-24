@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { recordOptions } from '../lifecycle/options.js';
-import { assertKnownKeys, isObject, isSafeKey } from '../utils.js';
+import { assertKnownKeys, isObject, isSafeKey, singularize } from '../utils.js';
 import { addField, fieldAt, linkRelation, markRelationKeys, NAME, newNode, pathParts, systemFields } from './tree.js';
 import type { ApiFormat, Entity, Field, Model, ModelOptions, Node, RelationNode } from './types.js';
 import { createValidator, entityValidators, valueSchema } from './validation.js';
@@ -33,6 +33,7 @@ const FIELD_KEYS = new Set([
   'maximum',
   'source',
   'target',
+  'keyOn',
   'onDelete',
 ]);
 /** Проверяет свойства описания поля и совместимость ограничений с его типом.
@@ -44,6 +45,7 @@ function checkField(path: string, field: unknown): asserts field is Field {
   if (typeof field.type !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*(\[\])?$/.test(field.type)) throw new Error(`Invalid type at ${path}`);
   for (const key of ['required', 'nullable', 'primary', 'readOnly', 'writeOnly']) if (field[key] !== undefined && typeof field[key] !== 'boolean') throw new Error(`${path}.${key} must be boolean`);
   for (const key of ['description', 'pattern', 'source', 'target']) if (field[key] !== undefined && typeof field[key] !== 'string') throw new Error(`${path}.${key} must be string`);
+  if (field.keyOn !== undefined && field.keyOn !== 'current' && field.keyOn !== 'related') throw new Error(`${path}.keyOn must be current or related`);
   for (const key of ['minLength', 'maxLength', 'minimum', 'maximum'])
     if (field[key] !== undefined && (typeof field[key] !== 'number' || !Number.isFinite(field[key]))) throw new Error(`${path}.${key} must be finite`);
   for (const key of ['minLength', 'maxLength'])
@@ -114,19 +116,47 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
     model.byName.set(name, entity);
     model.byCollection.set(entity.collection, entity);
   }
+  const relations: Array<{ entity: Entity; node: Node; target: Entity }> = [];
   for (const entity of model.entities)
     for (const node of Object.values(entity.fields)) {
       if (PRIMITIVES.has(node.base)) {
-        if (node.source !== undefined || node.target !== undefined || node.onDelete !== undefined) throw new Error(`${entity.name}.${node.path}: relation metadata on primitive`);
+        if (node.source !== undefined || node.target !== undefined || node.keyOn !== undefined || node.onDelete !== undefined)
+          throw new Error(`${entity.name}.${node.path}: relation metadata on primitive`);
         continue;
       }
       const target = model.byName.get(node.base);
       if (!target) throw new Error(`Unknown model ${node.base}`);
       if (node.generated || node.default !== undefined || node.enum || node.primary || node.readOnly || node.writeOnly) throw new Error(`${entity.name}.${node.path}: invalid relation options`);
-      const relation = linkRelation(node, target, node.source ?? entity.primary, node.target ?? target.primary);
-      pathParts(relation.source);
-      pathParts(relation.target);
+      if (!node.keyOn) throw new Error(`${entity.name}.${node.path}: keyOn is required for relations`);
+      relations.push({ entity, node, target });
     }
+  const current = relations.filter(({ node }) => node.keyOn === 'current');
+  const related = relations.filter(({ node }) => node.keyOn === 'related');
+  const matches = new Map<Node, Node[]>();
+  for (const direct of current) {
+    const targetKey = direct.node.target ?? direct.target.primary;
+    const fieldName = direct.node.path.split('.').at(-1) as string;
+    const prefix = direct.node.path.slice(0, direct.node.path.length - fieldName.length);
+    const name = direct.node.many ? singularize(fieldName) : fieldName;
+    const sourceKey = direct.node.source ?? `${prefix}${name}${targetKey[0]?.toUpperCase() ?? ''}${targetKey.slice(1)}${direct.node.many ? 's' : ''}`;
+    pathParts(sourceKey);
+    pathParts(targetKey);
+    const candidates = related.filter(
+      (inverse) =>
+        inverse.entity === direct.target &&
+        inverse.target === direct.entity &&
+        (inverse.node.source === undefined || inverse.node.source === targetKey) &&
+        (inverse.node.target === undefined || inverse.node.target === sourceKey),
+    );
+    if (candidates.length !== 1) throw new Error(`${direct.entity.name}.${direct.node.path}: expected exactly one matching related relation`);
+    const inverse = candidates[0] as (typeof candidates)[number];
+    matches.set(inverse.node, [...(matches.get(inverse.node) ?? []), direct.node]);
+    linkRelation(direct.node, direct.target, sourceKey, targetKey);
+    linkRelation(inverse.node, inverse.target, targetKey, sourceKey);
+  }
+  for (const inverse of related) {
+    if (matches.get(inverse.node)?.length !== 1) throw new Error(`${inverse.entity.name}.${inverse.node.path}: expected exactly one matching current relation`);
+  }
   // Выводим отсутствующие поля ключей из связей, без образцов записей.
   let pending = model.entities.flatMap((entity) =>
     Object.values(entity.fields)

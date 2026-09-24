@@ -71,11 +71,11 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
       const prefix = field.path.includes('.') ? field.path.slice(0, field.path.lastIndexOf('.') + 1) : '';
       const path = prefix + relation.relationName;
       if (!entity.fields[path]) {
-        const node = addField(entity, path, { type: target.name + (relation.isMany ? '[]' : ''), source: field.path, target: 'id' });
+        const node = addField(entity, path, { type: target.name + (relation.isMany ? '[]' : ''), keyOn: 'current', source: field.path, target: 'id' });
         linkRelation(node, target, field.path, 'id');
       }
       if (!target.fields[relation.reverseRelationName]) {
-        const reverse = addField(target, relation.reverseRelationName, { type: `${entity.name}[]`, source: 'id', target: field.path });
+        const reverse = addField(target, relation.reverseRelationName, { type: `${entity.name}[]`, keyOn: 'related', source: 'id', target: field.path });
         linkRelation(reverse, entity, 'id', field.path);
       }
     }

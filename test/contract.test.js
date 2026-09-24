@@ -378,10 +378,10 @@ test('field constraints apply per array item and PATCH does not insert defaults'
 test('required and dangling relations are validated without data coercion', async (t) => {
   const model = {
     models: {
-      Country: { collection: 'countries', fields: { code: { type: 'number', primary: true } } },
+      Country: { collection: 'countries', fields: { code: { type: 'number', primary: true }, users: { type: 'User[]', keyOn: 'related', target: 'countryCode' } } },
       User: {
         collection: 'users',
-        fields: { id: { type: 'string', primary: true, generated: 'uuid' }, countryCode: { type: 'number' }, country: { type: 'Country', source: 'countryCode', required: true } },
+        fields: { id: { type: 'string', primary: true, generated: 'uuid' }, countryCode: { type: 'number' }, country: { type: 'Country', keyOn: 'current', source: 'countryCode', required: true } },
       },
     },
   };
@@ -401,11 +401,22 @@ test('required and dangling relations are validated without data coercion', asyn
 test('cascade removes referring roots and embedded actors, and rolls back restrictions', async (t) => {
   const model = {
     models: {
-      Country: { collection: 'countries', fields: { id: { type: 'string', primary: true } } },
-      User: { collection: 'users', fields: { id: { type: 'string', primary: true }, country: { type: 'Country', source: 'countryId', onDelete: 'cascade' } } },
+      Country: { collection: 'countries', fields: { id: { type: 'string', primary: true }, users: { type: 'User[]', keyOn: 'related', target: 'countryId' } } },
+      User: {
+        collection: 'users',
+        fields: {
+          id: { type: 'string', primary: true },
+          country: { type: 'Country', keyOn: 'current', source: 'countryId', onDelete: 'cascade' },
+          movies: { type: 'Movie[]', keyOn: 'related', target: 'actors.userId' },
+        },
+      },
       Movie: {
         collection: 'movies',
-        fields: { id: { type: 'string', primary: true }, actors: { type: 'object[]', required: true }, 'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade', required: true } },
+        fields: {
+          id: { type: 'string', primary: true },
+          actors: { type: 'object[]', required: true },
+          'actors.user': { type: 'User', keyOn: 'current', source: 'actors.userId', onDelete: 'cascade', required: true },
+        },
       },
     },
   };
@@ -426,7 +437,18 @@ test('cascade removes referring roots and embedded actors, and rolls back restri
 });
 
 test('cascade cycles terminate and preserve all-or-nothing behavior', async (t) => {
-  const model = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true }, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' } } } } };
+  const model = {
+    models: {
+      Item: {
+        collection: 'items',
+        fields: {
+          id: { type: 'string', primary: true },
+          parent: { type: 'Item', keyOn: 'current', source: 'parentId', onDelete: 'cascade' },
+          children: { type: 'Item[]', keyOn: 'related', target: 'parentId' },
+        },
+      },
+    },
+  };
   const { server } = await setup(
     t,
     {
@@ -523,15 +545,22 @@ test('schemaless heterogeneous values are preserved rather than coerced to objec
 test('cascade does not restrict surviving roots through already removed embedded ancestors', async (t) => {
   const model = {
     models: {
-      User: { collection: 'users', fields: { id: { type: 'string', primary: true } } },
+      User: {
+        collection: 'users',
+        fields: {
+          id: { type: 'string', primary: true },
+          movies: { type: 'Movie[]', keyOn: 'related', target: 'actors.userId' },
+          detailMovies: { type: 'Movie[]', keyOn: 'related', target: 'actors.details.userId' },
+        },
+      },
       Movie: {
         collection: 'movies',
         fields: {
           id: { type: 'string', primary: true },
           actors: { type: 'object[]' },
-          'actors.user': { type: 'User', source: 'actors.userId', onDelete: 'cascade' },
+          'actors.user': { type: 'User', keyOn: 'current', source: 'actors.userId', onDelete: 'cascade' },
           'actors.details': { type: 'object' },
-          'actors.details.user': { type: 'User', source: 'actors.details.userId' },
+          'actors.details.user': { type: 'User', keyOn: 'current', source: 'actors.details.userId' },
         },
       },
     },
@@ -589,7 +618,7 @@ test('JSON scope applies to every mutation and cannot expose writeOnly fields', 
 });
 
 test('JSON scope retains size and depth limits', async (t) => {
-  const { server } = await setup(t, { items: [] }, simple({ peers: { type: 'Item[]', source: 'id' } }));
+  const { server } = await setup(t, { items: [] }, simple({ peers: { type: 'Item[]', keyOn: 'current', source: 'id' }, peerBack: { type: 'Item[]', keyOn: 'related', target: 'id' } }));
   for (const [size, status] of [
     [10000, 200],
     [10001, 400],

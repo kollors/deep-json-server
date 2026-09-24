@@ -43,7 +43,8 @@ test('OpenAPI preserves annotations on objects and relations', async () => {
   const schema = model({
     profile: { type: 'object', nullable: true, readOnly: true, description: 'Profile', example: { name: 'A' } },
     'profile.name': { type: 'string' },
-    related: { type: 'Item[]', source: 'id', target: 'id', description: 'Related items' },
+    related: { type: 'Item[]', keyOn: 'related', source: 'id', target: 'id', description: 'Related items' },
+    relatedBack: { type: 'Item[]', keyOn: 'current', source: 'id', target: 'id' },
   });
   const doc = await generateOpenapi(schema, { packagePath });
   const { profile, related } = doc.components.schemas.Item.properties;

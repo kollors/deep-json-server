@@ -19,7 +19,6 @@ interface Selection {
   ref: Ref<JsonObject>;
   node: RelationNode;
   value: unknown;
-  omitted: boolean;
 }
 
 /** Выполняет вложенные изменения в общем черновике транзакции. */
@@ -74,7 +73,7 @@ export class MutationWriter {
     this.active.add(record);
     try {
       const pending: Selection[] = [];
-      this.extract(rootRef(makeContext(this.database.data, this.model), entity, record), input, {}, pending, mode === 'replace', depth);
+      this.extract(rootRef(makeContext(this.database.data, this.model), entity, record), input, {}, pending, depth);
       for (const selection of pending) this.connect(selection, depth);
       return record;
     } finally {
@@ -85,17 +84,14 @@ export class MutationWriter {
   /** Удаляет виртуальные связи из черновика и собирает отдельные операции их подключения.
    * @example { user: '1' } → операция связи; одновременный userId в том же теле → ошибка.
    */
-  private extract(ref: Ref<JsonObject>, input: JsonObject, inputBindings: Record<string, JsonObject>, pending: Selection[], replace: boolean, depth: number): void {
+  private extract(ref: Ref<JsonObject>, input: JsonObject, inputBindings: Record<string, JsonObject>, pending: Selection[], depth: number): void {
     if (depth > 32) throw domainError('INVALID_INPUT', 'Nested writes are too deep');
     for (const [name, node] of Object.entries(ref.node.children)) {
       if (node.relation) {
-        const supplied = Object.hasOwn(ref.value, name);
-        // При замене разрываем пропущенные обратные связи; прямые ключи заменяются вместе с записью.
-        const omitted = !supplied && replace && isReverseRelation(ref.entity, node) && canWriteKey(node.relation, node.target);
-        if (!supplied && !omitted) continue;
-        if (supplied && node.source !== ref.entity.primary && this.slots(ref.entity, input, node.source, inputBindings).some(({ object, key }) => Object.hasOwn(object, key)))
+        if (!Object.hasOwn(ref.value, name)) continue;
+        if (node.source !== ref.entity.primary && this.slots(ref.entity, input, node.source, inputBindings).some(({ object, key }) => Object.hasOwn(object, key)))
           throw domainError('INVALID_INPUT', `Supply either ${node.path} or its source key ${node.source}`);
-        pending.push({ ref, node, value: supplied ? ref.value[name] : node.many ? [] : null, omitted });
+        pending.push({ ref, node, value: ref.value[name] });
         delete ref.value[name];
       } else if (node.base === 'object' && ref.value[name] != null && !node.readOnly) {
         const values = Array.isArray(ref.value[name]) ? (ref.value[name] as JsonValue[]) : [ref.value[name]];
@@ -110,7 +106,6 @@ export class MutationWriter {
             input,
             isObject(inputValue) ? { ...inputBindings, [node.path]: inputValue as JsonObject } : inputBindings,
             pending,
-            replace,
             depth + 1,
           );
         }
@@ -137,9 +132,9 @@ export class MutationWriter {
   /** Записывает ключи выбранных записей в прямую или обратную связь, отсоединяя прежние цели при необходимости.
    * @example users: ['1', '2'] → соответствующие ключи; одна цель указана дважды → ошибка.
    */
-  private connect({ ref, node, value, omitted }: Selection, depth: number): void {
+  private connect({ ref, node, value }: Selection, depth: number): void {
     const target = node.relation;
-    if (value === null && (node.many || (!omitted && !node.nullable))) throw domainError('INVALID_INPUT', `${node.path} cannot be null`);
+    if (value === null && (node.many || !node.nullable)) throw domainError('INVALID_INPUT', `${node.path} cannot be null`);
     if (node.many && !Array.isArray(value)) throw domainError('INVALID_INPUT', `${node.path} must be an array`);
     if (!node.many && Array.isArray(value)) throw domainError('INVALID_INPUT', `${node.path} must be a record or key`);
     const entries = value === null ? [] : node.many ? (value as unknown[]) : [value];

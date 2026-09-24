@@ -20,6 +20,7 @@ export interface Field {
   maximum?: number;
   source?: string;
   target?: string;
+  keyOn?: 'current' | 'related';
   onDelete?: 'restrict' | 'cascade';
 }
 export interface EntityDefinition {

@@ -34,6 +34,7 @@ export function canWriteKey(entity: Entity, path: string): boolean {
  */
 export function isReverseRelation(entity: Entity, node: Node): boolean {
   const relation = requireRelation(node);
+  if (relation.keyOn) return relation.keyOn === 'related';
   return relation.source === entity.primary || (!canWriteKey(entity, relation.source) && canWriteKey(relation.relation, relation.target));
 }
 /** Собирает значения по вложенному пути, проходя через массивы; отсутствующие значения и null пропускает.

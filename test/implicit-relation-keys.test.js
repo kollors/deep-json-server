@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createServer } from '../dist/index.js';
 
-const relation = { type: 'Country', source: 'countryId' };
-const country = { collection: 'countries', fields: { id: { type: 'string', primary: true } } };
+const relation = { type: 'Country', keyOn: 'current', source: 'countryId' };
+const country = { collection: 'countries', fields: { id: { type: 'string', primary: true }, users: { type: 'User[]', keyOn: 'related', target: 'countryId' } } };
 const user = (explicit = false) => ({
   collection: 'users',
   fields: { id: { type: 'string', primary: true }, ...(explicit ? { countryId: { type: 'string' } } : {}), country: relation },

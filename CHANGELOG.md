@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.6
+
+- Require both sides of every explicit model relation and `keyOn: "current" | "related"` to identify where its key is stored.
+- Infer relation key paths from the direct relation field and the related model's primary key; reject missing, ambiguous, and inconsistent inverse declarations.
+- Keep automatically inferred keys internal to API responses and schemas, and avoid default deletion restrictions from mandatory inverse views.
+- Preserve links stored in other records when a `PUT` omits their `related` inverse field; explicitly supplied inverse fields still replace their links.
+
 ## 1.0.0-rc.5
 
 - Make `required` on list relations consistent with stored arrays: empty lists are valid, while list relations backed by an array of source keys still require that array to be present. Computed lists may be empty.

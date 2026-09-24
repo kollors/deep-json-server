@@ -17,7 +17,7 @@
         },
         "users": {
           "type": "User[]",
-          "target": "countryId"
+          "keyOn": "related"
         }
       }
     },
@@ -40,11 +40,16 @@
         },
         "parents": {
           "type": "Genre[]",
-          "source": "parentIds"
+          "keyOn": "current"
         },
         "children": {
           "type": "Genre[]",
-          "target": "parentIds"
+          "keyOn": "related"
+        },
+        "movies": {
+          "type": "Movie[]",
+          "keyOn": "related",
+          "target": "actors.genreIds"
         }
       }
     },
@@ -75,7 +80,7 @@
         },
         "publishers": {
           "type": "Publisher[]",
-          "source": "publisherIds",
+          "keyOn": "current",
           "required": true
         },
         "actors": {
@@ -93,11 +98,13 @@
         },
         "actors.user": {
           "type": "User",
+          "keyOn": "current",
           "source": "actors.userId",
           "required": true
         },
         "actors.genres": {
           "type": "Genre[]",
+          "keyOn": "current",
           "source": "actors.genreIds",
           "required": true
         }
@@ -119,7 +126,7 @@
         },
         "movies": {
           "type": "Movie[]",
-          "target": "publisherIds"
+          "keyOn": "related"
         }
       }
     },
@@ -152,10 +159,11 @@
         },
         "country": {
           "type": "Country",
-          "source": "countryId"
+          "keyOn": "current"
         },
         "movies": {
           "type": "Movie[]",
+          "keyOn": "related",
           "target": "actors.userId"
         }
       }

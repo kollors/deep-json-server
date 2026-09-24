@@ -144,7 +144,10 @@ test('writes YAML and SDL to nested output paths with independent API settings',
 
 test('rejects disabled API targets, operation/type collisions, and sort enum collisions', async () => {
   const models = {
-    models: { A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B' } } }, B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true } } } },
+    models: {
+      A: { collection: 'a', fields: { id: { type: 'string', primary: true }, b: { type: 'B', keyOn: 'current' } } },
+      B: { collection: 'b', api: [], fields: { id: { type: 'string', primary: true }, a: { type: 'A[]', keyOn: 'related' } } },
+    },
   };
   await assert.rejects(() => facadeFor(models), /does not enable rest/);
   let facade;
@@ -224,8 +227,8 @@ test('schema validation rejects malformed declarations and removed syntax', asyn
 test('validates explicit keys, implicit fields, primary defaults and nullable references', async () => {
   const model = {
     models: {
-      A: { collection: 'a', fields: { code: { type: 'number', primary: true }, b: { type: 'B', source: 'bCode', nullable: true } } },
-      B: { collection: 'b', fields: { code: { type: 'number', primary: true } } },
+      A: { collection: 'a', fields: { code: { type: 'number', primary: true }, b: { type: 'B', keyOn: 'current', source: 'bCode', nullable: true } } },
+      B: { collection: 'b', fields: { code: { type: 'number', primary: true }, a: { type: 'A[]', keyOn: 'related', target: 'bCode' } } },
     },
   };
   const compiled = await loadModel(model);
@@ -242,7 +245,7 @@ test('validates explicit keys, implicit fields, primary defaults and nullable re
   const both = structuredClone(model);
   delete both.models.A.fields.b.source;
   const loaded = await loadModel(both);
-  assert.equal(loaded.byName.get('A').fields.b.source, 'code');
+  assert.equal(loaded.byName.get('A').fields.b.source, 'bCode');
   assert.equal(loaded.byName.get('A').fields.b.target, 'code');
   model.models.A.fields.b.target = 'unknown';
   await assert.rejects(() => loadModel(model), /ambiguous/);
@@ -258,12 +261,17 @@ test('initial database validates unknown fields, dangling references and require
   const model = definition({ name: { type: 'string', required: true } });
   for (const data of [{ items: [{ id: '1' }] }, { items: [{ id: '1', name: 1 }] }, { items: [{ id: '1', name: 'x', extra: 1 }] }, { other: [] }])
     await assert.rejects(() => startServer({ storage: 'memory', database: { source: data, schema: model } }));
-  const links = { models: { ...definition({ link: { type: 'Other', source: 'otherId', required: true } }).models, Other: { collection: 'other', fields: { id: { type: 'string', primary: true } } } } };
+  const links = {
+    models: {
+      ...definition({ link: { type: 'Other', keyOn: 'current', source: 'otherId', required: true } }).models,
+      Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, items: { type: 'Item[]', keyOn: 'related', target: 'otherId' } } },
+    },
+  };
   for (const row of [{ id: '1' }, { id: '1', otherId: 'missing' }]) await assert.rejects(() => startServer({ storage: 'memory', database: { source: { items: [row], other: [] }, schema: links } }));
   const singular = {
     models: {
-      ...definition({ link: { type: 'Other', source: 'code', target: 'code' }, code: { type: 'string' } }).models,
-      Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' } } },
+      ...definition({ link: { type: 'Other', keyOn: 'current', source: 'code', target: 'code' }, code: { type: 'string' } }).models,
+      Other: { collection: 'other', fields: { id: { type: 'string', primary: true }, code: { type: 'string' }, items: { type: 'Item[]', keyOn: 'related', source: 'code', target: 'code' } } },
     },
   };
   await assert.rejects(
@@ -289,7 +297,8 @@ test('OpenAPI 3.0 nullable references and enum constraints accept actual null re
   const { Ajv } = await import('ajv');
   const model = definition({
     state: { type: 'string', nullable: true, enum: ['on', 'off'] },
-    parent: { type: 'Item', source: 'parentId' },
+    parent: { type: 'Item', keyOn: 'current', source: 'parentId' },
+    children: { type: 'Item[]', keyOn: 'related', target: 'parentId' },
     profile: { type: 'object', nullable: true },
     'profile.name': { type: 'string' },
   });
@@ -311,7 +320,8 @@ test('OpenAPI describes JSON scope with model fields and recursive relations', a
     profile: { type: 'object' },
     'profile.name': { type: 'string' },
     'profile.secret': { type: 'string', writeOnly: true },
-    peers: { type: 'Item[]', source: 'id' },
+    peers: { type: 'Item[]', keyOn: 'current', source: 'id' },
+    peerBack: { type: 'Item[]', keyOn: 'related', target: 'id' },
   });
   const doc = await (await facadeFor(model)).openapi();
   checkReferences(doc);

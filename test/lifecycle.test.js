@@ -180,8 +180,8 @@ test('REST and GraphQL mutations enforce ownership and audit the authenticated u
 test('record actions use the same owner rules in nested REST and GraphQL results', async (t) => {
   const relationSchema = {
     models: {
-      Parent: { collection: 'parents', fields: { id: { type: 'number', primary: true }, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
-      Child: { collection: 'children', fields: { id: { type: 'number', primary: true }, parentId: { type: 'number' } } },
+      Parent: { collection: 'parents', fields: { id: { type: 'number', primary: true }, children: { type: 'Child[]', keyOn: 'related', source: 'id', target: 'parentId' } } },
+      Child: { collection: 'children', fields: { id: { type: 'number', primary: true }, parentId: { type: 'number' }, parent: { type: 'Parent', keyOn: 'current', source: 'parentId' } } },
     },
   };
   const { app } = await setup(t, {
@@ -205,8 +205,13 @@ test('record actions use the same owner rules in nested REST and GraphQL results
 
 const cascadeSchema = (extra = {}) => ({
   models: {
-    Parent: { ...item, collection: 'parents' },
-    Child: { ...item, collection: 'children', ...extra, fields: { ...item.fields, parentId: { type: 'number' }, parent: { type: 'Parent', source: 'parentId', required: true, onDelete: 'cascade' } } },
+    Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', keyOn: 'related', target: 'parentId' } } },
+    Child: {
+      ...item,
+      collection: 'children',
+      ...extra,
+      fields: { ...item.fields, parentId: { type: 'number' }, parent: { type: 'Parent', keyOn: 'current', source: 'parentId', required: true, onDelete: 'cascade' } },
+    },
   },
 });
 
@@ -262,11 +267,16 @@ test('mixed cascades honor each entity policy and never recreate physically dele
 test('nested object cascades restore only unchanged pruned fields', async (t) => {
   const schema = {
     models: {
-      Genre: { ...item, collection: 'genres' },
+      Genre: { ...item, collection: 'genres', fields: { ...item.fields, movies: { type: 'Movie[]', keyOn: 'related', target: 'actors.genreId' } } },
       Movie: {
         ...item,
         collection: 'movies',
-        fields: { ...item.fields, actors: { type: 'object[]' }, 'actors.genreId': { type: 'number' }, 'actors.genre': { type: 'Genre', source: 'actors.genreId', onDelete: 'cascade' } },
+        fields: {
+          ...item.fields,
+          actors: { type: 'object[]' },
+          'actors.genreId': { type: 'number' },
+          'actors.genre': { type: 'Genre', keyOn: 'current', source: 'actors.genreId', onDelete: 'cascade' },
+        },
       },
     },
   };
@@ -286,8 +296,8 @@ test('nested object cascades restore only unchanged pruned fields', async (t) =>
 test('relation where applies deletion defaults at its own level including every and none', async (t) => {
   const schema = {
     models: {
-      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
-      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number' } } },
+      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', keyOn: 'related', source: 'id', target: 'parentId' } } },
+      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number' }, parent: { type: 'Parent', keyOn: 'current', source: 'parentId' } } },
     },
   };
   const { app } = await setup(t, {
@@ -319,8 +329,8 @@ test('relation where applies deletion defaults at its own level including every 
 test('nested writes and reverse reconnections cannot bypass ownership or forge auditing', async (t) => {
   const schema = {
     models: {
-      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', source: 'id', target: 'parentId' } } },
-      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number', nullable: true } } },
+      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', keyOn: 'related', source: 'id', target: 'parentId' } } },
+      Child: { ...item, collection: 'children', fields: { ...item.fields, parentId: { type: 'number', nullable: true }, parent: { type: 'Parent', keyOn: 'current', source: 'parentId' } } },
     },
   };
   const { app } = await setup(t, { storage: 'memory', database: { schema, source: { parents: [], children: [] } }, auth: { source: users } });

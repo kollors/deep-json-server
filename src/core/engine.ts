@@ -191,6 +191,9 @@ export class Engine {
       for (const node of Object.values(ref.node.children)) {
         if (node.virtual) continue;
         if (node.relation) {
+          // A paired inverse view does not own a storage key. Its default must not block
+          // deletion of a record that merely appears in that view.
+          if (node.keyOn === 'related' && node.onDelete === undefined) continue;
           const owner = { ref, node, targets: related(ref, node) };
           owners.push(owner);
           for (const target of owner.targets) {

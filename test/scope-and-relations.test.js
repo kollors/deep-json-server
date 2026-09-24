@@ -30,7 +30,8 @@ const itemSchema = {
         'profile.name': { type: 'string' },
         rows: { type: 'object[]' },
         'rows.name': { type: 'string' },
-        peers: { type: 'Item[]', source: 'peerIds' },
+        peers: { type: 'Item[]', keyOn: 'current', source: 'peerIds' },
+        peerOwners: { type: 'Item[]', keyOn: 'related', target: 'peerIds' },
       },
     },
   },
@@ -154,9 +155,9 @@ test('scope projects objects in mixed schemaless arrays while preserving scalars
 test('GraphQL rejects collisions between root and nested input types in either model order', async () => {
   const models = {
     models: {
-      User: { collection: 'users', fields: { id: primary, name: { type: 'string', required: true } } },
+      User: { collection: 'users', fields: { id: primary, name: { type: 'string', required: true }, holders: { type: 'Holder[]', keyOn: 'related', target: 'userIds' } } },
       UserNested: { collection: 'userNesteds', fields: { id: primary, unrelated: { type: 'string' } } },
-      Holder: { collection: 'holders', fields: { id: primary, users: { type: 'User[]', source: 'userIds' } } },
+      Holder: { collection: 'holders', fields: { id: primary, users: { type: 'User[]', keyOn: 'current', source: 'userIds' } } },
     },
   };
   for (const schema of [models, Object.fromEntries(Object.entries(models).reverse())]) await assert.rejects(() => generateGraphql(schema), /GraphQL type name collision: UserNested/);
@@ -179,42 +180,48 @@ test('GraphQL preflight traverses shared fragments once, respecting skipped occu
   assert.equal(visits, 1);
 });
 
-test('custom protected source keys support reverse PUT clearing and PATCH preservation', async (t) => {
+test('custom protected source keys preserve omitted reverse links and allow explicit clearing', async (t) => {
   for (const code of [
     { type: 'string', readOnly: true },
     { type: 'string', generated: 'uuid' },
   ]) {
     const schema = {
       models: {
-        Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string' }, code, children: { type: 'Child[]', source: 'code', target: 'parentCode' } } },
-        Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+        Parent: { collection: 'parents', fields: { id: primary, name: { type: 'string' }, code, children: { type: 'Child[]', keyOn: 'related', source: 'code', target: 'parentCode' } } },
+        Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true }, parent: { type: 'Parent', keyOn: 'current', source: 'parentCode', target: 'code' } } },
       },
     };
     const { app } = await setup(t, schema, { parents: [{ id: 1, name: 'old', code: 'P' }], children: [{ id: 1, parentCode: 'P' }] }, true);
     const path = url('/parents/1', [{ '*': true, code: true, children: [{ id: true }] }]);
     const patch = await app.inject({ method: 'PATCH', url: path, payload: { name: 'patch' } });
     assert.equal(patch.json().children.total, 1);
-    for (const payload of [{ name: 'replace' }, { name: 'replace', children: [] }]) {
+    for (const [payload, expected] of [
+      [{ name: 'replace' }, 1],
+      [{ name: 'replace', children: [] }, 0],
+    ]) {
       const result = await app.inject({ method: 'PUT', url: path, payload });
       assert.equal(result.statusCode, 200, result.body);
-      assert.equal(result.json().children.total, 0);
+      assert.equal(result.json().children.total, expected);
       assert.equal(result.json().code, 'P');
-      assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, null);
+      assert.equal((await app.inject(url('/children/1', [{ '*': true, parentCode: true }]))).json().parentCode, expected ? 'P' : null);
       const relink = await app.inject({ method: 'PATCH', url: path, payload: { children: [{ id: 1 }] } });
       assert.equal(relink.statusCode, 200, relink.body);
       assert.equal(relink.json().children.total, 1);
     }
     const graph = await app.inject({ method: 'POST', url: '/graphql', payload: { query: 'mutation {parentReplace(id:1,data:{name:"graphql"}){code children{total}}}' } });
     assert.equal(graph.json().errors, undefined, graph.body);
-    assert.equal(graph.json().data.parentReplace.children.total, 0);
+    assert.equal(graph.json().data.parentReplace.children.total, 1);
   }
 });
 
 test('required reverse list relations can be empty in REST and GraphQL', async (t) => {
   const schema = {
     models: {
-      Parent: { collection: 'parents', fields: { id: primary, code: { type: 'string', readOnly: true }, children: { type: 'Child[]', source: 'code', target: 'parentCode', required: true } } },
-      Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true } } },
+      Parent: {
+        collection: 'parents',
+        fields: { id: primary, code: { type: 'string', readOnly: true }, children: { type: 'Child[]', keyOn: 'related', source: 'code', target: 'parentCode', required: true } },
+      },
+      Child: { collection: 'children', fields: { id: primary, parentCode: { type: 'string', nullable: true }, parent: { type: 'Parent', keyOn: 'current', source: 'parentCode', target: 'code' } } },
     },
   };
   const { app } = await setup(t, schema, { parents: [{ id: 1, code: 'P' }], children: [{ id: 1, parentCode: 'P' }] }, true);
@@ -226,16 +233,30 @@ test('required reverse list relations can be empty in REST and GraphQL', async (
   assert.equal(relink.statusCode, 200, relink.body);
   const graph = await app.inject({ method: 'POST', url: '/graphql', payload: { query: 'mutation {parentReplace(id:1,data:{}){children{total}}}' } });
   assert.equal(graph.json().errors, undefined, graph.body);
-  assert.equal(graph.json().data.parentReplace.children.total, 0);
+  assert.equal(graph.json().data.parentReplace.children.total, 1);
 });
 
 test('transaction key indexes see earlier creates and do not outlive rolled back writes', async (t) => {
   const schema = {
     models: {
-      User: { collection: 'users', fields: { id: primary, name: { type: 'string' } } },
+      User: {
+        collection: 'users',
+        fields: {
+          id: primary,
+          name: { type: 'string' },
+          firstHolders: { type: 'Holder[]', keyOn: 'related', target: 'firstId' },
+          secondHolders: { type: 'Holder[]', keyOn: 'related', target: 'secondId' },
+        },
+      },
       Holder: {
         collection: 'holders',
-        fields: { id: primary, firstId: { type: 'number' }, secondId: { type: 'number' }, first: { type: 'User', source: 'firstId' }, second: { type: 'User', source: 'secondId' } },
+        fields: {
+          id: primary,
+          firstId: { type: 'number' },
+          secondId: { type: 'number' },
+          first: { type: 'User', keyOn: 'current', source: 'firstId' },
+          second: { type: 'User', keyOn: 'current', source: 'secondId' },
+        },
       },
     },
   };

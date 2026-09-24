@@ -125,7 +125,16 @@ for (const softDelete of [false, true]) {
 test('cascade follows reversed chains and cycles, checks restrict after closure and rolls back conflicts', async () => {
   const model = await loadModel({
     models: {
-      Item: { ...schema.models.Item, fields: { ...schema.models.Item.fields, parent: { type: 'Item', source: 'parentId', onDelete: 'cascade' }, guard: { type: 'Item', source: 'guardId' } } },
+      Item: {
+        ...schema.models.Item,
+        fields: {
+          ...schema.models.Item.fields,
+          parent: { type: 'Item', keyOn: 'current', source: 'parentId', onDelete: 'cascade' },
+          guard: { type: 'Item', keyOn: 'current', source: 'guardId' },
+          children: { type: 'Item[]', keyOn: 'related', target: 'parentId' },
+          guarded: { type: 'Item[]', keyOn: 'related', target: 'guardId' },
+        },
+      },
     },
   });
   const items = Array.from({ length: 200 }, (_, i) => ({ id: i + 1, name: 'chain', parentId: i + 2 }));
