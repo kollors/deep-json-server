@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.4
+
+- Prevent concurrent servers from writing to the same file-backed database and recover its lock after a process crash, using built-in Node.js APIs.
+- Make range filters and sorting use the same comparison rules across REST and GraphQL.
+- Execute key examples from both READMEs during tests to keep the documented behavior current.
+- Add a database benchmark script for memory and file storage; runtime query behavior is unchanged by the benchmark.
+
 ## 1.0.0-rc.3
 
 - Keep relation keys inferred from `source` in stored records while hiding them from REST, GraphQL, and OpenAPI unless declared explicitly in model `fields`.

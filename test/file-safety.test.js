@@ -45,9 +45,12 @@ test('file uploads and moves preserve database, counters, schema and config inpu
     assert.equal((await app.inject({ method: 'PATCH', url: '/_files/storage/safe.txt', payload: { name } })).statusCode, 400, name);
     assert.equal(await readFile(join(directory, name), 'utf8'), content);
   }
+  assert.equal((await upload('owner.json', 'replacement', { 'content-directory': 'db.json.deep-json-server.lock' })).statusCode, 400);
   assert.equal((await app.inject('/items/1')).json().id, '1');
+  const secondDatabasePath = join(directory, 'second-db.json');
+  await writeFile(secondDatabasePath, contents['db.json']);
   const conflicting = (
-    await createServer({ storage: 'file', database: { source: join(directory, 'db.json') }, files: { source: directory, metadata: join(directory, 'db.json') }, server: { logger: false } })
+    await createServer({ storage: 'file', database: { source: secondDatabasePath }, files: { source: directory, metadata: secondDatabasePath }, server: { logger: false } })
   ).fastify();
   try {
     await assert.rejects(() => conflicting.ready(), /protected/);
@@ -58,7 +61,7 @@ test('file uploads and moves preserve database, counters, schema and config inpu
   const alias = join(directory, 'storage-alias');
   await symlink(directory, alias);
   const aliased = (
-    await createServer({ storage: 'file', database: { source: join(directory, 'db.json') }, files: { source: alias, metadata: join(directory, 'files.json') }, server: { logger: false } })
+    await createServer({ storage: 'file', database: { source: secondDatabasePath }, files: { source: alias, metadata: join(directory, 'files.json') }, server: { logger: false } })
   ).fastify();
   t.after(() => aliased.close());
   const originalMetadata = await readFile(join(directory, 'files.json'), 'utf8');

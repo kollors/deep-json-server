@@ -20,6 +20,34 @@ const setup = async (t, config) => {
 const url = (path, options) => `${path}?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]))}`;
 const gql = (app, query) => app.inject({ method: 'POST', url: '/graphql', payload: { query } });
 
+test('string range filters use the same order as REST and GraphQL sorting', async (t) => {
+  const { app } = await setup(t, {
+    storage: 'memory',
+    database: {
+      schema: model({ label: { type: 'string' } }),
+      source: { items: ['item2', 'item10', 'item1', 'Item2'].map((label, index) => ({ id: String(index), label })) },
+    },
+    graphql: {},
+  });
+  const order = [{ field: 'label', direction: 'ASC' }];
+  const sorted = (await app.inject(url('/items', { scope: [{ label: true }, { order }] }))).json();
+  assert.deepEqual(
+    sorted.data.map(({ label }) => label),
+    ['item1', 'item2', 'Item2', 'item10'],
+  );
+  const filtered = (await app.inject(url('/items', { scope: [{ label: true }, { where: { label: { gt: 'item2' } }, order }] }))).json();
+  assert.deepEqual(
+    filtered.data.map(({ label }) => label),
+    ['item10'],
+  );
+  const graph = (await gql(app, '{itemList(where:{label:{gt:"item2"}} order:[{field:label,direction:ASC}]){total data{label}}}')).json();
+  assert.equal(graph.errors, undefined);
+  assert.deepEqual(
+    graph.data.itemList.data.map(({ label }) => label),
+    ['item10'],
+  );
+});
+
 test('nested field lookups reject inherited names and empty objects remain writable in REST', async (t) => {
   const schema = model({ profile: { type: 'object' }, 'profile.name': { type: 'string' }, settings: { type: 'object' } });
   const { app } = await setup(t, { storage: 'memory', database: { schema, source: { items: [] } } });

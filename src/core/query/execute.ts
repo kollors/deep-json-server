@@ -2,6 +2,7 @@ import { readPath } from '../model/tree.js';
 import type { Node } from '../model/types.js';
 import { isRef, type Ref, resolveField } from '../records.js';
 import { hasOnlyKeys, isObject } from '../utils.js';
+import { compareValues } from './compare.js';
 import { compileWhere, type Predicate } from './filter.js';
 import { badQuery, type ListOptions, nodeAt } from './options.js';
 
@@ -33,8 +34,6 @@ function filterView(ref: Ref): Record<string, unknown> {
       });
   return value;
 }
-
-const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 /** Проверяет аргументы списка и превращает их в готовый план выполнения.
  * @example { pager: { page: 2, pageSize: 5 } } → план с page: 2 и pageSize: 5.
@@ -78,16 +77,7 @@ export function executeList(records: Ref[], prepared: PreparedList): Page {
     for (const [index, rule] of rules.entries()) {
       const left = leftEntry.keys[index];
       const right = rightEntry.keys[index];
-      const comparison =
-        left == null && right == null
-          ? 0
-          : left == null
-            ? 1
-            : right == null
-              ? -1
-              : typeof left === 'number' && typeof right === 'number'
-                ? left - right
-                : collator.compare(String(left), String(right));
+      const comparison = left == null && right == null ? 0 : left == null ? 1 : right == null ? -1 : compareValues(left as string | number, right as string | number);
       if (comparison) return rule.direction === 'DESC' ? -comparison : comparison;
     }
     return 0;

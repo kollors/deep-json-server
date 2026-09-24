@@ -33,7 +33,7 @@ export async function createDiskPaths({ directory, metadata, staging, protectedP
   const resolveFilePath = (path: string): string => {
     const filePath = resolve(directory, path);
     const canonical = resolve(realDirectory, relative(directory, filePath));
-    if (protectedPaths.has(canonical)) throw domainError('INVALID_INPUT', 'Path is reserved for a server input file');
+    if ([...protectedPaths].some((protectedPath) => isPathInside(protectedPath, canonical))) throw domainError('INVALID_INPUT', 'Path is reserved for a server input file');
     if (filePath === directory || !isPathInside(directory, filePath) || filePath === metadata || isPathInside(staging, filePath))
       throw domainError('INVALID_INPUT', 'File path escapes the storage directory');
     return filePath;

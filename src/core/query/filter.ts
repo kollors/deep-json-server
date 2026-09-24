@@ -1,6 +1,7 @@
 import { mentionsDeletedAt } from '../lifecycle/options.js';
 import type { Node } from '../model/types.js';
 import { isEqual, isObject } from '../utils.js';
+import { compareValues } from './compare.js';
 import { operatorsFor } from './contract.js';
 import { badQuery, childrenOf } from './options.js';
 
@@ -51,13 +52,13 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
       case 'endsWith':
         return (field) => typeof field === 'string' && field.toLowerCase().endsWith(String(value).toLowerCase());
       case 'gt':
-        return (field) => comparable(field) && comparable(value) && field > value;
+        return (field) => comparable(field) && comparable(value) && compareValues(field, value) > 0;
       case 'gte':
-        return (field) => comparable(field) && comparable(value) && field >= value;
+        return (field) => comparable(field) && comparable(value) && compareValues(field, value) >= 0;
       case 'lt':
-        return (field) => comparable(field) && comparable(value) && field < value;
+        return (field) => comparable(field) && comparable(value) && compareValues(field, value) < 0;
       default:
-        return (field) => comparable(field) && comparable(value) && field <= value;
+        return (field) => comparable(field) && comparable(value) && compareValues(field, value) <= 0;
     }
   });
   return (value) => predicates.every((predicate) => predicate(value));

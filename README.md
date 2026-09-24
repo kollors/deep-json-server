@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.3`.
+To install this release candidate, use `@1.0.0-rc.4`.
 
 ## Quick start
 
@@ -100,6 +100,7 @@ export default {
 
 Set the root `api` in `schema.json`:
 
+<!-- tested-example: graphql-only-schema -->
 ```json
 {
   "api": ["graphql"],
@@ -131,6 +132,7 @@ Address precedence: CLI → configuration → `HOST`/`PORT` → defaults. Withou
 
 Examples: [database](examples/database.json), [model schema](examples/schema.json), [configuration](examples/server.config.js).
 
+<!-- tested-example: implicit-relation-schema -->
 ```json
 {
   "api": ["rest", "graphql"],
@@ -372,7 +374,7 @@ Primitive arrays are returned as plain arrays. Every object list accepts optiona
 
 Use `page` and `pageSize` in `pager`. The default is the first page with the size from `server.pageSize`. Both values must be positive integers; `pageSize` is limited by `server.maxPageSize`. Out-of-range pages return empty `data` with the total matching record count in `total`.
 
-`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Conditions in the same object must all match. `and` and `or` take arrays of conditions; `not` takes one condition and can also be used inside a field filter. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`. String `contains`, `startsWith` and `endsWith` ignore case; `eq`, `ne` and `in` compare exact values. A field condition is an object containing an operator, such as `{ "id": { "eq": "1" } }`.
+`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Conditions in the same object must all match. `and` and `or` take arrays of conditions; `not` takes one condition and can also be used inside a field filter. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`. String `contains`, `startsWith` and `endsWith` ignore case; `eq`, `ne` and `in` compare exact values. For strings, `gt`, `gte`, `lt` and `lte` use the same case-insensitive, numeric-aware order as sorting. A field condition is an object containing an operator, such as `{ "id": { "eq": "1" } }`.
 
 ```json
 {
@@ -415,6 +417,7 @@ REST record routes accept one query parameter, `scope`, containing a JSON array 
 
 Select users and their movies with independent ordering and pagination:
 
+<!-- tested-example: rest-user-list -->
 ```js
 const scope = [
   {
@@ -439,6 +442,7 @@ Select scalars and primitive arrays with `true`, and objects or relations with t
 
 For example, select a movie's own fields, its actors' users and sorted genres:
 
+<!-- tested-example: rest-movie-scope -->
 ```json
 [
   {
@@ -530,6 +534,7 @@ npx deep-json-server server.config.js
 
 Send requests to `/graphql` using POST with `Content-Type: application/json` and a body of `{ "query": "…", "variables": {} }`. Change the path through `graphql.endpoint`.
 
+<!-- tested-example: graphql-user-list -->
 ```graphql
 query {
   userList(
@@ -827,7 +832,7 @@ Content-Type: application/json
 
 In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata defaults to `<files.source>/.files.json`; set `files.metadata` for another location. Directories and the metadata file are created when needed.
 
-Use one server process per disk database and file store. Stop it before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, counters, schema, auth users, loaded configuration or metadata file.
+Use one server process per disk database and file store. A second server using the same database file fails at startup; closing the first server releases its lock, and a lock left by a crashed process is recovered on the next start. Stop the server before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
