@@ -35,6 +35,9 @@
         "name": {
           "type": "string"
         },
+        "parentIds": {
+          "type": "string[]"
+        },
         "parents": {
           "type": "Genre[]",
           "source": "parentIds"
@@ -67,6 +70,9 @@
           "type": "string",
           "required": true
         },
+        "publisherIds": {
+          "type": "string[]"
+        },
         "publishers": {
           "type": "Publisher[]",
           "source": "publisherIds",
@@ -78,6 +84,12 @@
         },
         "actors.id": {
           "type": "string"
+        },
+        "actors.userId": {
+          "type": "string"
+        },
+        "actors.genreIds": {
+          "type": "string[]"
         },
         "actors.user": {
           "type": "User",
@@ -134,6 +146,9 @@
         "avatarSrc": {
           "type": "string",
           "format": "uri"
+        },
+        "countryId": {
+          "type": "string"
         },
         "country": {
           "type": "Country",

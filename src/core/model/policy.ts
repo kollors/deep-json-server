@@ -5,6 +5,7 @@ export type InputMode = 'stored' | WriteMode;
  * @example writable({ readOnly: true, … }, 'update') → false.
  */
 export function writable(node: Node, mode: InputMode, relations = false): boolean {
+  if (node.implicit && mode !== 'stored') return false;
   if (node.relation) return relations;
   if (node.generated || node.readOnly || (node.primary && mode !== 'create')) return false;
   const children = Object.values(node.children);

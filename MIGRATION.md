@@ -1,4 +1,4 @@
-# Migrating from 0.9.0 to 1.0.0-rc.2
+# Migrating from 0.9.0 to 1.0.0-rc.3
 
 Version 1.0 changes configuration and request syntax. Update the server configuration and client requests together. Back up any file database, auth records, and file metadata before changing the running server.
 
@@ -6,7 +6,7 @@ Version 1.0 changes configuration and request syntax. Update the server configur
 
 Declare a storage mode and use `source` for each enabled component:
 
-| 0.9.0 | 1.0.0-rc.2 |
+| 0.9.0 | 1.0.0-rc.3 |
 |---|---|
 | `database.path` | `storage: 'file'`, `database.source` |
 | `database.data` | `storage: 'memory'`, `database.source` |
@@ -32,7 +32,7 @@ const scope = [
 const url = `/movies?${new URLSearchParams({ scope: JSON.stringify(scope) })}`;
 ```
 
-Without an explicit `scope`, the response contains scalar fields only. `"*": true` also selects only scalar fields that do not store relation keys. Select arrays, objects, relations, and relation keys explicitly. Related lists can have their own filters, order, and pagination. Review clients that expect embedded relations or relation keys in default responses.
+Without an explicit `scope`, the response contains scalar fields only. `"*": true` also selects only scalar fields that do not store relation keys. Select arrays, objects, relations, and declared relation keys explicitly. Relation keys omitted from `fields` remain in the database but are unavailable in REST, GraphQL, and OpenAPI. Related lists can have their own filters, order, and pagination. Review clients that expect embedded relations or relation keys in default responses.
 
 ## Records and auth
 

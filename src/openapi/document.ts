@@ -122,7 +122,7 @@ export function buildOpenapiDocument({
     if (!reserve(name, node)) return ref(name);
     const properties: Record<string, OpenapiSchema> = {};
     for (const [key, child] of Object.entries(node.children)) {
-      if (child.writeOnly) continue;
+      if (child.writeOnly || child.implicit) continue;
       if (child.relation || child.base === 'object') {
         const value = child.many ? page(entity, child) : output(entity, child);
         const shape = child.nullable || (child.relation && !child.many && !child.required) ? { anyOf: [value, { type: 'object' as const, nullable: true, enum: [null] }] } : value;
@@ -143,7 +143,7 @@ export function buildOpenapiDocument({
       const included: OpenapiSchema = { type: 'boolean', enum: [true] };
       const properties: Record<string, OpenapiSchema> = { '*': included };
       for (const [key, child] of Object.entries(node.children)) {
-        if (child.writeOnly) continue;
+        if (child.writeOnly || child.implicit) continue;
         properties[key] = child.relation || child.base === 'object' ? scope(entity, child) : included;
       }
       schemas[fieldsName] = { type: 'object', additionalProperties: false, properties };
@@ -187,7 +187,7 @@ export function buildOpenapiDocument({
     if (!reserve(name, node)) return ref(name);
     const properties: Record<string, OpenapiSchema> = { and: { type: 'array', items: ref(name) }, or: { type: 'array', minItems: 1, items: ref(name) }, not: ref(name) };
     for (const [key, child] of Object.entries(node.children))
-      if (!child.writeOnly && !child.virtual) {
+      if (!child.writeOnly && !child.virtual && !child.implicit) {
         if (Object.hasOwn(properties, key)) throw new Error(`Reserved filter field: ${entity.name}.${child.path}`);
         properties[key] = !child.many && (child.relation || child.base === 'object') ? where(entity, child) : filter(entity, child);
       }

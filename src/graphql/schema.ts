@@ -62,13 +62,13 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
     [entity, node] = canonicalNode(entity, node);
     let type = objects.get(node);
     if (type) return type;
-    if (!Object.values(node.children).some((child) => !child.writeOnly)) throw new Error(`GraphQL object ${nodeName(entity, node)} must contain at least one visible field`);
+    if (!Object.values(node.children).some((child) => !child.writeOnly && !child.implicit)) throw new Error(`GraphQL object ${nodeName(entity, node)} must contain at least one visible field`);
     type = new GraphQLObjectType({
       name: reserve(nodeName(entity, node)),
       fields: () =>
         Object.fromEntries(
           Object.entries(node.children)
-            .filter(([, child]) => !child.writeOnly)
+            .filter(([, child]) => !child.writeOnly && !child.implicit)
             .map(([key, child]) => {
               const object = child.relation || child.base === 'object';
               let childType: GraphQLOutputType = object ? (child.many ? page(entity, child) : output(entity, child)) : scalar(entity, child);
@@ -146,7 +146,7 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
           not: { type: type as GraphQLInputObjectType },
         };
         for (const [key, child] of Object.entries(node.children))
-          if (!child.writeOnly && !child.virtual) {
+          if (!child.writeOnly && !child.virtual && !child.implicit) {
             if (Object.hasOwn(fields, key)) throw new Error(`Reserved filter field: ${entity.name}.${child.path}`);
             fields[key] = { type: child.many ? filter(entity, child) : child.relation || child.base === 'object' ? where(entity, child) : filter(entity, child) };
           }

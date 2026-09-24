@@ -379,7 +379,10 @@ test('required and dangling relations are validated without data coercion', asyn
   const model = {
     models: {
       Country: { collection: 'countries', fields: { code: { type: 'number', primary: true } } },
-      User: { collection: 'users', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, country: { type: 'Country', source: 'countryCode', required: true } } },
+      User: {
+        collection: 'users',
+        fields: { id: { type: 'string', primary: true, generated: 'uuid' }, countryCode: { type: 'number' }, country: { type: 'Country', source: 'countryCode', required: true } },
+      },
     },
   };
   const { server } = await setup(t, { countries: [{ code: 1 }], users: [] }, model);

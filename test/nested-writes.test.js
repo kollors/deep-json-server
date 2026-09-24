@@ -28,10 +28,15 @@ const model = {
         id: primary,
         title: { type: 'string', required: true },
         description: { type: 'string' },
+        genreIds: { type: 'number[]' },
+        userIds: { type: 'number[]' },
+        ownerId: { type: 'number', nullable: true },
         genres: { type: 'Genre[]', source: 'genreIds' },
         users: { type: 'User[]', source: 'userIds' },
         owner: { type: 'User', source: 'ownerId', nullable: true },
         actors: { type: 'object[]' },
+        'actors.userId': { type: 'number' },
+        'actors.genreIds': { type: 'number[]' },
         'actors.user': { type: 'User', source: 'actors.userId', required: true },
         'actors.genres': { type: 'Genre[]', source: 'actors.genreIds', required: true },
       },
@@ -323,7 +328,13 @@ test('nested source bindings work below multiple levels of arrays', async (t) =>
       Genre: model.models.Genre,
       Movie: {
         collection: 'movies',
-        fields: { id: primary, groups: { type: 'object[]' }, 'groups.actors': { type: 'object[]' }, 'groups.actors.genres': { type: 'Genre[]', source: 'groups.actors.genreIds' } },
+        fields: {
+          id: primary,
+          groups: { type: 'object[]' },
+          'groups.actors': { type: 'object[]' },
+          'groups.actors.genreIds': { type: 'number[]' },
+          'groups.actors.genres': { type: 'Genre[]', source: 'groups.actors.genreIds' },
+        },
       },
     },
   };
@@ -343,7 +354,7 @@ test('nested source bindings work below multiple levels of arrays', async (t) =>
 test('custom target keys reject ambiguous matches without modifying other records', async (t) => {
   const schema = {
     models: {
-      Owner: { collection: 'owners', fields: { id: primary, target: { type: 'Target', source: 'targetCode', target: 'code' } } },
+      Owner: { collection: 'owners', fields: { id: primary, targetCode: { type: 'string' }, target: { type: 'Target', source: 'targetCode', target: 'code' } } },
       Target: { collection: 'targets', fields: { id: primary, code: { type: 'string', required: true }, name: { type: 'string' } } },
     },
   };
@@ -367,7 +378,7 @@ test('nested GraphQL errors and excessive depth do not persist partial writes', 
   const failed = await gql(app, 'mutation { movieUpdate(id:1,data:{genres:[{name:"rolled back"},{id:999}]}){id} }');
   assert.equal(failed.json().errors[0].extensions.code, 'NOT_FOUND');
   assert.equal((await get(app, '/genres')).total, 2);
-  const cyclicModel = { models: { Node: { collection: 'nodes', fields: { id: primary, children: { type: 'Node[]', source: 'childIds' } } } } };
+  const cyclicModel = { models: { Node: { collection: 'nodes', fields: { id: primary, childIds: { type: 'number[]' }, children: { type: 'Node[]', source: 'childIds' } } } } };
   const cyclic = await setup(t, cyclicModel, { nodes: [{ id: 1 }] });
   const tooDeep = Array.from({ length: 34 }).reduce((node) => ({ children: [node] }), {});
   const response = await mutate(cyclic.app, 'PATCH', tooDeep, '/nodes/1');

@@ -65,7 +65,7 @@ export function validateScope(node: Node, scope: unknown, list = false, depth = 
     }
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || !isSafeKey(key)) badQuery(`Invalid scope field ${key}`);
     const child = children[key];
-    if (!Object.hasOwn(children, key) || !child || child.writeOnly) badQuery(`Unknown or inaccessible scope field ${key}`);
+    if (!Object.hasOwn(children, key) || !child || child.writeOnly || child.implicit) badQuery(`Unknown or inaccessible scope field ${key}`);
     if (child.relation || child.base === 'object') validateScope(child, selection, child.many, depth + 1);
     else if (selection !== true) badQuery(`Scalar field ${key} must be true`);
   }

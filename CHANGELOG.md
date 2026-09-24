@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-rc.3
+
+- Keep relation keys inferred from `source` in stored records while hiding them from REST, GraphQL, and OpenAPI unless declared explicitly in model `fields`.
+- Clarified relation key selection with and without a model schema in both READMEs.
+
 ## 1.0.0-rc.2
 
 - Added root schema `api` to select REST, GraphQL, or both for database routes, and per-model `api` selection with matching formats. Authentication and file routes remain REST endpoints; OpenAPI includes only enabled REST routes.

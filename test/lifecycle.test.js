@@ -206,7 +206,7 @@ test('record actions use the same owner rules in nested REST and GraphQL results
 const cascadeSchema = (extra = {}) => ({
   models: {
     Parent: { ...item, collection: 'parents' },
-    Child: { ...item, collection: 'children', ...extra, fields: { ...item.fields, parent: { type: 'Parent', source: 'parentId', required: true, onDelete: 'cascade' } } },
+    Child: { ...item, collection: 'children', ...extra, fields: { ...item.fields, parentId: { type: 'number' }, parent: { type: 'Parent', source: 'parentId', required: true, onDelete: 'cascade' } } },
   },
 });
 
@@ -263,7 +263,11 @@ test('nested object cascades restore only unchanged pruned fields', async (t) =>
   const schema = {
     models: {
       Genre: { ...item, collection: 'genres' },
-      Movie: { ...item, collection: 'movies', fields: { ...item.fields, actors: { type: 'object[]' }, 'actors.genre': { type: 'Genre', source: 'actors.genreId', onDelete: 'cascade' } } },
+      Movie: {
+        ...item,
+        collection: 'movies',
+        fields: { ...item.fields, actors: { type: 'object[]' }, 'actors.genreId': { type: 'number' }, 'actors.genre': { type: 'Genre', source: 'actors.genreId', onDelete: 'cascade' } },
+      },
     },
   };
   const { app } = await setup(t, { storage: 'memory', database: { schema: { ...schema, softDelete: true, timestamps: true }, source: { genres: [], movies: [] } } });

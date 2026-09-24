@@ -230,7 +230,10 @@ test('transaction key indexes see earlier creates and do not outlive rolled back
   const schema = {
     models: {
       User: { collection: 'users', fields: { id: primary, name: { type: 'string' } } },
-      Holder: { collection: 'holders', fields: { id: primary, first: { type: 'User', source: 'firstId' }, second: { type: 'User', source: 'secondId' } } },
+      Holder: {
+        collection: 'holders',
+        fields: { id: primary, firstId: { type: 'number' }, secondId: { type: 'number' }, first: { type: 'User', source: 'firstId' }, second: { type: 'User', source: 'secondId' } },
+      },
     },
   };
   const { app } = await setup(t, schema, { users: [], holders: [{ id: 1 }] });

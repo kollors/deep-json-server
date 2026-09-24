@@ -34,7 +34,7 @@ export function nodeAt(node: Node, path: string, scalarOnly = false): Node {
   const parts = pathParts(path);
   parts.forEach((part, index) => {
     const child = childrenOf(current)[part];
-    if (!Object.hasOwn(childrenOf(current), part) || !child || child.writeOnly || child.virtual) badQuery(`Unknown or inaccessible field ${path}`);
+    if (!Object.hasOwn(childrenOf(current), part) || !child || child.writeOnly || child.virtual || child.implicit) badQuery(`Unknown or inaccessible field ${path}`);
     if (child.mixed) badQuery(`Field ${path} has inconsistent types; provide an explicit schema`);
     if (scalarOnly && (child.many || child.relation || (index === parts.length - 1 && child.base === 'object'))) badQuery(`Cannot sort by ${path}`);
     current = child;
@@ -46,7 +46,7 @@ export function nodeAt(node: Node, path: string, scalarOnly = false): Node {
  */
 export function sortableFields(node: Node, prefix = ''): string[] {
   return Object.entries(childrenOf(node)).flatMap(([key, child]) => {
-    if (child.writeOnly || child.virtual || child.mixed || child.many || child.relation) return [];
+    if (child.writeOnly || child.virtual || child.implicit || child.mixed || child.many || child.relation) return [];
     const path = prefix + key;
     return child.base === 'object' ? sortableFields(child, `${path}.`) : [path];
   });

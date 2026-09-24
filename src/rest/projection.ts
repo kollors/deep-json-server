@@ -13,6 +13,7 @@ import { isUnionScope, ownScope, type RestOptions, type Scope, scopeFor, type Tu
 function wildcardValue(node: Node | undefined, value: unknown): value is JsonPrimitive {
   return (
     !node?.writeOnly &&
+    !node?.implicit &&
     !node?.relation &&
     !node?.relationKey &&
     (!node || node.mixed || (!node.many && node.base !== 'object')) &&
@@ -81,7 +82,7 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
     const wildcard = scope[0]['*'] === true && wildcardValue(node, ref.value[key] === undefined && node.system && !node.internal && !node.virtual ? null : ref.value[key]);
-    if (node.writeOnly || (!Object.hasOwn(scope[0], key) && !wildcard)) continue;
+    if (node.writeOnly || node.implicit || (!Object.hasOwn(scope[0], key) && !wildcard)) continue;
     const value = resolveField(ref, node, false, actor);
     const selection = scopeFor(scope, key);
     if (value === undefined) continue;

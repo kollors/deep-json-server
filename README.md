@@ -6,7 +6,7 @@
 
 A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
 
-**Breaking changes in 1.0.0.** See the [migration guide](MIGRATION.md) when upgrading from 0.9.0. The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and their keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
+**Breaking changes in 1.0.0.** See the [migration guide](MIGRATION.md) when upgrading from 0.9.0. The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and explicitly declared relation keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
 
 ## Installation
 
@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.2`.
+To install this release candidate, use `@1.0.0-rc.3`.
 
 ## Quick start
 
@@ -188,7 +188,7 @@ An excluded model remains part of the database schema and its stored records are
 | OpenAPI 3.0.3 export | Available | Error when requested |
 | GraphQL SDL / API | Available | Error when requested |
 
-Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Existing data is validated on startup. Generation uses the model definitions.
+Explicit schemas are strict: undeclared fields and collections are rejected, except storage keys inferred from relations. Inferred keys remain in stored records but are not API fields. Existing data is validated on startup. Generation uses the model definitions.
 
 Schemaless REST generates an `id` and preserves arbitrary JSON fields. Newly inferred relations are available to subsequent reads and writes without restarting the server. Filters and individual field selections use identifier-style names. `scope=[{"*":true}]` returns top-level JSON scalars; arrays and objects must be selected by name. Fields with mixed value types can be read explicitly, but filtering, ordering and paging heterogeneous lists require an explicit schema.
 
@@ -237,11 +237,11 @@ Objects used in GraphQL must have at least one field visible in responses; REST 
 
 `Genre` returns an object; `Genre[]` returns a list. `source` defaults to the current model's primary key, `target` to the target model's primary key. These defaults also apply to nested relations. Paths start at the root of their respective records: in this example, `actors.genreIds` contains the current actor's genre keys.
 
-Relation keys are stored in the database and included among the record's own fields. Their types are inferred from the matched keys. A `source` field pointing to a target primary key can be omitted from the field declarations: the schema infers an array of keys for a list relation or a scalar key for a single relation. Declare the storage field explicitly when the mapping is ambiguous.
+Relation keys remain in the database even when they are absent from `fields`. A `source` field pointing to a target primary key can be omitted: the server infers an array of keys for a list relation or a scalar key for a single relation. An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available. Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
 
 Reverse example: `User.movies = {"type":"Movie[]","target":"actors.userId"}`. A movie is returned once even if several actors match. A single relation that matches multiple records causes an error.
 
-Every supplied direct relation key must point to an existing record. `required: true` on a relation requires at least one target before response filtering/pagination. Reverse relations using the primary key as `source` may be empty unless required. Missing single relations return `null`.
+Every directly supplied, explicitly declared relation key must point to an existing record. `required: true` on a relation requires at least one target before response filtering/pagination. Reverse relations using the primary key as `source` may be empty unless required. Missing single relations return `null`.
 
 `onDelete` describes what happens **when a target record is deleted**:
 
@@ -435,7 +435,7 @@ const params = new URLSearchParams({ scope: JSON.stringify(scope) });
 const response = await fetch(`/users?${params}`);
 ```
 
-Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes only scalar fields of the current model that do not store relation keys. Arrays, objects, relations, their keys and `writeOnly` fields are not included by the wildcard. A relation key remains available through an explicit selection such as `{ "*": true, "countryId": true }`. Without a schema, a key is excluded from `*` only when the server can infer its relation from the name and an existing collection.
+Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes only scalar fields of the current model that do not store relation keys. Arrays, objects, relations, their keys and `writeOnly` fields are not included by the wildcard. With a schema, a relation key can be selected as `{ "*": true, "countryId": true }` only if it is declared in `fields`. Without a schema, a key present in stored records can be selected explicitly even if omitted from `*`; the wildcard omits it when the server infers a relation from its name and an existing collection.
 
 For example, select a movie's own fields, its actors' users and sorted genres:
 
@@ -462,7 +462,7 @@ Arguments are available only on lists. A list can instead use `{ "union": [scope
 
 ### Nested writes
 
-Storage keys such as `genreIds: ["1"]` only set a relation. Relation fields also accept records to create or update:
+Explicitly declared storage keys such as `genreIds: ["1"]` only set a relation. Relation fields also accept records to create or update:
 
 ```http
 PATCH /movies/1
@@ -492,7 +492,7 @@ The key name and type follow the target model. An object containing only a key s
 
 A supplied list replaces the relation's membership. PATCH preserves omitted relations; PUT clears omitted writable links. `[]` clears a list and `null` clears a nullable single relation. Removing a link does not delete the related record. Required relations must remain populated.
 
-Use either the relation field or its storage key in an object, for example `genres` or `genreIds`. Supplying both fields returns `400 INVALID_INPUT`, even when their key sets match:
+When the storage key is declared in `fields`, use either the relation field or its key in an object, for example `genres` or `genreIds`. Supplying both fields returns `400 INVALID_INPUT`, even when their key sets match:
 
 ```json
 {
@@ -501,11 +501,11 @@ Use either the relation field or its storage key in an object, for example `genr
 }
 ```
 
-The server rejects both fields together and rolls back the operation. Relation fields accept objects only; use `genreIds` to change links without creating or updating related records. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
+The server rejects both fields together and rolls back the operation. Relation fields accept objects only; a declared key such as `genreIds` changes links without creating or updating related records. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
 
 All nested changes belong to the main record's transaction. A validation error, missing record or invalid response selection rolls back the entire operation. Updating a shared record affects every record linked to it.
 
-GraphQL accepts typed objects in relation fields. To change only the links in a replace mutation, use storage keys such as `genreIds`. For example:
+GraphQL accepts typed objects in relation fields. To change only the links in a replace mutation, use a declared storage key such as `genreIds`. For example:
 
 ```graphql
 mutation {
