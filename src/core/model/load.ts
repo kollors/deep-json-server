@@ -171,7 +171,7 @@ export async function loadModel(source: unknown, settings: ModelOptions = {}): P
       const sourceField = entity.fields[node.source];
       if (sourceField && targetField) return false;
       if (!sourceField && targetField && ['string', 'number'].includes(targetField.base) && !targetField.relation) {
-        addField(entity, node.source, { type: targetField.base + (node.many && node.target === target.primary ? '[]' : ''), ...(node.nullable ? { nullable: true } : {}) }, true);
+        addField(entity, node.source, { type: targetField.base + (node.keyOn === 'current' && node.many ? '[]' : ''), ...(node.nullable ? { nullable: true } : {}) }, true);
         progress = true;
         return false;
       }

@@ -58,6 +58,65 @@ test('a custom target field changes the inferred source suffix', async () => {
   assert.equal(model.byName.get('Country').fields.users.target, 'countryBanana');
 });
 
+test('list relations infer arrays for non-primary targets and work through REST and GraphQL', async (t) => {
+  for (const type of ['string', 'number']) {
+    await t.test(type, async (t) => {
+      const schema = {
+        models: {
+          Publisher: {
+            collection: 'publishers',
+            fields: { id: primary, code: { type, required: true }, name: { type: 'string', required: true }, movies: { type: 'Movie[]', keyOn: 'related' } },
+          },
+          Movie: { collection: 'movies', fields: { id: primary, publishers: { type: 'Publisher[]', keyOn: 'current', target: 'code' } } },
+        },
+      };
+      const model = await loadModel(schema);
+      assert.equal(model.byName.get('Movie').fields.publisherCodes.type, `${type}[]`);
+      assert.equal(model.byName.get('Movie').fields.publisherCodes.implicit, true);
+      assert.equal(model.byName.get('Publisher').fields.code.type, type);
+      const facade = await createServer({
+        storage: 'memory',
+        database: {
+          schema,
+          source: {
+            movies: [{ id: 'm', publisherCodes: [] }],
+            publishers: [
+              { id: 'a', code: type === 'string' ? 'A' : 10, name: 'First' },
+              { id: 'b', code: type === 'string' ? 'B' : 20, name: 'Second' },
+            ],
+          },
+        },
+        graphql: {},
+        server: { logger: false },
+      });
+      const app = facade.fastify();
+      t.after(() => app.close());
+      const scope = new URLSearchParams({ scope: JSON.stringify([{ publishers: [{ id: true, name: true }] }]) });
+      const linked = await app.inject({ method: 'PUT', url: `/movies/m?${scope}`, payload: { publishers: [{ id: 'a' }, { id: 'b' }] } });
+      assert.equal(linked.statusCode, 200, linked.body);
+      assert.deepEqual(linked.json().publishers, {
+        data: [
+          { id: 'a', name: 'First' },
+          { id: 'b', name: 'Second' },
+        ],
+        total: 2,
+      });
+      const graph = await app.inject({
+        method: 'POST',
+        url: '/graphql',
+        payload: { query: 'mutation { movieReplace(id:"m", data:{publishers:[{id:"a"},{id:"b"}]}){publishers{total data{id name}}} }' },
+      });
+      assert.equal(graph.json().errors, undefined, graph.body);
+      assert.deepEqual(graph.json().data.movieReplace, linked.json());
+      const inverse = await app.inject(`/publishers/a?${new URLSearchParams({ scope: JSON.stringify([{ movies: [{ id: true }] }]) })}`);
+      assert.deepEqual(inverse.json().movies, { data: [{ id: 'm' }], total: 1 });
+      const explicit = structuredClone(schema);
+      explicit.models.Movie.fields.publisherCodes = { type };
+      assert.equal((await loadModel(explicit)).byName.get('Movie').fields.publisherCodes.type, type);
+    });
+  }
+});
+
 test('missing, ambiguous, and inconsistent relation pairs are rejected', async () => {
   const user = { collection: 'users', fields: { id: primary, country: { type: 'Country', keyOn: 'current' } } };
   const country = { collection: 'countries', fields: { id: primary } };

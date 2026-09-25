@@ -109,11 +109,17 @@ export function buildOpenapiDocument({
     if (!reserve(name, entity.root)) return ref(name);
     const existing = writeInput(entity.root, mode === 'replace' ? 'replace' : 'update', true, mode);
     existing.properties ??= {};
-    existing.properties[entity.primary] = toOpenapi(valueSchema(fieldAt(entity, entity.primary)));
+    const primarySchema = toOpenapi(valueSchema(fieldAt(entity, entity.primary)));
+    existing.properties[entity.primary] = primarySchema;
     existing.required = [...(existing.required ?? []), entity.primary];
     const variants = [existing];
+    if (mode === 'replace') variants.push({ type: 'object', additionalProperties: false, properties: { [entity.primary]: primarySchema }, required: [entity.primary] });
     if (fieldAt(entity, entity.primary).generated) variants.push(writeInput(entity.root, 'create', true, mode));
-    schemas[name] = { anyOf: variants, description: 'An object with a primary key updates an existing record; an object without a key creates one. PUT replaces, PATCH updates supplied fields.' };
+    schemas[name] = {
+      anyOf: variants,
+      description:
+        'An object containing only a primary key links an existing record without updating it. A key with other fields updates the record: PUT replaces, POST/PATCH update supplied fields. An object without a key creates a record.',
+    };
     return ref(name);
   }
   function output(entity: Entity, node: Node): OpenapiSchema {

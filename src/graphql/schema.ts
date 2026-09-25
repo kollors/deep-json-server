@@ -123,7 +123,7 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
               ? input(entity, child, mode)
               : scalar(entity, child);
           if (child.many) childType = new GraphQLList(new GraphQLNonNull(childType));
-          if (!lookup && !child.relation && !child.nullable && requiredInput(child, mode, root, true) && !(root && nested && mode === 'create')) childType = new GraphQLNonNull(childType);
+          if (!lookup && !child.relation && !child.nullable && requiredInput(child, mode, root, true) && !(root && nested)) childType = new GraphQLNonNull(childType);
           fields[key] = { type: childType, description: child.description };
         }
         return fields;

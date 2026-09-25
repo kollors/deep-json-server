@@ -349,6 +349,54 @@ test('nested writes and reverse reconnections cannot bypass ownership or forge a
   assert.equal((await request(app, 'PATCH', '/parents/1', { children: [{ name: 'forged', createdById: 'b' }] }, alice)).statusCode, 400);
 });
 
+test('key-only references preserve foreign records and auditing while actual updates require ownership', async (t) => {
+  const schema = {
+    timestamps: true,
+    softDelete: true,
+    models: {
+      Parent: { ...item, collection: 'parents', fields: { ...item.fields, children: { type: 'Child[]', keyOn: 'related' } } },
+      Child: { ...item, collection: 'children', fields: { ...item.fields, parent: { type: 'Parent', keyOn: 'current' } } },
+    },
+  };
+  const { app } = await setup(t, { database: { schema, source: { parents: [], children: [] } }, auth: { source: users }, graphql: {} });
+  const alice = await login(app, 'alice');
+  const bob = await login(app, 'bob');
+  const parent = await request(app, 'POST', '/parents', { name: 'Shared parent' }, bob);
+  assert.equal(parent.statusCode, 201, parent.body);
+  const parentBefore = (await app.inject('/parents/1')).json();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 5000 });
+  for (const method of ['POST', 'PATCH', 'PUT']) {
+    const response = await request(app, method, method === 'POST' ? '/children' : '/children/1', { name: 'Child', parent: { id: 1 } }, alice);
+    assert.equal(response.statusCode, method === 'POST' ? 201 : 200, response.body);
+    assert.equal(response.json().createdById, 'a');
+    assert.deepEqual((await app.inject('/parents/1')).json(), parentBefore);
+  }
+  for (const operation of ['childCreate', 'childUpdate', 'childReplace']) {
+    const key = operation === 'childCreate' ? '' : 'id:1,';
+    const response = await gql(app, `mutation { ${operation}(${key}data:{name:"Child",parent:{id:1}}){id parent{id name updatedAt updatedById}} }`, alice);
+    assert.equal(response.json().errors, undefined, response.body);
+    assert.equal(response.json().data[operation].parent.updatedAt, parentBefore.updatedAt);
+    assert.equal(response.json().data[operation].parent.updatedById, 'b');
+    assert.deepEqual((await app.inject('/parents/1')).json(), parentBefore);
+  }
+  const childBefore = (await app.inject('/children/1')).json();
+  assert.equal((await request(app, 'PATCH', '/children/1', { parent: { id: 1, name: 'Forbidden' } }, alice)).statusCode, 403);
+  const denied = await gql(app, 'mutation { childReplace(id:1,data:{name:"Child",parent:{id:1,name:"Forbidden"}}){id} }', alice);
+  assert.equal(denied.json().errors[0].extensions.code, 'FORBIDDEN', denied.body);
+  assert.deepEqual((await app.inject('/parents/1')).json(), parentBefore);
+  assert.deepEqual((await app.inject('/children/1')).json(), childBefore);
+  const detached = await request(app, 'POST', '/parents', { name: 'Detached' }, bob);
+  assert.equal(detached.statusCode, 201, detached.body);
+  assert.equal((await request(app, 'PATCH', '/parents/2', { children: [{ id: 1 }] }, bob)).statusCode, 403);
+  assert.deepEqual((await app.inject('/children/1')).json(), childBefore);
+  assert.equal((await request(app, 'DELETE', '/parents/2', undefined, bob)).statusCode, 200);
+  const deletedBefore = (await app.inject('/parents/2')).json();
+  const deletedLink = await request(app, 'PATCH', '/children/1', { parent: { id: 2 } }, alice);
+  assert.equal(deletedLink.statusCode, 400, deletedLink.body);
+  assert.deepEqual((await app.inject('/parents/2')).json(), deletedBefore);
+  assert.deepEqual((await app.inject('/children/1')).json(), childBefore);
+});
+
 test('schema roots supply lifecycle settings for CLI and standalone generators', async (t) => {
   for (const flags of [{ timestamps: 'yes' }, { softDelete: 1 }]) {
     assert.throws(() => normalizeServerConfig({ storage: 'memory', database: { source: {}, ...flags } }), /Unknown/);

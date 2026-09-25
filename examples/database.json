@@ -2,37 +2,31 @@
   "countries": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Ardenia"
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Veloria"
     }
   ],
   "genres": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Crime",
       "parentIds": []
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Gangster",
       "parentIds": ["1"]
     },
     {
       "id": "3",
-      "isArchived": false,
       "name": "Drama",
       "parentIds": []
     },
     {
       "id": "4",
-      "isArchived": false,
       "name": "Comedy",
       "parentIds": []
     }
@@ -54,7 +48,6 @@
       "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
       "description": "An heiress in a port city uncovers a plot involving two rival families.",
       "id": "1",
-      "isArchived": false,
       "publisherIds": ["2"],
       "title": "Shadows of Ardenia"
     },
@@ -63,7 +56,6 @@
       "coverSrc": "https://example.com/covers/northern-star.jpg",
       "description": "A night clerk at an old hotel gets drawn into the search for a missing painting.",
       "id": "2",
-      "isArchived": false,
       "publisherIds": ["1"],
       "title": "Midnight at the Northern Star"
     }
@@ -71,12 +63,10 @@
   "publishers": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Northlight Studio"
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Aurora Pictures"
     }
   ],
@@ -85,15 +75,13 @@
       "bornAt": "1988-03-14",
       "countryId": "1",
       "fullName": "Mira Volkova",
-      "id": "1",
-      "isArchived": false
+      "id": "1"
     },
     {
       "bornAt": "1991-11-02",
       "countryId": "2",
       "fullName": "Leon Vetrov",
-      "id": "2",
-      "isArchived": false
+      "id": "2"
     }
   ]
 }

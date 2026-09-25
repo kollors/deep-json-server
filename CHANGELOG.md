@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.7
+
+- Treat nested objects containing only a primary key as references in POST, PUT and PATCH, preserving the target's fields and audit values. Actual changes, including inverse key changes, still require ownership.
+- Allow key-only references in GraphQL replace inputs and OpenAPI request schemas; validate required fields when a nested object creates or changes a record.
+- Infer array storage keys for `keyOn: "current"` list relations targeting non-primary fields, preserving explicitly declared key types.
+- Expand the migration guide from 0.9.0 in English and Russian, document API defaults, and remove the archive flag from examples.
+
 ## 1.0.0-rc.6
 
 - Require both sides of every explicit model relation and `keyOn: "current" | "related"` to identify where its key is stored.

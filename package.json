@@ -1,6 +1,6 @@
 {
   "name": "@kollors/deep-json-server",
-  "version": "1.0.0-rc.6",
+  "version": "1.0.0-rc.7",
   "description": "JSON mock server with schema-driven REST, GraphQL, OpenAPI generation and file uploads",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,6 +37,7 @@
     "README.ru.md",
     "CHANGELOG.md",
     "MIGRATION.md",
+    "MIGRATION.ru.md",
     "examples"
   ],
   "scripts": {

@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.6`.
+To install this release candidate, use `@1.0.0-rc.7`.
 
 ## Quick start
 
@@ -177,7 +177,20 @@ Examples: [database](examples/database.json), [model schema](examples/schema.jso
 }
 ```
 
-Model definitions belong in `models`. The schema root accepts `models`, `api`, `timestamps` and `softDelete`. Root `api` selects database routes. When omitted, it defaults to REST and also GraphQL if the server config has a `graphql` section. A model can override the global timestamp and soft-deletion settings. A model's optional `api` array can narrow access to `['rest']`, `['graphql']`, both, or `[]` to hide it from both. A model cannot enable an API absent from root `api`. OpenAPI includes models with REST enabled. GraphQL generation needs at least one GraphQL model; REST OpenAPI generation needs at least one REST model. On a GraphQL-only server, OpenAPI can still describe configured auth and file routes. Related models must allow the same API. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+Model definitions belong in `models`. The schema root accepts `models`, `api`, `timestamps` and `softDelete`. Root `api` selects database routes. When omitted, its default depends on how the schema is used:
+
+| Context | Default root `api` |
+|---|---|
+| Server without a `graphql` section | `['rest']` |
+| Server with a `graphql` section | `['rest', 'graphql']` |
+| Standalone `generateOpenapi()` | `['rest']` |
+| Standalone `generateGraphql()` | `['graphql']` |
+
+Explicit `['rest']` enables database REST routes; `['graphql']` enables GraphQL operations; `['rest', 'graphql']` enables both. OpenAPI describes REST routes when `openapi` is configured. Root `api: []` is invalid; `[]` is allowed only at the model level.
+
+A model without its own `api` inherits the root value. A model can override it with `['rest']`, `['graphql']`, both, or `[]` to hide it from both. A model cannot enable an API absent from root `api`. OpenAPI includes models with REST enabled. GraphQL generation needs at least one GraphQL model; REST OpenAPI generation needs at least one REST model. On a GraphQL-only server, OpenAPI can still describe configured auth and file routes. Related models must allow the same API. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+
+Thus an explicit root `"api": ["rest", "graphql"]` enables both APIs for models that inherit the root setting. The array order does not matter.
 
 For example, with root `api: ['rest', 'graphql']`, a model set to `api: ['rest']` has REST routes and OpenAPI paths but no GraphQL operations; a model set to `api: ['graphql']` has GraphQL operations but no REST routes or OpenAPI paths.
 
@@ -244,7 +257,9 @@ On the `current` side, `target` defaults to the related model's primary key. `so
 
 `source` is always a path in the current model, and `target` is always a path in the model named by `type`. For an inverse relation, the paths are swapped: `Country.users` has `source: "id"` and `target: "countryId"`. Specify a path when the stored key has a custom name. If multiple relations connect the same models, disambiguate the inverse declarations, for example `Country.birthUsers = {"type":"User[]","keyOn":"related","target":"birthCountryId"}` and `Country.residenceUsers = {"type":"User[]","keyOn":"related","target":"residenceCountryId"}`. Missing, inconsistent, or ambiguous pairs fail when the schema loads.
 
-Relation keys remain in the database even when they are absent from `fields`. A `source` field pointing to a target primary key can be omitted: the server infers an array of keys for a list relation or a scalar key for a single relation. An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available. Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
+Relation keys remain in the database even when they are absent from `fields`. On the `current` side, a `source` field can be omitted when the target key type is known: the server infers an array of keys for a list relation or a scalar key for a single relation. This applies to primary and non-primary target fields. An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available. Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
+
+For example, `publishers: { "type": "Publisher[]", "keyOn": "current", "target": "code" }` infers `publisherCodes: { "type": "string[]" }` when `Publisher.code` is a string, even if the primary key is `Publisher.id`. Explicitly declared storage key types are preserved.
 
 Reverse example: `User.movies = {"type":"Movie[]","keyOn":"related","target":"actors.userId"}` pairs with `Movie.actors.user = {"type":"User","keyOn":"current","source":"actors.userId"}`. A movie is returned once even if several actors match. A single relation that matches multiple records causes an error.
 
@@ -266,37 +281,31 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
   "countries": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Ardenia"
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Veloria"
     }
   ],
   "genres": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Crime",
       "parentIds": []
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Gangster",
       "parentIds": ["1"]
     },
     {
       "id": "3",
-      "isArchived": false,
       "name": "Drama",
       "parentIds": []
     },
     {
       "id": "4",
-      "isArchived": false,
       "name": "Comedy",
       "parentIds": []
     }
@@ -318,7 +327,6 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
       "coverSrc": "https://example.com/covers/shadows-of-ardenia.jpg",
       "description": "An heiress in a port city uncovers a plot involving two rival families.",
       "id": "1",
-      "isArchived": false,
       "publisherIds": ["2"],
       "title": "Shadows of Ardenia"
     },
@@ -327,7 +335,6 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
       "coverSrc": "https://example.com/covers/northern-star.jpg",
       "description": "A night clerk at an old hotel gets drawn into the search for a missing painting.",
       "id": "2",
-      "isArchived": false,
       "publisherIds": ["1"],
       "title": "Midnight at the Northern Star"
     }
@@ -335,12 +342,10 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
   "publishers": [
     {
       "id": "1",
-      "isArchived": false,
       "name": "Northlight Studio"
     },
     {
       "id": "2",
-      "isArchived": false,
       "name": "Aurora Pictures"
     }
   ],
@@ -349,15 +354,13 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
       "bornAt": "1988-03-14",
       "countryId": "1",
       "fullName": "Mira Volkova",
-      "id": "1",
-      "isArchived": false
+      "id": "1"
     },
     {
       "bornAt": "1991-11-02",
       "countryId": "2",
       "fullName": "Leon Vetrov",
-      "id": "2",
-      "isArchived": false
+      "id": "2"
     }
   ]
 }
@@ -495,20 +498,20 @@ Content-Type: application/json
 
 | Relation value | Behavior |
 |---|---|
-| An object containing only a primary key | Link an existing record without changing it |
+| An object containing only a primary key | Link an existing record without updating its fields or audit values |
 | An object with a primary key and other fields | PATCH updates supplied fields; PUT replaces the related record |
 | An object without a primary key | Create a related record with defaults and a generated key |
 
-The key name and type follow the target model. An object containing only a key still counts as an update: in PUT it must include the model's required fields. Replacement preserves primary keys, generated values and `readOnly` fields. In POST, nested objects with existing keys receive partial updates. A missing target is an error; creating a nested record without a key requires an autogenerated primary key.
+The key name and type follow the target model. An object containing only that key is a reference in POST, PUT and PATCH; it does not require the target's other mandatory fields. Adding other fields makes it an update: PUT requires all mandatory fields and removes omitted optional fields or resets them to defaults; POST/PATCH update supplied fields. Replacement preserves primary keys, generated values and `readOnly` fields. A missing target is an error; creating a nested record without a key requires an autogenerated primary key. Declared storage keys, for example `countryId`, can also change links directly.
 
-A supplied list replaces the relation's membership. PATCH preserves omitted relations; PUT clears omitted writable links. `[]` clears a list and `null` clears a nullable single relation. Removing a link does not delete the related record. Required single relations must remain linked; required list relations may be empty.
+A supplied list replaces the relation's membership. PATCH preserves omitted relations. PUT replaces the current record's writable fields, including its own relation keys, but preserves omitted `keyOn: "related"` links whose keys live in other records. `[]` clears a list and `null` clears a nullable single relation. Removing a link does not delete the related record. Required single relations must remain linked; required list relations may be empty.
 
 When the storage key is declared in `fields`, use either the relation field or its key in an object, for example `genres` or `genreIds`. Supplying both fields returns `400 INVALID_INPUT`, even when their key sets match:
 
 ```json
 {
   "genreIds": ["1", "2"],
-  "genres": ["1", "2"]
+  "genres": [{ "id": "1" }, { "id": "2" }]
 }
 ```
 
@@ -516,7 +519,7 @@ The server rejects both fields together and rolls back the operation. Relation f
 
 All nested changes belong to the main record's transaction. A validation error, missing record or invalid response selection rolls back the entire operation. Updating a shared record affects every record linked to it.
 
-GraphQL accepts typed objects in relation fields. To change only the links in a replace mutation, use a declared storage key such as `genreIds`. For example:
+GraphQL accepts typed objects in relation fields. To change only links, including in a replace mutation, pass objects containing only primary keys or use a declared storage key such as `genreIds`. Required fields for nested creation or replacement with additional fields are checked at runtime. For example:
 
 ```graphql
 mutation {
@@ -760,7 +763,7 @@ Cascade deletion follows `onDelete` and each affected model's `softDelete`. Rest
 
 Restoration metadata is stored with the records and survives restarts; include it when backing up the database. The internal `djsDeletion` field is reserved and is not exposed by either API.
 
-With auth, any authenticated user can create records. Updating, deleting and restoring require ownership through `createdById` or `isAdmin: true`. Only administrators can change unowned records. Administrator edits preserve the original owner. The rules cover nested writes, changes to relation storage keys, cascades and restoration. Linking an existing record without changing it does not require owning it. Each mutation is atomic: denied changes leave all affected records unchanged.
+With auth, any authenticated user can create records. Updating, deleting and restoring require ownership through `createdById` or `isAdmin: true`. Only administrators can change unowned records. Administrator edits preserve the original owner. The rules cover nested writes, changes to relation storage keys, cascades and restoration. Linking a record through a primary-key-only object or a declared storage key does not require owning the unchanged target. A nested object with additional fields requires permission to update it. Changing inverse links still requires permission for every record whose stored key changes. Each mutation is atomic: denied changes leave all affected records unchanged.
 
 REST returns 401 for an invalid or missing token and 403 for insufficient permissions. GraphQL applies the same rules to mutations and returns `UNAUTHENTICATED` or `FORBIDDEN`; obtain the token through REST login and send `Authorization: Bearer <token>`. GraphQL reads remain public, as do OPTIONS requests and every file operation.
 
@@ -839,7 +842,7 @@ Content-Type: application/json
 
 In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata defaults to `<files.source>/.files.json`; set `files.metadata` for another location. Directories and the metadata file are created when needed.
 
-Use one server process per disk database and file store. A second server using the same database file fails at startup; closing the first server releases its lock, and a lock left by a crashed process is recovered on the next start. Stop the server before editing stored files or metadata manually. Storage paths cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
+Use one server process per disk database and file store. A second server using the same database file fails at startup; closing the first server releases its lock, and a lock left by a crashed process is recovered on the next start. Stop the server before editing stored files or metadata manually. Paths inside the file storage directory cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 

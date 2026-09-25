@@ -9,9 +9,6 @@
           "primary": true,
           "generated": "uuid"
         },
-        "isArchived": {
-          "type": "boolean"
-        },
         "name": {
           "type": "string"
         },
@@ -28,9 +25,6 @@
           "type": "string",
           "primary": true,
           "generated": "uuid"
-        },
-        "isArchived": {
-          "type": "boolean"
         },
         "name": {
           "type": "string"
@@ -67,9 +61,6 @@
         },
         "description": {
           "type": "string"
-        },
-        "isArchived": {
-          "type": "boolean"
         },
         "title": {
           "type": "string",
@@ -118,9 +109,6 @@
           "primary": true,
           "generated": "uuid"
         },
-        "isArchived": {
-          "type": "boolean"
-        },
         "name": {
           "type": "string"
         },
@@ -146,9 +134,6 @@
         "fullName": {
           "type": "string",
           "required": true
-        },
-        "isArchived": {
-          "type": "boolean"
         },
         "avatarSrc": {
           "type": "string",

@@ -118,13 +118,20 @@ test('nested PATCH mixes references, updates and creates without storing relatio
   assert.equal((await get(app, '/movies/1')).genres, undefined);
 });
 
-test('PUT requires fields in relation objects while IDs only link; nested PUT replaces', async (t) => {
+test('PUT links key-only objects without replacement; objects with other fields still replace', async (t) => {
   const { app } = await setup(t);
   const before = await get(app, '/movies/1');
-  const failed = await mutate(app, 'PUT', { title: 'replaced', users: [{ id: 1 }] });
+  const failed = await mutate(app, 'PUT', { title: 'replaced', users: [{ id: 1, role: 'admin' }] });
   assert.equal(failed.statusCode, 400, failed.body);
   assert.match(failed.json().error, /name/);
   assert.deepEqual(await get(app, '/movies/1'), before);
+  const userBefore = await get(app, '/users/1');
+  const genreBefore = await get(app, '/genres/1');
+  const linked = await mutate(app, 'PUT', { title: 'linked', users: [{ id: 1 }], genres: [{ id: 1 }], owner: { id: 1 } }, '/movies/1', [{ userIds: true, genreIds: true, ownerId: true }]);
+  assert.equal(linked.statusCode, 200, linked.body);
+  assert.deepEqual(linked.json(), { userIds: [1], genreIds: [1], ownerId: 1 });
+  assert.deepEqual(await get(app, '/users/1'), userBefore);
+  assert.deepEqual(await get(app, '/genres/1'), genreBefore);
   assert.equal((await mutate(app, 'PATCH', { users: [{ id: 1 }] })).statusCode, 200);
   assert.equal((await get(app, '/users/1')).name, 'first');
   const replaced = await mutate(app, 'PUT', { title: 'replaced', userIds: [1], genres: [{ id: 1, name: 'replacement' }, { name: 'new genre' }] }, '/movies/1', [{ '*': true, userIds: true }]);
@@ -183,6 +190,8 @@ test('nested failures roll back every record and counter on disk', async (t) => 
     { genreIds: [1], genres: [2] },
     { actors: [{ user: 1, userId: 2, genres: [1] }] },
     { genres: [1, 1] },
+    { genres: [{ id: 1 }, { id: 1 }] },
+    { genres: [{ id: '1' }] },
     { genres: ['1'] },
     { genres: [null] },
     { genres: null },
@@ -209,9 +218,14 @@ test('GraphQL nested input keeps PUT/PATCH semantics and creates records without
   assert.equal(update.json().errors, undefined, update.body);
   assert.deepEqual(update.json().data.movieUpdate.genreIds, [1, 3]);
   assert.equal(update.json().data.movieUpdate.genres.data[0].description, 'keep');
-  const failed = await gql(app, 'mutation { movieReplace(id:1,data:{title:"bad",users:[{id:1}]}){id} }');
+  const failed = await gql(app, 'mutation { movieReplace(id:1,data:{title:"bad",users:[{id:1,role:"admin"}]}){id} }');
   assert.ok(failed.json().errors, failed.body);
   assert.equal((await get(app, '/movies/1')).title, 'original');
+  const linked = await gql(app, 'mutation { movieReplace(id:1,data:{title:"linked",genres:[{id:1}],users:[{id:1}],owner:{id:1}}){genreIds userIds ownerId} }');
+  assert.equal(linked.json().errors, undefined, linked.body);
+  assert.deepEqual(linked.json().data.movieReplace, { genreIds: [1], userIds: [1], ownerId: 1 });
+  assert.equal((await get(app, '/genres/1')).description, 'keep');
+  assert.equal((await get(app, '/users/1')).role, 'member');
   const replace = await gql(app, 'mutation { movieReplace(id:1,data:{title:"good",genres:[{id:1,name:"replaced"}],userIds:[1]}){title genres{data{id name description stamp}}} }');
   assert.equal(replace.json().errors, undefined, replace.body);
   assert.equal(replace.json().data.movieReplace.genres.data[0].description, null);
@@ -282,6 +296,12 @@ test('custom primary keys use the model key and require generated keys for neste
   const { app } = await setup(t, schema, { countries: [{ code: 'US', name: 'old' }], users: [{ id: 1, countryCode: 'US' }] });
   assert.equal((await mutate(app, 'PATCH', { country: { code: 'US', name: 'updated' } }, '/users/1')).statusCode, 200);
   assert.equal((await get(app, '/countries/US')).name, 'updated');
+  const linked = await mutate(app, 'PUT', { country: { code: 'US' } }, '/users/1', [{ country: [{ code: true, name: true }] }]);
+  assert.equal(linked.statusCode, 200, linked.body);
+  assert.deepEqual(linked.json(), { country: { code: 'US', name: 'updated' } });
+  const graphLinked = await gql(app, 'mutation { userReplace(id:1,data:{country:{code:"US"}}){country{code name}} }');
+  assert.equal(graphLinked.json().errors, undefined, graphLinked.body);
+  assert.deepEqual(graphLinked.json().data.userReplace, linked.json());
   assert.equal((await mutate(app, 'PATCH', { country: { name: 'missing key' } }, '/users/1')).statusCode, 400);
   assert.equal((await mutate(app, 'PATCH', { country: { code: 'unknown', name: 'new' } }, '/users/1')).statusCode, 404);
   assert.equal((await get(app, '/countries')).total, 1);
@@ -433,7 +453,8 @@ test('nested GraphQL errors and excessive depth do not persist partial writes', 
   assert.equal((await get(cyclic.app, '/nodes')).total, 1);
   const ancestor = await mutate(cyclic.app, 'PATCH', { children: [{ id: 1, children: [] }] }, '/nodes/1');
   assert.equal(ancestor.statusCode, 409, ancestor.body);
-  assert.equal((await mutate(cyclic.app, 'PATCH', { childIds: [1] }, '/nodes/1')).statusCode, 200);
+  assert.equal((await mutate(cyclic.app, 'PATCH', { children: [{ id: 1 }] }, '/nodes/1')).statusCode, 200);
+  assert.deepEqual((await get(cyclic.app, url('/nodes/1', [{ childIds: true }]))).childIds, [1]);
 });
 
 test('OpenAPI validates nested create, update and replace shapes', async (t) => {
@@ -445,7 +466,10 @@ test('OpenAPI validates nested create, update and replace shapes', async (t) => 
   const update = ajv.compile({ $ref: 'nested-contract#/components/schemas/MovieUpdate' });
   const replace = ajv.compile({ $ref: 'nested-contract#/components/schemas/MovieReplace' });
   assert.equal(update({ genres: [{ id: 1 }, { id: 2 }, { name: 'new' }] }), true, JSON.stringify(update.errors));
-  assert.equal(replace({ title: 'new', users: [{ id: 1 }] }), false);
+  assert.equal(replace({ title: 'new', users: [{ id: 1 }] }), true, JSON.stringify(replace.errors));
+  assert.equal(replace({ title: 'new', users: [{ id: 1, role: 'admin' }] }), false);
+  assert.equal(replace({ title: 'new', users: [{}] }), false);
+  assert.equal(replace({ title: 'new', users: [{ id: '1' }] }), false);
   assert.equal(replace({ title: 'new', userIds: [1], genres: [{ id: 1, name: 'full' }, { name: 'new' }] }), true, JSON.stringify(replace.errors));
   assert.equal(update({ genres: [{ id: 1, stamp: 'protected' }] }), false);
   assert.equal(update({ genres: [{}] }), false);

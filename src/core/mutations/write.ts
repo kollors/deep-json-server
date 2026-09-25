@@ -82,7 +82,7 @@ export class MutationWriter {
   }
 
   /** Удаляет виртуальные связи из черновика и собирает отдельные операции их подключения.
-   * @example { user: '1' } → операция связи; одновременный userId в том же теле → ошибка.
+   * @example { user: { id: '1' } } → операция связи; одновременный userId в том же теле → ошибка.
    */
   private extract(ref: Ref<JsonObject>, input: JsonObject, inputBindings: Record<string, JsonObject>, pending: Selection[], depth: number): void {
     if (depth > 32) throw domainError('INVALID_INPUT', 'Nested writes are too deep');
@@ -114,7 +114,7 @@ export class MutationWriter {
   }
 
   /** Находит связанную запись по ключу либо выполняет вложенное создание или изменение.
-   * @example '1' → существующая запись; { name: 'Анна' } без первичного ключа → новая запись.
+   * @example { id: '1' } → ссылка без изменения записи; { name: 'Анна' } без первичного ключа → новая запись.
    */
   private resolve(entity: Entity, input: unknown, depth: number): JsonObject {
     if (!isObject(input)) throw domainError('INVALID_INPUT', `${entity.name}: relation values must be objects`);
@@ -126,11 +126,12 @@ export class MutationWriter {
     if (!current || keyOf(current[entity.primary]) !== keyOf(key)) throw domainError('NOT_FOUND', `${entity.name}: related record not found`);
     const data = { ...input };
     delete data[entity.primary];
+    if (!Object.keys(data).length) return current;
     return this.write(entity, this.existingMode, key, data, depth + 1);
   }
 
   /** Записывает ключи выбранных записей в прямую или обратную связь, отсоединяя прежние цели при необходимости.
-   * @example users: ['1', '2'] → соответствующие ключи; одна цель указана дважды → ошибка.
+   * @example users: [{ id: '1' }, { id: '2' }] → соответствующие ключи; одна цель указана дважды → ошибка.
    */
   private connect({ ref, node, value }: Selection, depth: number): void {
     const target = node.relation;
