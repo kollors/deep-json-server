@@ -1,8 +1,8 @@
-# Migrating from 0.9.0 to 1.0.0-rc.8
+# Migrating from 0.9.0 to 1.0.0-rc.9
 
 [Русский](MIGRATION.ru.md) · [Current README](README.md)
 
-This guide compares `v0.9.0` with `1.0.0-rc.8` and also covers the relation changes since RC6. Update configuration and clients together. Node.js 22 or newer is still required. Back up the database, config, schema, uploaded files and metadata before migrating.
+This guide compares `v0.9.0` with `1.0.0-rc.9` and also covers the relation changes since RC6. Update configuration and clients together. Node.js 22 or newer is still required. Back up the database, config, schema, uploaded files and metadata before migrating.
 
 ## 1. Choose whether you need a schema
 
@@ -14,7 +14,7 @@ export default { database: { path: './database.json' } };
 ```
 
 ```js
-// 1.0.0-rc.8
+// 1.0.0-rc.9
 export default { storage: 'file', database: { source: './database.json' } };
 ```
 
@@ -22,7 +22,7 @@ This keeps schemaless REST and relations inferred from stored `...Id` / `...Ids`
 
 ## 2. Convert configuration
 
-| 0.9.0 | 1.0.0-rc.8 |
+| 0.9.0 | 1.0.0-rc.9 |
 |---|---|
 | `database.path` | `storage: 'file'` and `database.source` |
 | `database.data` | `storage: 'memory'` and `database.source` |

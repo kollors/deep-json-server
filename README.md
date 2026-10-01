@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.8`.
+To install this release candidate, use `@1.0.0-rc.9`.
 
 ## Quick start
 

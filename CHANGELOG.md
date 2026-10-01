@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-rc.9
+
+- Update vulnerable Fastify, fast-uri and brace-expansion versions within compatible ranges.
+- Check runtime dependencies with npm audit before the full verification and publication pipeline. RC9 includes all RC8 storage, auth, query and cross-platform fixes.
+
 ## 1.0.0-rc.8
 
 - Persist hashed auth sessions with users in file storage so valid tokens survive restarts, with atomic logout and password-change revocation.
