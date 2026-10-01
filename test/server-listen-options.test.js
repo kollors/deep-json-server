@@ -19,8 +19,9 @@ const setup = async (t, config) => {
 
 test('listen preserves configured host when overriding only the port in promise and callback forms', async (t) => {
   for (const callback of [false, true]) {
-    const { app } = await setup(t, { storage: 'memory', database: { source: { items: [] } }, server: { host: '127.0.0.2', port: 4001 } });
+    const { app } = await setup(t, { storage: 'memory', database: { source: { items: [] } }, server: { host: '127.0.0.1', port: 4001 } });
     const address = callback ? await new Promise((resolve, reject) => app.listen({ port: 0 }, (error, result) => (error ? reject(error) : resolve(result)))) : await app.listen({ port: 0 });
-    assert.match(address, /^http:\/\/127\.0\.0\.2:/);
+    assert.match(address, /^http:\/\/127\.0\.0\.1:/);
+    assert.equal(app.server.address().address, '127.0.0.1');
   }
 });
