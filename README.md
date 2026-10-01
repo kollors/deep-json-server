@@ -14,7 +14,7 @@ A JSON mock server with REST, GraphQL, related records, file uploads and schema 
 npm install @kollors/deep-json-server@rc
 ```
 
-To install this release candidate, use `@1.0.0-rc.7`.
+To install this release candidate, use `@1.0.0-rc.8`.
 
 ## Quick start
 
@@ -232,7 +232,7 @@ String and numeric constraints on `string[]`/`number[]` apply to every element. 
 
 Each `enum` value must match the field type and its constraints. Use `nullable: true` to allow `null` for the field; do not include `null` in `enum`. Invalid values are rejected when the schema is loaded.
 
-Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
+Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. Setting a nullable parent to `null` is rejected if it would remove stored read-only descendants. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
 
 For example, a `LocalUser` with primary key `username` and `password: {"type":"string","required":true,"writeOnly":true}` has `localUser(username: ...)` and `/localUsers/{username}`. A `writeOnly` field accepts input and is excluded from responses, `scope`, filters and ordering.
 
@@ -474,6 +474,8 @@ Omitting `scope` returns scalar fields, as with `[{"*":true}]`. An empty selecti
 
 Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. For embedded object arrays without primary keys, each source element is kept once, even if several parts select it. Distinct elements with equal contents remain separate. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
 
+REST and GraphQL also enforce a shared budget for each request: at most 1,000 selection nodes, 10,000 expanded records, 100,000 accounted execution steps, and a conservative JSON size estimate of 8 MiB. Nested lists, `union` parts and GraphQL aliases consume the same budget. Exceeding a limit returns REST `400` or GraphQL `INVALID_QUERY`; reduce selected fields, nesting or page sizes. REST mutations roll back if their response projection exceeds the budget.
+
 ### Nested writes
 
 Explicitly declared storage keys such as `genreIds: ["1"]` only set a relation. Relation fields also accept records to create or update:
@@ -571,9 +573,13 @@ query {
 
 The query `user(id: ...)` returns one record or `null` if it is missing. Mutations are `userCreate(data: ...)`, `userReplace(id: ..., data: ...)`, `userUpdate(id: ..., data: ...)`, `userDelete(id: ...)`. For models containing only generated fields, the create mutation takes no `data` argument. Writes and validation follow the same rules as REST. Relations selected in a mutation result determine the response contents.
 
+When the primary key is named `data`, Update/Replace mutations accept its value as `key` and the input object as `data`, for example `entryUpdate(key: "one", data: { name: "Updated" })`. Find/Delete keep the primary-key argument named `data`.
+
 String primary keys use GraphQL `ID`; ordinary strings use `String`, numbers use `Float`, and pagination parameters use `Int`. Schema enums preserve valid string labels; other values receive `VALUE_0`, `VALUE_1`, etc. String lengths, formats and other model constraints are validated by the server during request execution. Introspection is available for exploring the schema. Selected list arguments are validated before executing mutations.
 
-Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`, `CONFLICT`, `UNAUTHENTICATED`, `FORBIDDEN` or `INTERNAL_ERROR`. GraphQL syntax and type errors appear in the standard `errors` array. Query depth is limited to 32 levels.
+Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`, `CONFLICT`, `UNAUTHENTICATED`, `FORBIDDEN` or `INTERNAL_ERROR`. GraphQL syntax and type errors appear in the standard `errors` array. Query depth is limited to 32 levels. The request budgets described for REST also apply to GraphQL. Selection limits and list arguments are checked before mutations run. Errors while resolving a mutation result, including runtime budget exhaustion, do not undo a mutation that has already committed; query the record to check its state before retrying.
+
+A GraphQL operation containing several mutation fields is not one transaction: fields execute in order, and earlier committed changes remain if a later result fails. Runtime budget exhaustion returns `data: null` and stops subsequent mutation fields, but `data: null` does not mean writes were rolled back. Recover the saved state with a smaller query. Automatically retrying a create mutation with a generated key can create a second record.
 
 ## OpenAPI and schema exports
 
@@ -615,7 +621,7 @@ if (!password) throw new Error('Set DJS_PASSWORD');
 await writeFile(
   './auth.json',
   JSON.stringify(
-    [{ id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true }],
+    [{ id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true, sessions: [] }],
     null,
     2,
   ),
@@ -633,7 +639,7 @@ export default {
 };
 ```
 
-Start with `npx deep-json-server server.config.js`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`. Passwords use salted scrypt hashes.
+Start with `npx deep-json-server server.config.js`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`, and `sessions` defaults to `[]`, so existing user files remain valid. Passwords use salted scrypt hashes.
 
 With `storage: 'memory'`, pass an array in `auth.source`:
 
@@ -648,13 +654,19 @@ export default {
   database: { source: { items: [] } },
   auth: {
     source: [
-      { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true },
+      { id: '1', username: 'admin', passwordHash: await hashPassword(password), isAdmin: true, sessions: [] },
     ],
   },
 };
 ```
 
-Auth users are stored separately from the database. In file mode, changes are saved to `auth.source`; in memory mode, they disappear on restart. The supplied user array is not modified. Restart the server after editing the file manually.
+Auth users and their sessions are stored together in `auth.source`, separately from the database. Each entry in a user's `sessions` array contains `{ tokenHash, expiresAt }`: `tokenHash` is the SHA-256 hash of the access token as 64 lowercase hexadecimal characters, and `expiresAt` is an absolute Unix timestamp in milliseconds. Raw tokens are never stored, and auth responses expose neither password hashes nor session records. Token hashes must be unique across all users.
+
+With `storage: 'file'`, login, logout and user changes are saved to the same JSON file before a successful response. Valid sessions survive server restarts: the client can keep using its existing token. A password change and removal of that user's sessions are saved together. A failed write leaves the previous users and sessions unchanged. Restart the server after editing the file manually; if you replace a password hash manually, also clear that user's `sessions`.
+
+With `storage: 'memory'`, the supplied user array is not modified. Every startup loads the initial users and sessions again. Sessions created at runtime disappear on restart; unexpired sessions supplied in the initial data are restored, including any that were logged out during the previous run. The client still needs the corresponding raw token; it cannot recover it from `tokenHash`.
+
+`auth.expiresIn` sets the lifetime of new sessions and defaults to 3600 seconds. Existing sessions keep their saved expiration time, including across restarts. Expired sessions are ignored on startup, rejected on every request and removed from all users on the next successful auth update, such as login or logout. There is no automatic extension of the expiration time.
 
 | REST request | JSON body | Response |
 |---|---|---|
@@ -665,13 +677,13 @@ Auth users are stored separately from the database. In file mode, changes are sa
 | `PATCH /auth/users/:id/password` | `{ "currentPassword": "…", "newPassword": "…" }` | `{ success: true }` |
 | `PATCH /auth/users/:id/admin` | `{ "isAdmin": true }` | `{ id, username, isAdmin }` |
 
-Registration and login are public. Send `Authorization: Bearer <accessToken>` for the other methods. Registration creates an ordinary user with a generated `id`; requests cannot include `id`, `passwordHash` or `isAdmin`. Usernames are case-sensitive and unique; duplicates return `409`. A username must contain a non-whitespace character and be at most 256 characters long. Passwords must contain 1–1024 characters. Values are not trimmed. Registration does not create a session: log in afterwards.
+Registration and login are public. Send `Authorization: Bearer <accessToken>` for the other methods. Registration creates an ordinary user with a generated `id`; requests cannot include `id`, `passwordHash`, `isAdmin` or `sessions`. Usernames are case-sensitive and unique; duplicates return `409`. A username must contain a non-whitespace character and be at most 256 characters long. Passwords must contain 1–1024 characters. Values are not trimmed. Registration does not create a session: log in afterwards.
 
 Users can change only their own password by supplying `currentPassword` and `newPassword`. Administrators follow the same rule for their own password. An administrator can change an ordinary user's password with just `newPassword`. Changing another administrator's password returns `403`. A successful password change ends all sessions of the target user, including the current session when changing your own password; log in again. An incorrect current password returns `401` without changing sessions.
 
 Only administrators can change `isAdmin`. They can grant or remove another user's admin status. An administrator can remove their own status only if another administrator remains; otherwise the request returns `409`. This check accounts for concurrent requests. Existing tokens use the new permissions as soon as the change is saved, including for GraphQL mutations. An administrator may demote another administrator and then change their password as an ordinary user.
 
-Invalid or expired tokens return `401`, insufficient permissions return `403`, and an absent user for an otherwise permitted operation returns `404`. Invalid request bodies return `400`. Login, registration and password changes may return `429` when too many password computations are running; login also limits active sessions. Sessions are kept in memory and disappear on restart. Logout revokes only the supplied token.
+Invalid or expired tokens return `401`, insufficient permissions return `403`, and an absent user for an otherwise permitted operation returns `404`. Invalid request bodies return `400`. Login, registration and password changes may return `429` when too many password computations are running; login also returns `429` when there are already 10,000 active sessions across all users, including sessions loaded from the source. Logout revokes only the supplied token.
 
 Every model record has a virtual `actions` object when auth is enabled. It is calculated for the current user and is never stored. In REST, request it explicitly through `scope`:
 
@@ -842,7 +854,7 @@ Content-Type: application/json
 
 In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata defaults to `<files.source>/.files.json`; set `files.metadata` for another location. Directories and the metadata file are created when needed.
 
-Use one server process per disk database and file store. A second server using the same database file fails at startup; closing the first server releases its lock, and a lock left by a crashed process is recovered on the next start. Stop the server before editing stored files or metadata manually. Paths inside the file storage directory cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
+Use one server process per writable disk source. A second server sharing the database, auth users, file storage directory or metadata fails at startup. Locks are single JSON files next to their sources: `database.json` uses `database-lock.json`, with the last extension removed from the configured source name. A lock records its type, process ID and owner token. Closing the server removes the lock files; after a crash the operating system releases the locks and the next server reuses the abandoned files. Disk locking uses the native `fs-native-extensions` dependency; memory storage and schema generation do not load it. Symbolic-link sources lock both the original entry and its target. Stop the server before editing stored files or metadata manually. Paths inside the file storage directory cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
@@ -895,6 +907,6 @@ npm run verify
 
 `npm run verify` checks types, code style, test coverage and installation from the package archive.
 
-To publish a prerelease, update the version in `package.json`, `package-lock.json` and `src/core/constants.ts`, then push the commit to `main`. GitHub Actions creates its `v<version>` tag and publishes through trusted publishing to the `alpha`, `beta` or `rc` channel. Stable versions publish to `latest` from an explicitly pushed version tag.
+To publish a prerelease, update the version in `package.json` and `package-lock.json` (the runtime and CLI read it from package metadata), then push the commit to `main`. GitHub Actions creates its `v<version>` tag and publishes through trusted publishing to the `alpha`, `beta` or `rc` channel. Stable versions publish to `latest` from an explicitly pushed version tag.
 
 License: MIT.

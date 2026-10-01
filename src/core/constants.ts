@@ -1,6 +1,8 @@
+import packageMetadata from '../../package.json' with { type: 'json' };
+
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;
 export const DEFAULT_MAX_PAGE_SIZE = 100;
 export const DEFAULT_PAGE_SIZE = 10;
 export const DEFAULT_PORT = 4001;
-export const VERSION = '1.0.0-rc.6';
+export const VERSION = packageMetadata.version;

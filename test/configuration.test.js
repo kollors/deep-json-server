@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createServer, generateGraphql, generateOpenapi } from '../dist/index.js';
 import { loadModel } from '../dist/src/core/model.js';
@@ -12,7 +13,7 @@ import { normalizeServerConfig } from '../dist/src/server/config.js';
 const item = { collection: 'items', fields: { id: { type: 'string', primary: true } } };
 const schema = { models: { Item: item } };
 const memory = { storage: 'memory', database: { source: { items: [] }, schema }, server: { logger: false } };
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 
 test('storage discriminates every source and the schema, with independent input copies', () => {
@@ -24,11 +25,12 @@ test('storage discriminates every source and the schema, with independent input 
   assert.equal(input.files.source[0].content[0], 1);
   result.auth.source.push({ id: 'copy' });
   assert.deepEqual(input.auth.source, []);
-  const disk = normalizeServerConfig({ storage: 'file', database: { source: 'db.json', schema: 'schema.json' }, auth: { source: 'auth.json' }, files: { source: 'uploads' } }, '/tmp/example');
-  assert.equal(disk.database.source, '/tmp/example/db.json');
-  assert.equal(disk.database.schema, '/tmp/example/schema.json');
-  assert.equal(disk.auth.source, '/tmp/example/auth.json');
-  assert.equal(disk.files.metadata, '/tmp/example/uploads/.files.json');
+  const directory = resolve('configuration-fixture');
+  const disk = normalizeServerConfig({ storage: 'file', database: { source: 'db.json', schema: 'schema.json' }, auth: { source: 'auth.json' }, files: { source: 'uploads' } }, directory);
+  assert.equal(disk.database.source, join(directory, 'db.json'));
+  assert.equal(disk.database.schema, join(directory, 'schema.json'));
+  assert.equal(disk.auth.source, join(directory, 'auth.json'));
+  assert.equal(disk.files.metadata, join(directory, 'uploads', '.files.json'));
   for (const storage of ['file', 'memory']) {
     const base = storage === 'memory' ? memory : { storage, database: { source: 'db.json', schema: 'schema.json' } };
     const mismatches =
@@ -182,7 +184,7 @@ test('public TypeScript types correlate all sources with the one storage discrim
   const directory = await mkdtemp(join(tmpdir(), 'deep-types-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'config.mts');
-  const entry = resolve('dist/index.js');
+  const entry = resolve('dist/index.js').replaceAll('\\', '/');
   await writeFile(
     path,
     `import { createServer, type DeepJsonServerConfig, type ModelSchema } from ${JSON.stringify(entry)};
@@ -210,5 +212,16 @@ const enabled: DeepJsonServerConfig = { ...memory, graphql: { enabled: true } };
 void disk;
 `,
   );
-  await promisify(execFile)(resolve('node_modules/.bin/tsc'), ['--ignoreConfig', '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'ES2022', path]);
+  await promisify(execFile)(process.execPath, [
+    resolve('node_modules/typescript/bin/tsc'),
+    '--ignoreConfig',
+    '--noEmit',
+    '--strict',
+    '--skipLibCheck',
+    '--module',
+    'NodeNext',
+    '--target',
+    'ES2022',
+    path,
+  ]);
 });

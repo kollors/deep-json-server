@@ -1,5 +1,8 @@
 import {
+  type ASTNode,
+  BREAK,
   type FieldNode,
+  GraphQLError,
   GraphQLIncludeDirective,
   type GraphQLObjectType,
   type GraphQLResolveInfo,
@@ -9,14 +12,53 @@ import {
   getNamedType,
   isObjectType,
   type SelectionSetNode,
+  type ValidationRule,
 } from 'graphql';
 import type { Engine, PreparedList } from '../core/engine.js';
 import type { Node } from '../core/model.js';
+import { QueryBudget, QueryBudgetError } from '../core/query/budget.js';
 import { defined } from '../core/utils.js';
+
+/** Ограничивает размер выбора, включая встроенные поля без пользовательских резолверов.
+ * @example Тысячи alias для __typename отклоняются ещё при проверке документа.
+ */
+export const selectionBudgetRule: ValidationRule = (context) => {
+  const budget = new QueryBudget();
+  const select = (node: ASTNode) => {
+    try {
+      budget.select();
+    } catch (error) {
+      if (!(error instanceof QueryBudgetError)) throw error;
+      context.reportError(new GraphQLError(error.message, { nodes: node, originalError: error, extensions: { code: error.code } }));
+      return BREAK;
+    }
+  };
+  return { Field: select, InlineFragment: select, FragmentSpread: select };
+};
+
+/** Считает непосредственные поля результата до передачи объектов исполнителю GraphQL.
+ * @example Два разных alias одного поля → 2; повтор одного fragment → одна группа полей.
+ */
+export function selectionWidth(info: GraphQLResolveInfo): number {
+  const fields = new Set<string>();
+  const visited = new Set<SelectionSetNode>();
+  const walk = (selectionSet: SelectionSetNode): void => {
+    if (visited.has(selectionSet)) return;
+    visited.add(selectionSet);
+    for (const selection of selectionSet.selections) {
+      if (getDirectiveValues(GraphQLSkipDirective, selection, info.variableValues)?.if === true || getDirectiveValues(GraphQLIncludeDirective, selection, info.variableValues)?.if === false) continue;
+      if (selection.kind === 'FragmentSpread') walk(defined(info.fragments[selection.name.value], 'GraphQL fragment').selectionSet);
+      else if (selection.kind === 'InlineFragment') walk(selection.selectionSet);
+      else fields.add(selection.alias?.value ?? selection.name.value);
+    }
+  };
+  for (const field of info.fieldNodes) if (field.selectionSet) walk(field.selectionSet);
+  return fields.size;
+}
 /** Обходит выбранные поля, фрагменты и директивы и подготавливает аргументы списков до изменения данных.
  * @example Запрос без списков → пустая Map; выбранный список с pageSize: 0 → ошибка.
  */
-export function preflight(info: GraphQLResolveInfo, engine: Engine): Map<FieldNode, PreparedList> {
+export function preflight(info: GraphQLResolveInfo, engine: Engine, budget?: QueryBudget): Map<FieldNode, PreparedList> {
   const prepared = new Map<FieldNode, PreparedList>();
   const root = info.operation.operation === 'mutation' ? info.schema.getMutationType() : info.schema.getQueryType();
   if (!root) throw new Error('GraphQL operation root is unavailable');
@@ -30,6 +72,7 @@ export function preflight(info: GraphQLResolveInfo, engine: Engine): Map<FieldNo
     if (parents.has(parent)) return;
     parents.add(parent);
     for (const selection of selectionSet.selections) {
+      budget?.select();
       if (getDirectiveValues(GraphQLSkipDirective, selection, info.variableValues)?.if === true || getDirectiveValues(GraphQLIncludeDirective, selection, info.variableValues)?.if === false) continue;
       if (selection.kind === 'FragmentSpread') {
         walk(defined(info.fragments[selection.name.value], 'GraphQL fragment').selectionSet, parent);

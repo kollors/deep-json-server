@@ -18,12 +18,7 @@ const tokenKey = (token: string) => createHash('sha256').update(token).digest('h
  * @example { id: '1', username: 'anna', isAdmin: false, passwordHash: '…' } → { id: '1', username: 'anna', isAdmin: false }.
  */
 const publicUser = (user: StoredUser): AuthUser => ({ id: user.id, username: user.username, isAdmin: user.isAdmin });
-interface Session {
-  userId: string;
-  expiresAt: number;
-}
 export class AuthService {
-  private sessions = new Map<string, Session>();
   private pendingPasswords = 0;
   private closed = false;
   constructor(
@@ -38,14 +33,22 @@ export class AuthService {
     const { username, password } = credentials(body);
     const user = this.store.read().byUsername.get(username);
     const valid = await this.passwordWork(() => verifyPassword(password, user?.passwordHash ?? DUMMY_HASH));
+    let accessToken = '';
+    const current = await this.store.update((users) => {
+      this.assertOpen();
+      const current = user && users.byId.get(user.id);
+      // Проверяем пароль внутри очереди, после завершения предыдущих записей на диск.
+      if (!user || !valid || !current || current.passwordHash !== user.passwordHash) throw unauthorized();
+      const now = Date.now();
+      let activeSessions = 0;
+      for (const session of users.byTokenHash.values()) if (session.expiresAt > now) activeSessions++;
+      if (activeSessions >= 10000) throw domainError('TOO_MANY_REQUESTS', 'Session limit reached');
+      do {
+        accessToken = randomBytes(32).toString('base64url');
+      } while (users.byTokenHash.has(tokenKey(accessToken)));
+      return { ...current, sessions: [...current.sessions, { tokenHash: tokenKey(accessToken), expiresAt: now + this.expiresIn * 1000 }] };
+    });
     this.assertOpen();
-    const current = user && this.store.read().byId.get(user.id);
-    // Смена пароля во время scrypt не должна выдавать новую сессию по прежнему паролю.
-    if (!user || !valid || !current || current.passwordHash !== user.passwordHash) throw unauthorized();
-    this.prune();
-    if (this.sessions.size >= 10000) throw domainError('TOO_MANY_REQUESTS', 'Session limit reached');
-    const accessToken = randomBytes(32).toString('base64url');
-    this.sessions.set(tokenKey(accessToken), { userId: current.id, expiresAt: Date.now() + this.expiresIn * 1000 });
     return { accessToken, expiresIn: this.expiresIn, user: publicUser(current) };
   }
 
@@ -57,7 +60,7 @@ export class AuthService {
     const passwordHash = await this.passwordWork(() => hashPassword(password));
     const user = await this.store.update((users) => {
       this.assertOpen();
-      return { id: createUniqueId((id) => users.byId.has(id)), username, passwordHash, isAdmin: false };
+      return { id: createUniqueId((id) => users.byId.has(id)), username, passwordHash, isAdmin: false, sessions: [] };
     });
     return publicUser(user);
   }
@@ -74,14 +77,11 @@ export class AuthService {
       if (own && !(await verifyPassword(currentPassword as string, target.passwordHash))) throw unauthorized();
       return hashPassword(newPassword);
     });
-    await this.store.update(
-      (users) => {
-        const { target: current } = this.passwordTarget(users, authorization, id);
-        if (current.passwordHash !== target.passwordHash) throw domainError('CONFLICT', 'Password changed during the request');
-        return { ...current, passwordHash };
-      },
-      () => this.revoke(id),
-    );
+    await this.store.update((users) => {
+      const { target: current } = this.passwordTarget(users, authorization, id);
+      if (current.passwordHash !== target.passwordHash) throw domainError('CONFLICT', 'Password changed during the request');
+      return { ...current, passwordHash, sessions: [] };
+    });
     return { success: true };
   }
 
@@ -108,20 +108,21 @@ export class AuthService {
   me(authorization: unknown): AuthUser {
     return publicUser(this.identity(authorization));
   }
-  /** Проверяет токен и удаляет соответствующую сессию.
+  /** Проверяет токен и сохраняет удаление соответствующей сессии.
    * @example Действительный токен → { success: true }; повторный выход с ним → ошибка.
    */
-  logout(authorization: unknown): { success: boolean } {
-    const [key] = this.session(authorization);
-    this.sessions.delete(key);
+  async logout(authorization: unknown): Promise<{ success: boolean }> {
+    await this.store.update(() => {
+      const [key, user] = this.session(authorization);
+      return { ...user, sessions: user.sessions.filter((session) => session.tokenHash !== key) };
+    });
     return { success: true };
   }
-  /** Запрещает новые обращения и очищает сессии в памяти.
+  /** Запрещает новые обращения, сохраняя записанные сессии для следующего запуска.
    * @example close() → undefined; последующий login() → отказ.
    */
   close(): void {
     this.closed = true;
-    this.sessions.clear();
   }
 
   /** Ограничивает число одновременных вычислений хешей и освобождает место даже при ошибке.
@@ -143,29 +144,27 @@ export class AuthService {
   private assertOpen(): void {
     if (this.closed) throw unauthorized();
   }
-  /** Находит сессию по хешу токена и проверяет срок; просроченную сессию удаляет.
-   * @example Действительный Bearer-токен → [ключ, сессия]; отсутствующий или истёкший → ошибка.
+  /** Находит сессию по хешу токена и проверяет срок, не изменяя сохранённое состояние.
+   * @example Действительный Bearer-токен → [ключ, пользователь]; отсутствующий или истёкший → ошибка.
    */
-  private session(authorization: unknown): [string, Session] {
+  private session(authorization: unknown): [string, StoredUser] {
     this.assertOpen();
     if (typeof authorization !== 'string') throw unauthorized();
     const match = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(authorization);
     if (!match?.[1]) throw unauthorized();
     const key = tokenKey(match[1]);
-    const session = this.sessions.get(key);
-    if (!session || session.expiresAt <= Date.now()) {
-      this.sessions.delete(key);
-      throw unauthorized();
-    }
-    return [key, session];
+    const users = this.store.read();
+    const session = users.byTokenHash.get(key);
+    if (!session || session.expiresAt <= Date.now()) throw unauthorized();
+    const user = users.byId.get(session.userId);
+    if (!user) throw unauthorized();
+    return [key, user];
   }
   /** Получает текущую запись по идентификатору из проверенной сессии.
    * @example Сессия с userId = '1' → актуальная запись с id = '1'; отсутствующая запись → ошибка.
    */
   private identity(authorization: unknown): StoredUser {
-    const [, session] = this.session(authorization);
-    const user = this.store.read().byId.get(session.userId);
-    if (!user) throw unauthorized();
+    const [, user] = this.session(authorization);
     return user;
   }
   /** Проверяет текущие права администратора.
@@ -187,21 +186,8 @@ export class AuthService {
     if (actor.id !== id && target.isAdmin) throw domainError('FORBIDDEN', 'Cannot change another administrator password');
     return { actor, target };
   }
-  /** Завершает все сессии одного пользователя после сохранения нового пароля.
-   * @example Две сессии id = '1' и одна id = '2' → остаётся сессия id = '2'.
-   */
-  private revoke(id: string): void {
-    for (const [key, session] of this.sessions) if (session.userId === id) this.sessions.delete(key);
-  }
-  /** Удаляет из памяти сессии, срок которых истёк к текущему моменту.
-   * @example Одна истёкшая и одна действующая сессия → остаётся одна действующая; результат undefined.
-   */
-  private prune(): void {
-    const now = Date.now();
-    for (const [key, session] of this.sessions) if (session.expiresAt <= now) this.sessions.delete(key);
-  }
 }
-/** Открывает источник учётных записей и создаёт хранилище сессий в памяти.
+/** Открывает источник учётных записей вместе с сохранёнными или исходными сессиями.
  * @example createAuthService({ source: [] }) → Promise<AuthService>; повторяющиеся id → ошибка.
  */
 export async function createAuthService(config: AuthConfig): Promise<AuthService> {

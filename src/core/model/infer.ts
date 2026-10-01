@@ -3,7 +3,7 @@ import { getRelationMetadata } from '../relation-metadata.js';
 import type { DatabaseSnapshot } from '../types.js';
 import { defined, isObject, isSafeKey, singularize, toPascalCase } from '../utils.js';
 import { addField, childName, linkRelation, markRelationKeys, NAME, newNode, systemFields } from './tree.js';
-import type { Entity, Model } from './types.js';
+import type { Entity, Model, Node } from './types.js';
 /** Выводит поля и связи из значений коллекций, не меняя переданные записи.
  * @example inferModel({ users: [{ id: '1', name: 'Анна' }] }) → модель со строковыми id и name.
  */
@@ -11,6 +11,7 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
   const options = recordOptions(settings);
   const valueType = (value: unknown) => (isObject(value) ? 'object' : ['string', 'number', 'boolean'].includes(typeof value) ? typeof value : 'string');
   const model: Model = { api: ['rest'], entities: [], byName: new Map(), byCollection: new Map(), explicit: false, options };
+  const observed = new Map<Node, Set<string>>();
   for (const [collection, records] of Object.entries(database)) {
     const name = toPascalCase(singularize(collection));
     const entity: Entity = {
@@ -24,7 +25,6 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
       root: newNode('', { type: 'object' }),
     };
     systemFields(entity, options);
-    const observed = new Map<string, Set<string>>();
     const scan = (record: Record<string, unknown>, prefix = '') => {
       for (const [key, value] of Object.entries(record)) {
         if (!NAME.test(key) || !isSafeKey(key) || (!prefix && entity.fields[key]?.system)) continue;
@@ -32,13 +32,13 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
         const sample = Array.isArray(value) ? value.find((v) => v !== null) : value;
         const base = valueType(sample);
         const type = base + (Array.isArray(value) ? '[]' : '');
-        const types = observed.get(path) ?? new Set<string>();
+        const node = entity.fields[path] ?? addField(entity, path, { type });
+        const types = observed.get(node) ?? new Set<string>();
         for (const element of Array.isArray(value) ? value : [value]) {
           if (element == null) continue;
           types.add(valueType(element) + (Array.isArray(value) ? '[]' : ''));
         }
-        observed.set(path, types);
-        const node = entity.fields[path] ?? addField(entity, path, { type });
+        observed.set(node, types);
         if (types.size) {
           node.mixed = node.mixed || types.size > 1 || (Array.isArray(value) && value.some(isObject) && value.some((item) => !isObject(item)));
           node.base = [...types].some((type) => type.startsWith('object')) ? 'object' : defined([...types].sort()[0], 'observed field type').replace(/\[\]$/, '');
@@ -64,9 +64,11 @@ export function inferModel(database: DatabaseSnapshot, settings: RecordOptions =
   const resources = Object.keys(database);
   for (const entity of model.entities)
     for (const field of Object.values(entity.fields)) {
-      if (field.mixed || field.system) continue;
+      if (field.system) continue;
       const relation = getRelationMetadata(childName(field), resources, entity.collection);
       if (!relation) continue;
+      const keyTypes = relation.isMany ? ['string[]', 'number[]'] : ['string', 'number'];
+      if (field.mixed && ![...(observed.get(field) ?? [])].every((type) => keyTypes.includes(type))) continue;
       const target = defined(model.byCollection.get(relation.targetResource), relation.targetResource);
       const prefix = field.path.includes('.') ? field.path.slice(0, field.path.lastIndexOf('.') + 1) : '';
       const path = prefix + relation.relationName;

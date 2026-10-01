@@ -3,6 +3,7 @@
     "declaration": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
     "outDir": "dist",
     "rootDir": ".",
     "skipLibCheck": true,

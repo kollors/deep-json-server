@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { generateGraphql, generateOpenapi } from '../dist/index.js';
 import { runCli } from '../dist/src/cli/index.js';
 import { createDatabaseStore } from '../dist/src/core/database.js';
@@ -15,7 +16,7 @@ import { createMemoryFileStore } from '../dist/src/files/memory-store.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
 const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } } } };
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const temp = async (t) => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'deep-optimization-'));

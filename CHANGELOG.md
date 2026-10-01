@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.8
+
+- Persist hashed auth sessions with users in file storage so valid tokens survive restarts, with atomic logout and password-change revocation.
+- Replace the lock directory with one readable `<source-name>-lock.json` file and native OS locking. Lock the database, auth store, upload root and file metadata; recover after crashes and reject competing writers.
+- Protect configured files and their symlink targets from upload, deletion and schema export. Reject malformed Unicode file paths before changing storage.
+- Preserve protected nested fields when a nullable ancestor is cleared, and infer relations across numeric seed IDs and generated string IDs.
+- Use `key` for the primary-key argument of GraphQL update/replace mutations when the primary field is named `data`.
+- Bound REST and GraphQL selection, expansion, query work and response size; document that GraphQL result errors do not undo committed mutations.
+- Derive the CLI version from package metadata and verify the installed CLI over HTTP, including paths with spaces and Unicode and persistence after a crash.
+- Run type checks, lint, coverage and installed-package checks on Linux, Windows and macOS with Node.js 22, 24 and 26. Publish only after the full matrix succeeds for the selected commit.
+
+When upgrading from an earlier RC, stop all old server processes before starting RC8: the lock protocol has changed. Existing auth files without `sessions` remain valid. Regenerate GraphQL clients if a model uses `data` as its primary field.
+
 ## 1.0.0-rc.7
 
 - Treat nested objects containing only a primary key as references in POST, PUT and PATCH, preserving the target's fields and audit values. Actual changes, including inverse key changes, still require ownership.

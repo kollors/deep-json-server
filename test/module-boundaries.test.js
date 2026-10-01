@@ -11,9 +11,10 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer, generateGraphql, generateOpenapi, writeGraphql, writeOpenapi } from '../dist/index.js';
 
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const setup = async (t, schema, data = { items: [] }, extra = {}) => {
@@ -335,6 +336,7 @@ test('src contains module directories and core has no API or server dependencies
           continue;
         }
         const resolved = new URL(target, url);
+        if (module === 'core' && path === 'constants.ts' && resolved.href === new URL('../package.json', root).href) continue;
         assert.ok(resolved.href.startsWith(directory.href) || allowed.some((name) => resolved.href.startsWith(new URL(`${name}/`, root).href)), `${url} imports ${target}`);
         if (module === 'openapi' && !resolved.href.startsWith(directory.href) && !resolved.href.startsWith(new URL('core/', root).href)) {
           assert.ok(

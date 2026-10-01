@@ -1,8 +1,8 @@
-# Migrating from 0.9.0 to 1.0.0-rc.7
+# Migrating from 0.9.0 to 1.0.0-rc.8
 
 [Русский](MIGRATION.ru.md) · [Current README](README.md)
 
-This guide compares `v0.9.0` with `1.0.0-rc.7` and also covers the relation changes since RC6. Update configuration and clients together. Node.js 22 or newer is still required. Back up the database, config, schema, uploaded files and metadata before migrating.
+This guide compares `v0.9.0` with `1.0.0-rc.8` and also covers the relation changes since RC6. Update configuration and clients together. Node.js 22 or newer is still required. Back up the database, config, schema, uploaded files and metadata before migrating.
 
 ## 1. Choose whether you need a schema
 
@@ -14,7 +14,7 @@ export default { database: { path: './database.json' } };
 ```
 
 ```js
-// 1.0.0-rc.7
+// 1.0.0-rc.8
 export default { storage: 'file', database: { source: './database.json' } };
 ```
 
@@ -22,7 +22,7 @@ This keeps schemaless REST and relations inferred from stored `...Id` / `...Ids`
 
 ## 2. Convert configuration
 
-| 0.9.0 | 1.0.0-rc.7 |
+| 0.9.0 | 1.0.0-rc.8 |
 |---|---|
 | `database.path` | `storage: 'file'` and `database.source` |
 | `database.data` | `storage: 'memory'` and `database.source` |
@@ -178,7 +178,7 @@ Omitted inverse (`keyOn: 'related'`) relations survive PUT. Explicit `users: []`
 
 Auth, timestamps and soft deletion are new, optional features. To first preserve unauthenticated writes and physical deletion, omit `auth` and leave `timestamps` / `softDelete` disabled (their defaults).
 
-If enabling auth, create a separate auth user store and migrate ownership deliberately. Old records without `createdById` can be changed only by administrators. The ownership field is server-managed through the API; prepare ownership in the copied database before startup if ordinary users must edit existing records. Auth does not close read endpoints or file operations. Sessions are in memory and end when the server restarts.
+If enabling auth, create a separate auth user store and migrate ownership deliberately. Old records without `createdById` can be changed only by administrators. The ownership field is server-managed through the API; prepare ownership in the copied database before startup if ordinary users must edit existing records. Auth does not close read endpoints or file operations. In RC8, file storage persists hashed sessions in the auth user file and restores unexpired sessions after a restart. Existing users without `sessions` remain valid. When manually changing a password hash, also clear that user's `sessions`.
 
 With `softDelete`, DELETE retains records, lists hide deleted records by default, direct primary-key reads can retrieve them, and successful PUT/PATCH restores them. There is no automatic conversion of an old application archive flag. See the [lifecycle rules](README.md#record-dates-deletion-and-ownership) before enabling this feature.
 
@@ -207,5 +207,5 @@ Schema generation alone does not validate existing database records. Call `ready
 1. Pin the chosen RC version and migrate a **copy** of the 0.9.0 files. Run generation, then initialize the HTTP server to validate data too.
 2. Check representative reads: defaults, explicit foreign keys, nested lists, filters and pagination. Check create, PATCH, PUT, link changes and deletion using disposable copied records.
 3. If enabling auth, test an owner, an administrator and an ordinary non-owner against old records. Confirm uploaded files remain accessible through the retained metadata path.
-4. Stop the old server before switching. Run one process per database/file store; current versions lock the disk database. Stop the process before manual edits.
+4. Stop every old server process before switching: RC8 replaces the old lock directory with native OS locks and readable `<source-name>-lock.json` files for the database, auth, upload root and file metadata. Old and new lock protocols do not coordinate. Run one process per writable store and stop it before manual edits.
 5. Keep the original package version, config, schema, data and file metadata together for rollback. Restore them together; do not point 0.9.0 at data already modified by the new server. Include new increment counters (`<database>.counters.json`) and soft-delete restoration metadata in subsequent backups when used.

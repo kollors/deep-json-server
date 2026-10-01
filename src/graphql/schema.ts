@@ -200,7 +200,8 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
   for (const entity of model.entities.filter((e) => e.api.includes('graphql'))) {
     const name = operationName(entity);
     for (const operation of [name, `${name}List`]) if (queries[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-    const keyArg = { [entity.primary]: { type: new GraphQLNonNull(scalar(entity, fieldAt(entity, entity.primary), false)) } };
+    const keyType = new GraphQLNonNull(scalar(entity, fieldAt(entity, entity.primary), false));
+    const keyArg = { [entity.primary]: { type: keyType } };
     queries[name] = {
       type: output(entity, entity.root),
       args: keyArg,
@@ -214,12 +215,13 @@ export function buildGraphql(model: Model | undefined): GraphQLSchema {
     for (const { mode, hasKey, hasBody } of MUTATIONS) {
       const operation = `${name}${capitalize(mode)}`;
       if (mutations[operation]) throw new Error(`GraphQL operation collision: ${operation}`);
-      const args: GraphQLFieldConfigArgumentMap = { ...(hasKey ? keyArg : {}) };
+      const keyArgument = hasBody && entity.primary === 'data' ? 'key' : entity.primary;
+      const args: GraphQLFieldConfigArgumentMap = hasKey ? { [keyArgument]: { type: keyType } } : {};
       if (hasBody && Object.values(entity.root.children).some((child) => writable(child, mode, true))) args.data = { type: new GraphQLNonNull(input(entity, entity.root, mode, true)) };
       mutations[operation] = {
         type: output(entity, entity.root),
         args,
-        extensions: { entity, operation: mode },
+        extensions: { entity, operation: mode, keyArgument },
       };
     }
   }

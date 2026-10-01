@@ -12,6 +12,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer, generateGraphql, generateOpenapi, hashPassword } from '../dist/index.js';
 import { verifyPassword } from '../dist/src/auth/password.js';
 import { createAuthService } from '../dist/src/auth/service.js';
@@ -20,7 +21,7 @@ import { Engine } from '../dist/src/core/engine.js';
 import { loadModel } from '../dist/src/core/model.js';
 
 const password = 'initial-password';
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const passwordHash = await hashPassword(password);
 const users = [
@@ -106,6 +107,7 @@ test('registration is public, creates ordinary users and keeps memory input isol
     { username: 'invalid', password, id: 'chosen' },
     { username: 'invalid', password, passwordHash },
     { username: 'invalid', password, isAdmin: true },
+    { username: 'invalid', password, sessions: [] },
   ])
     assert.equal((await request(app, 'POST', '/auth/register', payload)).statusCode, 400);
   assert.deepEqual(source, users);
@@ -219,13 +221,16 @@ test('file users persist registration, roles and passwords across restart and re
   assert.equal(saved.find((user) => user.id === 'bob').isAdmin, true);
   assert.equal(await verifyPassword('new-bob', saved.find((user) => user.id === 'bob').passwordHash), true);
   assert.equal(saved.find((user) => user.id === registered.json().id).isAdmin, false);
+  assert.deepEqual(saved.find((user) => user.id === 'bob').sessions, []);
+  assert.deepEqual(saved.find((user) => user.id === registered.json().id).sessions, []);
   assert.ok(saved.every((user) => !Object.hasOwn(user, 'password') && !Object.hasOwn(user, 'newPassword')));
   await assert.rejects(() => fs.stat(join(directory, '.auth.json.tmp')), { code: 'ENOENT' });
   await app.close();
   const reopened = await service(t, path);
   assert.equal((await reopened.login({ username: 'bob', password: 'new-bob' })).user.isAdmin, true);
   assert.equal((await reopened.login({ username: 'persistent', password: 'persisted-password' })).user.id, registered.json().id);
-  assert.throws(() => reopened.me(`Bearer ${root}`), { code: 'UNAUTHENTICATED' });
+  assert.equal(reopened.me(`Bearer ${root}`).isAdmin, true);
+  assert.throws(() => reopened.me(`Bearer ${bob}`), { code: 'UNAUTHENTICATED' });
 });
 
 test('all storage sources obey the same global mode', async (t) => {
@@ -239,8 +244,7 @@ test('all storage sources obey the same global mode', async (t) => {
 test('failed temporary writes preserve the original file, users and sessions, and the queue recovers', async (t) => {
   const directory = await temporary(t);
   const path = join(directory, 'auth.json');
-  const original = JSON.stringify(users);
-  await fs.writeFile(path, original);
+  await fs.writeFile(path, JSON.stringify(users));
   const app = await setup(t, {
     storage: 'file',
     database: { source: await writeJson(`${path}.db.json`, { items: [] }), schema: await writeJson(`${path}.schema.json`, schema) },
@@ -248,6 +252,7 @@ test('failed temporary writes preserve the original file, users and sessions, an
   });
   const root = await login(app, 'root');
   const alice = await login(app, 'alice');
+  const original = await fs.readFile(path, 'utf8');
   const writeFile = fs.writeFile;
   let fail = true;
   const mock = t.mock.method(fs, 'writeFile', async (destination, content, ...args) => {
@@ -262,13 +267,16 @@ test('failed temporary writes preserve the original file, users and sessions, an
     assert.equal((await request(app, 'POST', '/auth/register', { username: 'retry', password })).statusCode, 500);
     assert.equal((await setAdmin(app, root, 'alice', true)).statusCode, 500);
     assert.equal((await changePassword(app, alice, 'alice', 'next', password)).statusCode, 500);
+    assert.equal((await request(app, 'POST', '/auth/login', { username: 'alice', password })).statusCode, 500);
+    assert.equal((await request(app, 'POST', '/auth/logout', undefined, alice)).statusCode, 500);
     assert.equal(await fs.readFile(path, 'utf8'), original);
     assert.equal((await me(app, alice)).json().isAdmin, false);
     assert.equal((await me(app, root)).statusCode, 200);
     assert.equal((await request(app, 'POST', '/auth/login', { username: 'retry', password })).statusCode, 401);
-    await login(app, 'alice');
     assert.equal((await request(app, 'POST', '/auth/login', { username: 'alice', password: 'next' })).statusCode, 401);
     fail = false;
+    assert.equal((await request(app, 'POST', '/auth/logout', undefined, root)).statusCode, 200);
+    assert.equal((await me(app, root)).statusCode, 401);
     assert.equal((await request(app, 'POST', '/auth/register', { username: 'retry', password })).statusCode, 201);
     assert.equal((await changePassword(app, alice, 'alice', 'next', password)).statusCode, 200);
     assert.equal((await me(app, alice)).statusCode, 401);
@@ -313,6 +321,42 @@ test('a login using the previous password cannot finish after a successful reset
   }
   await rejected;
   await auth.login({ username: 'bob', password: 'new-bob' });
+});
+
+test('a login that finishes hashing during a password write rechecks credentials after that write', async (t) => {
+  const directory = await temporary(t);
+  const path = await writeJson(join(directory, 'auth.json'), users);
+  const auth = await service(t, path);
+  const root = await tokenFor(auth, 'root');
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  const writeFile = fs.writeFile;
+  const mock = t.mock.method(fs, 'writeFile', async (destination, content, ...args) => {
+    if (destination === join(directory, '.auth.json.tmp')) {
+      entered.resolve();
+      await released.promise;
+    }
+    return writeFile(destination, content, ...args);
+  });
+  syncBuiltinESMExports();
+  const paused = holdPassword(t, password);
+  try {
+    const reset = auth.changePassword(root, 'bob', { newPassword: 'new-bob' });
+    await entered.promise;
+    const rejected = assert.rejects(auth.login({ username: 'bob', password }), { code: 'UNAUTHENTICATED' });
+    await paused.entered;
+    paused.release();
+    await new Promise((resolve) => setImmediate(resolve));
+    released.resolve();
+    await Promise.all([reset, rejected]);
+    assert.deepEqual(JSON.parse(await fs.readFile(path, 'utf8')).find((user) => user.id === 'bob').sessions, []);
+    await auth.login({ username: 'bob', password: 'new-bob' });
+  } finally {
+    paused.release();
+    released.resolve();
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
 
 test('queued record mutations recheck auth instead of keeping the original admin role', async (t) => {

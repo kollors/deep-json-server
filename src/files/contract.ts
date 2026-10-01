@@ -67,6 +67,7 @@ export const validateName = (value: unknown, source: string): string => {
     value.endsWith('.') ||
     value.endsWith(' ') ||
     /[<>:"/\\|?*]/.test(value) ||
+    /[\uD800-\uDFFF]/u.test(value) ||
     hasControlCharacter(value) ||
     WINDOWS_RESERVED_NAME.test(value)
   ) {

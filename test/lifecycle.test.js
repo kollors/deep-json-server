@@ -10,6 +10,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer, generateOpenapi, hashPassword } from '../dist/index.js';
 import { runCli } from '../dist/src/cli/index.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
@@ -22,7 +23,7 @@ const users = [
 ];
 const item = { collection: 'items', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true } } };
 const model = { models: { Item: item } };
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const setup = async (t, options = {}) => {
   const config = {

@@ -1,6 +1,7 @@
 import { type Actor, recordActions } from './lifecycle/options.js';
 import { bindingFor, childName, readPath, requireRelation } from './model/tree.js';
 import type { Entity, Model, Node } from './model/types.js';
+import type { QueryBudget } from './query/budget.js';
 import type { RecordSnapshot } from './types.js';
 import { isObject } from './utils.js';
 
@@ -18,6 +19,7 @@ export interface Context<R extends RecordSnapshot = RecordSnapshot> {
   data: Readonly<Record<string, readonly R[]>>;
   model: Model;
   indexes: Map<string, Map<string, R[]>>;
+  budget?: QueryBudget;
 }
 /** Создаёт контекст чтения с пустым кешем индексов; данные и модель передаются по ссылке.
  * @example makeContext(data, model) → { data, model, indexes: Map(0) }.
@@ -61,23 +63,33 @@ export function related<R extends RecordSnapshot>(ref: Ref<R>, node: Node): Ref<
   let index = ref.context.indexes.get(indexKey);
   if (!index) {
     index = new Map();
-    for (const record of ref.context.data[entity.collection] ?? [])
+    for (const record of ref.context.data[entity.collection] ?? []) {
+      ref.context.budget?.consume();
       for (const value of readPath(record, relation.target)) {
+        ref.context.budget?.consume();
         const key = keyOf(value);
         const bucket = index.get(key) ?? [];
         bucket.push(record);
         index.set(key, bucket);
       }
+    }
     ref.context.indexes.set(indexKey, index);
   }
   const found = new Set<R>();
-  for (const value of sourceValues(ref, node)) for (const record of index.get(keyOf(value)) ?? []) found.add(record);
+  for (const value of sourceValues(ref, node)) {
+    ref.context.budget?.consume();
+    for (const record of index.get(keyOf(value)) ?? []) {
+      ref.context.budget?.consume();
+      found.add(record);
+    }
+  }
   return [...found].map((record) => rootRef(ref.context, entity, record));
 }
 /** Возвращает значение поля или ссылки на связанные объекты, учитывая отсутствующие и удалённые записи.
  * @example Для обычного name в записи { name: 'Анна' } → 'Анна'; отсутствующая одиночная связь → null.
  */
 export function resolveField(ref: Ref, node: Node, includeDeleted = false, actor?: Actor): unknown {
+  ref.context.budget?.consume();
   if (node.relation) {
     const records = related(ref, node).filter((record) => node.many || includeDeleted || !record.entity.softDelete || record.value.deletedAt == null);
     return node.many ? records : (records[0] ?? null);
@@ -86,8 +98,11 @@ export function resolveField(ref: Ref, node: Node, includeDeleted = false, actor
   if (node.virtual === 'actions') return wrap(recordActions(actor, ref.root));
   const key = childName(node);
   const value = Object.hasOwn(ref.value, key) ? ref.value[key] : node.system && !node.internal ? null : undefined;
+  if (Array.isArray(value)) ref.context.budget?.consume(value.length);
   if ((ref.context.model.explicit && node.base !== 'object') || value == null) return value;
-  if (Array.isArray(value)) return value.map((item) => (isObject(item) ? wrap(item as RecordSnapshot) : item));
+  if (Array.isArray(value)) {
+    return value.map((item) => (isObject(item) ? wrap(item as RecordSnapshot) : item));
+  }
   return isObject(value) ? wrap(value as RecordSnapshot) : value;
 }
 /** Проверяет наличие внутренней метки ссылки на запись.

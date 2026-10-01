@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer, generateGraphql, generateOpenapi } from '../dist/index.js';
 import { loadModel } from '../dist/src/core/model.js';
 
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const schema = (fields = {}) => ({
   models: { Note: { collection: 'notes', fields: { id: { type: 'number', primary: true, generated: 'increment' }, name: { type: 'string', required: true }, ...fields } } },

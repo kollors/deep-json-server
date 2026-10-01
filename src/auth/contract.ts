@@ -4,9 +4,17 @@ export interface AuthUser {
   username: string;
   isAdmin: boolean;
 }
+export interface AuthSessionRecord {
+  /** SHA-256 of the access token, encoded as 64 lowercase hexadecimal characters. */
+  tokenHash: string;
+  /** Absolute expiration time in milliseconds since the Unix epoch. */
+  expiresAt: number;
+}
 export interface AuthUserRecord extends Omit<AuthUser, 'isAdmin'> {
   isAdmin?: boolean;
   passwordHash: string;
+  /** Initial or persisted sessions. Defaults to an empty array. */
+  sessions?: AuthSessionRecord[];
 }
 export interface AuthConfig<S extends Storage = Storage> {
   source: Source<S, AuthUserRecord[]>;

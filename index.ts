@@ -1,4 +1,4 @@
-export type { AuthConfig, AuthSession, AuthUser, AuthUserRecord } from './src/auth/contract.js';
+export type { AuthConfig, AuthSession, AuthSessionRecord, AuthUser, AuthUserRecord } from './src/auth/contract.js';
 export { hashPassword } from './src/auth/public.js';
 export type { EntityDefinition, Field, ModelSchema } from './src/core/model.js';
 export type { FileUpdate } from './src/files/contract.js';

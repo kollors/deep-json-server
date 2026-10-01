@@ -15,6 +15,13 @@ export async function canonicalPath(path: string): Promise<string> {
     return resolve(await canonicalPath(parent), basename(absolute));
   }
 }
+/** Раскрывает ссылки в родительском каталоге, сохраняя имя самой записи, заменяемой атомарной записью.
+ * @example Если /tmp/users.json — ссылка на /data/users.json: canonicalEntryPath('/tmp/users.json') → '/tmp/users.json'.
+ */
+export async function canonicalEntryPath(path: string): Promise<string> {
+  const absolute = resolve(path);
+  return resolve(await canonicalPath(dirname(absolute)), basename(absolute));
+}
 /** Читает идентификатор файла из устройства и inode; для отсутствующего файла возвращает исходный путь.
  * @example Существующий файл → строка dev:ino; отсутствующий /tmp/new → /tmp/new.
  */

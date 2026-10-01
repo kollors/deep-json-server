@@ -4,6 +4,7 @@ import { domainError } from '../core/errors.js';
 import type { Authenticate } from '../core/lifecycle/options.js';
 import type { Entity } from '../core/model.js';
 import { MUTATIONS } from '../core/operations.js';
+import { QueryBudget } from '../core/query/budget.js';
 import { parseRestOptions } from './options.js';
 import { listScope, project, validateRest } from './projection.js';
 
@@ -24,29 +25,34 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
     const path = `/${initial.collection}`;
     const itemPath = `${path}/:${initial.primary}`;
     server.get(path, async (request) => {
+      const budget = new QueryBudget();
       const actor = authenticate && request.headers.authorization !== undefined ? authenticate(request.headers.authorization) : undefined;
       const context = await engine.context();
+      context.budget = budget;
       const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
-      const { scope, plans } = validateRest(engine, entity, options, true);
-      const page = listScope(engine, engine.records(context, entity), entity.root, scope, plans);
-      return { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor)), total: page.total };
+      const { scope, plans } = validateRest(engine, entity, options, true, budget);
+      const page = listScope(engine, engine.records(context, entity), entity.root, scope, plans, undefined, budget);
+      return { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor, budget)), total: page.total };
     });
     server.get(itemPath, async (request) => {
+      const budget = new QueryBudget();
       const actor = authenticate && request.headers.authorization !== undefined ? authenticate(request.headers.authorization) : undefined;
       const context = await engine.context();
+      context.budget = budget;
       const entity = entityFor(engine, initial.collection);
       const options = parseRestOptions(request.query);
-      const { scope, plans } = validateRest(engine, entity, options);
+      const { scope, plans } = validateRest(engine, entity, options, false, budget);
       const ref = engine.find(context, entity, (request.params as Record<string, string>)[entity.primary]);
       if (!ref) throw domainError('NOT_FOUND', 'Record not found');
-      return project(engine, ref, scope, plans, actor);
+      return project(engine, ref, scope, plans, actor, budget);
     });
     for (const { method, mode, hasKey, status } of MUTATIONS) {
       server.route({
         method,
         url: hasKey ? itemPath : path,
         handler: async (request, reply) => {
+          const budget = new QueryBudget();
           const actor = authenticate ? () => authenticate(request.headers.authorization) : undefined;
           actor?.();
           const options = parseRestOptions(request.query);
@@ -56,8 +62,8 @@ export function registerRestRoutes(server: FastifyInstance, engine: Engine, auth
             (request.params as Record<string, string>)[initial.primary],
             request.body,
             (ref) => {
-              const { scope, plans } = validateRest(engine, ref.entity, options);
-              return project(engine, ref, scope, plans, actor?.());
+              const { scope, plans } = validateRest(engine, ref.entity, options, false, budget);
+              return project(engine, ref, scope, plans, actor?.(), budget);
             },
             actor,
           );

@@ -1,11 +1,12 @@
 import { mentionsDeletedAt } from '../lifecycle/options.js';
 import type { Node } from '../model/types.js';
 import { isEqual, isObject } from '../utils.js';
+import type { QueryBudget } from './budget.js';
 import { compareValues } from './compare.js';
 import { operatorsFor } from './contract.js';
 import { badQuery, childrenOf } from './options.js';
 
-export type Predicate = (value: unknown) => boolean;
+export type Predicate = (value: unknown, budget?: QueryBudget) => boolean;
 const comparable = (value: unknown): value is string | number => typeof value === 'string' || typeof value === 'number';
 /** Компилирует условие поля в предикат, проверяя операторы и их аргументы.
  * @example Для строкового узла condition(node, { contains: 'ан' }, 0)('Анна') → true.
@@ -19,14 +20,16 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
     if (!Object.hasOwn(operators, operator)) badQuery(`Invalid operator ${operator} for ${node.type}`);
     if (operand === 'condition') {
       const nested = condition(node, value, depth + 1);
-      return (field) => !nested(field);
+      return (field, budget) => !nested(field, budget);
     }
     if (operand === 'element') {
       const nested = condition({ ...node, many: false }, value, depth + 1);
-      return (field) => {
+      return (field, budget) => {
         if (!Array.isArray(field)) return false;
+        budget?.consume(field.length);
         const values = node.relation?.softDelete && !mentionsDeletedAt(value) ? field.filter((item) => isObject(item) && item.deletedAt == null) : field;
-        return operator === 'every' ? values.every(nested) : operator === 'none' ? !values.some(nested) : values.some(nested);
+        const test = (item: unknown) => nested(item, budget);
+        return operator === 'every' ? values.every(test) : operator === 'none' ? !values.some(test) : values.some(test);
       };
     }
     const values = operand === 'values' ? value : [value];
@@ -44,7 +47,13 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
       case 'ne':
         return (field) => !isEqual(field, value);
       case 'in':
-        return (field) => (Array.isArray(field) ? field : [field]).some((item) => values.some((v) => isEqual(item, v)));
+        return (field, budget) =>
+          (Array.isArray(field) ? field : [field]).some((item) =>
+            values.some((v) => {
+              budget?.consume();
+              return isEqual(item, v);
+            }),
+          );
       case 'contains':
         return (field) => (typeof field === 'string' ? field.toLowerCase().includes(String(value).toLowerCase()) : Array.isArray(field) && field.some((v) => isEqual(v, value)));
       case 'startsWith':
@@ -61,7 +70,11 @@ function condition(node: Node, input: unknown, depth: number): Predicate {
         return (field) => comparable(field) && comparable(value) && compareValues(field, value) <= 0;
     }
   });
-  return (value) => predicates.every((predicate) => predicate(value));
+  return (value, budget) =>
+    predicates.every((predicate) => {
+      budget?.consume();
+      return predicate(value, budget);
+    });
 }
 /** Компилирует условия объекта в предикат; учитывает логические операторы и фильтрацию удалённых записей.
  * @example Для числового age: compileWhere(node, { age: { gte: 18 } })({ age: 20 }) → true.
@@ -72,18 +85,29 @@ export function compileWhere(node: Node, input: unknown, depth = 0, defaults = t
     if (key === 'and' || key === 'or') {
       if (!Array.isArray(value) || (key === 'or' && !value.length)) badQuery(`Invalid ${key}`);
       const nested = value.map((item) => compileWhere(node, item, depth + 1, false));
-      return (field) => (key === 'and' ? nested.every((p) => p(field)) : nested.some((p) => p(field)));
+      return (field, budget) => {
+        const test = (predicate: Predicate) => {
+          budget?.consume();
+          return predicate(field, budget);
+        };
+        return key === 'and' ? nested.every(test) : nested.some(test);
+      };
     }
     if (key === 'not') {
       const nested = compileWhere(node, value, depth + 1, false);
-      return (field) => !nested(field);
+      return (field, budget) => !nested(field, budget);
     }
     const child = childrenOf(node)[key];
     if (!Object.hasOwn(childrenOf(node), key) || !child || child.writeOnly || child.virtual || child.implicit) badQuery(`Unknown or inaccessible filter field ${key}`);
     if (child.mixed) badQuery(`Field ${key} has inconsistent types; provide an explicit schema`);
     const nested = condition(child, value, depth + 1);
-    return (field) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined);
+    return (field, budget) => isObject(field) && nested(Object.hasOwn(field, key) ? field[key] : undefined, budget);
   });
   if (defaults && (node.relation?.softDelete || node.softDelete) && !mentionsDeletedAt(input)) predicates.push((value) => isObject(value) && value.deletedAt == null);
-  return (value) => isObject(value) && predicates.every((predicate) => predicate(value));
+  return (value, budget) =>
+    isObject(value) &&
+    predicates.every((predicate) => {
+      budget?.consume();
+      return predicate(value, budget);
+    });
 }

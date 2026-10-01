@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { parse } from 'yaml';
 import { runCli } from '../dist/src/cli/index.js';
+
+test('CLI version matches package metadata independently of the working directory', async (t) => {
+  const { directory } = await fixture(t);
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const execute = promisify(execFile);
+  for (const flag of ['--version', '-v']) {
+    const { stdout } = await execute(process.execPath, [fileURLToPath(new URL('../dist/bin/deep-json-server.js', import.meta.url)), flag], { cwd: directory });
+    assert.equal(stdout.trim(), version);
+  }
+});
 
 const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true } } } } };
 const fixture = async (t) => {

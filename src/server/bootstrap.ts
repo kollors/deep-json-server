@@ -1,10 +1,12 @@
+import { mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { AUTH_PATHS } from '../auth/contract.js';
 import type { Model } from '../core/model.js';
 import { configSourcePath, type NormalizedServerConfig } from './config.js';
 import { validateEndpoints } from './features.js';
-import { inputPaths } from './input-paths.js';
-import { acquireDatabaseLock } from './storage-lock.js';
+import { inputPaths, writablePaths } from './input-paths.js';
+import { acquireStorageLocks } from './storage-lock.js';
 
 /** Подключает к HTTP-серверу хранилище записей и включённые прикладные модули.
  * @example Конфигурация только с базой → REST-маршруты без auth, files и API-экспортов.
@@ -15,8 +17,15 @@ export async function registerConfiguredModules(
   explicitModel: Model | undefined,
   openapi: () => Promise<import('../openapi/types.js').OpenapiDocument>,
 ): Promise<void> {
-  const release = typeof config.database.source === 'string' ? await acquireDatabaseLock(config.database.source) : undefined;
+  if (config.storage === 'file' && config.files) {
+    await mkdir(config.files.source, { recursive: true });
+    if (config.files.metadata) await mkdir(dirname(config.files.metadata), { recursive: true });
+  }
+  const sources = writablePaths(config);
+  const locks = await acquireStorageLocks(sources, inputPaths(config, '.', configSourcePath(config), false));
+  const { release } = locks;
   try {
+    app.addHook('onClose', release);
     const enabled = { auth: config.auth !== undefined, files: config.files !== undefined };
     const recordSettings = { auth: enabled.auth };
     const keys = explicitModel ? new Map(explicitModel.entities.map((entity) => [entity.collection, entity.primary])) : undefined;
@@ -56,12 +65,11 @@ export async function registerConfiguredModules(
     }
     if (enabled.files && config.files) {
       const { createFileStore, registerFileRoutes } = await import('../files/index.js');
-      const protectedPaths = inputPaths({ database: config.database, auth: config.auth, package: config.package }, '.', configSourcePath(config));
+      const protectedPaths = [...inputPaths({ database: config.database, auth: config.auth, package: config.package }, '.', configSourcePath(config)), ...locks.paths];
       registerFileRoutes(app, { getStore: () => createFileStore(config.files as NonNullable<typeof config.files>, protectedPaths), maxFileSize: config.server.maxFileSize });
     }
-    if (release) app.addHook('onClose', release);
   } catch (error) {
-    await release?.();
+    await release();
     throw error;
   }
 }

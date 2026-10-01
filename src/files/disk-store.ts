@@ -4,7 +4,7 @@ import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { domainError } from '../core/errors.js';
-import { canonicalPath } from '../core/paths.js';
+import { canonicalEntryPath, canonicalPath } from '../core/paths.js';
 import { createSerialQueue, isSystemError } from '../core/utils.js';
 import { type FileRecord, type FileStore, type FileUpdate, type FileUpload, getFileKey, type StoredFileMetadata } from './contract.js';
 import { readDiskMetadata, writeDiskMetadata } from './disk-metadata.js';
@@ -44,10 +44,11 @@ export const createDiskFileStore = async ({
   const directoryPath = resolve(sourceDirectoryPath);
   const metadataPath = resolve(sourceMetadataPath);
   const stagingPath = resolve(directoryPath, '.deep-json-server');
-  const protectedFiles = new Set(await Promise.all(protectedPaths.map(canonicalPath)));
-  const canonicalMetadataPath = await canonicalPath(metadataPath);
-  if (protectedFiles.has(canonicalMetadataPath)) throw new Error('File metadata must not overwrite a protected input file');
-  protectedFiles.add(canonicalMetadataPath);
+  // Атомарное сохранение заменяет саму символическую ссылку: защищаем и её запись, и исходную цель.
+  const protectedFiles = new Set((await Promise.all(protectedPaths.map((path) => Promise.all([canonicalEntryPath(path), canonicalPath(path)])))).flat());
+  const metadataPaths = await Promise.all([canonicalEntryPath(metadataPath), canonicalPath(metadataPath)]);
+  if (metadataPaths.some((path) => protectedFiles.has(path))) throw new Error('File metadata must not overwrite a protected input file');
+  for (const path of metadataPaths) protectedFiles.add(path);
   const schedule = createSerialQueue();
   const pendingCleanup = new Set<string>();
 

@@ -2,6 +2,7 @@ import { readPath } from '../model/tree.js';
 import type { Node } from '../model/types.js';
 import { isRef, type Ref, resolveField } from '../records.js';
 import { hasOnlyKeys, isObject } from '../utils.js';
+import type { QueryBudget } from './budget.js';
 import { compareValues } from './compare.js';
 import { compileWhere, type Predicate } from './filter.js';
 import { badQuery, type ListOptions, nodeAt } from './options.js';
@@ -67,14 +68,17 @@ export function prepareList(node: Node, options: ListOptions, pageSize: number, 
 /** Фильтрует, сортирует и возвращает страницу, не изменяя исходные записи.
  * @example Три совпадения и page 2 по две записи → третья запись и total 3.
  */
-export function executeList(records: Ref[], prepared: PreparedList): Page {
+export function executeList(records: Ref[], prepared: PreparedList, budget?: QueryBudget): Page {
   const { page, pageSize, predicate, rules } = prepared;
   const start = (page - 1) * pageSize;
-  const data = predicate ? records.filter((ref) => predicate(filterView(ref))) : records;
+  budget?.consume(predicate || rules.length ? records.length : Math.min(pageSize, Math.max(0, records.length - start)));
+  const data = predicate ? records.filter((ref) => predicate(filterView(ref), budget)) : records;
   if (!rules.length) return { data: data.slice(start, start + pageSize), total: data.length };
+  budget?.consume(data.length * rules.length);
   const ordered = data.map((ref) => ({ ref, keys: rules.map((rule) => readPath(ref.value, rule.keys)[0]) }));
   ordered.sort((leftEntry, rightEntry) => {
     for (const [index, rule] of rules.entries()) {
+      budget?.consume();
       const left = leftEntry.keys[index];
       const right = rightEntry.keys[index];
       const comparison = left == null && right == null ? 0 : left == null ? 1 : right == null ? -1 : compareValues(left as string | number, right as string | number);

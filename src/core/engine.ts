@@ -9,6 +9,7 @@ import type { Entity, Model, Node } from './model/types.js';
 import { validateRecord } from './model/validation.js';
 import { MutationWriter } from './mutations/write.js';
 import type { MutationMode } from './operations.js';
+import type { QueryBudget } from './query/budget.js';
 import { executeList, type Page, type PreparedList, prepareList } from './query/execute.js';
 import type { ListOptions } from './query/options.js';
 import { type Context, isRef, keyOf, makeContext, type Ref, related, resolveField, rootRef, sourcePresent, sourceValues } from './records.js';
@@ -51,13 +52,17 @@ export class Engine {
    * @example Пустая коллекция → []; две записи → две ссылки Ref.
    */
   records<R extends RecordSnapshot>(context: Context<R>, entity: Entity): Ref<R>[] {
+    context.budget?.consume(context.data[entity.collection]?.length ?? 0);
     return (context.data[entity.collection] ?? []).map((value) => rootRef(context, entity, value));
   }
   /** Ищет запись по строковому представлению первичного ключа, включая удалённые записи.
    * @example Ключ '1' находит запись с числовым ключом 1; отсутствующий ключ → undefined.
    */
   find<R extends RecordSnapshot>(context: Context<R>, entity: Entity, key: unknown): Ref<R> | undefined {
-    const value = (context.data[entity.collection] ?? []).find((record) => String(record[entity.primary]) === String(key));
+    const value = (context.data[entity.collection] ?? []).find((record) => {
+      context.budget?.consume();
+      return String(record[entity.primary]) === String(key);
+    });
     return value ? rootRef(context, entity, value) : undefined;
   }
   /** Проверяет аргументы списка и подготавливает предикат, пути сортировки и размеры страницы.
@@ -69,8 +74,8 @@ export class Engine {
   /** Фильтрует, сортирует и возвращает страницу, не меняя порядок исходного массива.
    * @example Три подходящие записи, page: 2, pageSize: 2 → { data: [третья запись], total: 3 }.
    */
-  list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options)): Page {
-    return executeList(records, prepared);
+  list(records: Ref[], node: Node, options: ListOptions = {}, prepared = this.prepareOptions(node, options), budget?: QueryBudget): Page {
+    return executeList(records, prepared, budget);
   }
   /** Проверяет коллекции, значения полей и целостность активных связей.
    * @example Согласованные записи → undefined; обязательная связь без цели → исключение.

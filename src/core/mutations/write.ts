@@ -261,10 +261,13 @@ export class MutationWriter {
       else if (child.base === 'object' && !child.many) {
         const old = previous?.[key];
         if (isObject(record[key])) this.preserve(child, record[key] as JsonObject, isObject(old) ? (old as JsonObject) : undefined);
-        else if (record[key] === undefined && isObject(old)) {
+        else if (record[key] == null && isObject(old)) {
           const preserved: JsonObject = {};
           this.preserve(child, preserved, old as JsonObject);
-          if (Object.keys(preserved).length) record[key] = preserved;
+          if (Object.keys(preserved).length) {
+            if (record[key] === null) throw domainError('INVALID_INPUT', `Cannot clear ${child.path}: it contains protected fields`);
+            record[key] = preserved;
+          }
         }
       }
     }

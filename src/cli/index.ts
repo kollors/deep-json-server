@@ -9,7 +9,7 @@ import type { OpenapiInfo } from '../openapi/options.js';
 import { projectPackageToOpenapiInfo } from '../openapi/options.js';
 import { configure, type NormalizedServerConfig, readConfigModule } from '../server/config.js';
 import { createConfiguredServer } from '../server/create.js';
-import { inputPaths } from '../server/input-paths.js';
+import { protectedInputPaths } from '../server/input-paths.js';
 import { configuredModel } from '../server/model.js';
 import { openapiOptions } from '../server/openapi-options.js';
 
@@ -40,7 +40,7 @@ async function generate(config: NormalizedServerConfig, source: Record<string, u
     if (!target) throw new Error(`Provide config.${format}.target`);
     outputs.push(target);
   }
-  await validateExportPaths(outputs, inputPaths(source, directory, sourcePath));
+  await validateExportPaths(outputs, await protectedInputPaths(source, directory, sourcePath));
   const model = await configuredModel(config);
   if (config.openapi && !openapiInfo) throw new Error('OpenAPI package metadata is not configured');
   const openapi = config.openapi ? (await import('../openapi/generate.js')).openapiFromModel(model, openapiOptions(config, openapiInfo as OpenapiInfo, model)) : undefined;

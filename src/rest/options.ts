@@ -1,4 +1,5 @@
 import type { Node } from '../core/model.js';
+import type { QueryBudget } from '../core/query/budget.js';
 import { badQuery, childrenOf, type ListOptions } from '../core/query/options.js';
 import { hasOnlyKeys, isObject, isSafeKey } from '../core/utils.js';
 export interface Fields {
@@ -44,12 +45,13 @@ export function parseRestOptions(query: unknown): RestOptions {
 /** Проверяет выбор полей рекурсивно; аргументы разрешены только для однородных списков.
  * @example Для узла со строковым id: [{ id: true }] → undefined; [{ missing: true }] → ошибка.
  */
-export function validateScope(node: Node, scope: unknown, list = false, depth = 0): asserts scope is Scope {
+export function validateScope(node: Node, scope: unknown, list = false, depth = 0, budget?: QueryBudget): asserts scope is Scope {
+  budget?.select();
   if (depth > 32) badQuery('scope is too deep');
   if (isObject(scope) && Object.hasOwn(scope, 'union')) {
     if (!list || node.mixed) badQuery('scope union requires a list with consistent object types');
     if (!hasOnlyKeys(scope, ['union']) || !Array.isArray(scope.union) || scope.union.length < 1) badQuery('scope union must contain scopes');
-    for (const item of scope.union) validateScope(node, item, true, depth + 1);
+    for (const item of scope.union) validateScope(node, item, true, depth + 1, budget);
     return;
   }
   if (!Array.isArray(scope) || scope.length < 1 || scope.length > 2 || !isObject(scope[0])) badQuery('scope must be [fields, arguments?]');
@@ -59,6 +61,7 @@ export function validateScope(node: Node, scope: unknown, list = false, depth = 
   }
   const children = childrenOf(node);
   for (const [key, selection] of Object.entries(scope[0])) {
+    budget?.select();
     if (key === '*') {
       if (selection !== true) badQuery('scope wildcard must be true');
       continue;
@@ -66,7 +69,7 @@ export function validateScope(node: Node, scope: unknown, list = false, depth = 
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || !isSafeKey(key)) badQuery(`Invalid scope field ${key}`);
     const child = children[key];
     if (!Object.hasOwn(children, key) || !child || child.writeOnly || child.implicit) badQuery(`Unknown or inaccessible scope field ${key}`);
-    if (child.relation || child.base === 'object') validateScope(child, selection, child.many, depth + 1);
+    if (child.relation || child.base === 'object') validateScope(child, selection, child.many, depth + 1, budget);
     else if (selection !== true) badQuery(`Scalar field ${key} must be true`);
   }
 }

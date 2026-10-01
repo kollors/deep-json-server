@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer } from '../dist/index.js';
 
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const startServer = async (config) => {
   const facade = await createServer(config);
   const server = facade.fastify();

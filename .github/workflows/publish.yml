@@ -6,11 +6,6 @@ on:
       - 'v*'
     branches:
       - main
-    paths:
-      - package.json
-      - .github/workflows/publish.yml
-      - scripts/prepare-release.js
-      - scripts/publish-package.js
 
 permissions:
   contents: read
@@ -21,7 +16,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+      create_tag: ${{ steps.release.outputs.create_tag }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Select release
+        id: release
+        run: node scripts/prepare-release.js
+
+  verify:
+    needs: release
+    uses: ./.github/workflows/verify.yml
+
   publish:
+    needs: [release, verify]
+    if: needs.release.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,20 +52,15 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Select release
-        id: release
-        run: node scripts/prepare-release.js
-      - if: steps.release.outputs.publish == 'true'
-        run: npm ci
+      - run: npm ci
       - name: Create version tag
-        if: steps.release.outputs.create_tag == 'true'
+        if: needs.release.outputs.create_tag == 'true'
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
           git tag "$RELEASE_TAG"
           git push origin "$RELEASE_TAG"
       - name: Publish to the version channel
-        if: steps.release.outputs.publish == 'true'
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: node scripts/publish-package.js

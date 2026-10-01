@@ -10,6 +10,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { createServer, generateGraphql, generateOpenapi, hashPassword } from '../dist/index.js';
 import { verifyPassword } from '../dist/src/auth/password.js';
@@ -18,7 +19,7 @@ import { runCli } from '../dist/src/cli/index.js';
 import { normalizeServerConfig } from '../dist/src/server/config.js';
 
 const schema = { models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, name: { type: 'string' } } } } };
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0' };
 const password = 'Тестовый пароль';
 const users = [{ id: '1', username: 'admin', passwordHash: await hashPassword(password) }];
@@ -81,7 +82,7 @@ test('REST sessions authenticate, expire and revoke independently without exposi
   assert.equal((await other.inject({ url: '/auth/me', headers: bearer(second.accessToken) })).statusCode, 401);
 });
 
-test('service bounds simultaneous logins, expires sessions and clears them on close', async (t) => {
+test('service bounds simultaneous logins, expires sessions and rejects operations after close', async (t) => {
   const auth = await createAuthService({ source: users, expiresIn: 1 });
   t.after(() => auth.close());
   const attempts = await Promise.allSettled(Array.from({ length: 5 }, () => auth.login(credentials)));
@@ -216,6 +217,7 @@ test('auth works independently of later database errors and protects the credent
   await app.ready();
   await writeFile(database, 'broken');
   const session = (await login(app)).json();
+  const saved = await readFile(path, 'utf8');
   assert.deepEqual((await app.inject({ url: '/auth/me', headers: bearer(session.accessToken) })).json(), session.user);
   assert.equal((await gql(app, '{itemList{total}}')).json().errors[0].extensions.code, 'INTERNAL_ERROR');
   assert.equal((await app.inject('/_files/storage/auth.json')).statusCode, 404);
@@ -226,7 +228,7 @@ test('auth works independently of later database errors and protects the credent
     payload: 'overwrite',
   });
   assert.equal(overwrite.statusCode, 400);
-  assert.equal(await readFile(path, 'utf8'), contents);
+  assert.equal(await readFile(path, 'utf8'), saved);
 });
 
 test('CLI enables auth and exports auth schemas without opening the users file', async (t) => {

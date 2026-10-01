@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { buildSchema, validateSchema } from 'graphql';
 import { parse } from 'yaml';
 import { createServer, writeGraphql, writeOpenapi } from '../dist/index.js';
@@ -23,7 +24,7 @@ import { loadModel } from '../dist/src/core/model.js';
 import { createOpenapi } from '../dist/src/openapi/generate.js';
 
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const packageSource = { name: 'test-api', version: '1.0.0', description: 'Test API' };
 const definition = (fields) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
 const facadeFor = (model, extra = {}) => {

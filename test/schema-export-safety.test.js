@@ -3,6 +3,7 @@ import { link, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createServer } from '../dist/index.js';
 import { runCli } from '../dist/src/cli/index.js';
 
 const model = (fields = {}) => ({ models: { Item: { collection: 'items', fields: { id: { type: 'string', primary: true, generated: 'uuid' }, ...fields } } } });
@@ -41,4 +42,25 @@ test('generation reads only the schema and rejects colliding destinations before
   await link(schemaPath, join(directory, 'hardlink.yaml'));
   await assert.rejects(() => run({ ...config, openapi: { target: 'hardlink.yaml' } }), /overwrite/);
   assert.deepEqual(JSON.parse(await readFile(schemaPath, 'utf8')), model());
+});
+
+test('generation cannot overwrite the active lock of a database symlink target', async (t) => {
+  const directory = await temporary(t);
+  const database = join(directory, 'source.json');
+  const alias = join(directory, 'alias.json');
+  const schema = join(directory, 'model.json');
+  const configPath = join(directory, 'config.mjs');
+  const lockPath = join(directory, 'source-lock.json');
+  await writeFile(database, JSON.stringify({ items: [] }));
+  await writeFile(schema, JSON.stringify(model()));
+  await symlink(database, alias);
+  const app = (await createServer({ storage: 'file', database: { source: alias, schema }, server: { logger: false } })).fastify();
+  t.after(() => app.close());
+  await app.ready();
+  const owner = await readFile(lockPath, 'utf8');
+  const config = { storage: 'file', database: { source: 'alias.json', schema: 'model.json' }, graphql: { target: 'source-lock.json' } };
+  await writeFile(configPath, `export default ${JSON.stringify(config)};`);
+  await assert.rejects(() => runCli(['--generate-only', configPath]), /overwrite an input file/);
+  assert.equal(await readFile(lockPath, 'utf8'), owner);
+  assert.equal((await app.inject('/items')).statusCode, 200);
 });

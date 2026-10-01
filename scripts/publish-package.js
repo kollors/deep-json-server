@@ -13,7 +13,27 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const releaseTag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
   if (releaseTag !== `v${version}`) throw new Error('Release tag does not match package version');
   // A retry may change workflow/test files, but published package inputs must match the release tag.
-  execFileSync('git', ['diff', '--exit-code', releaseTag, '--', 'package.json', 'package-lock.json', 'src', 'index.ts', 'bin', 'README.md', 'README.ru.md']);
+  execFileSync('git', [
+    'diff',
+    '--exit-code',
+    releaseTag,
+    '--',
+    'package.json',
+    'package-lock.json',
+    'src',
+    'index.ts',
+    'bin',
+    'tsconfig.json',
+    'scripts/clean-dist.js',
+    'scripts/prepare-dist.js',
+    'LICENSE',
+    'README.md',
+    'README.ru.md',
+    'CHANGELOG.md',
+    'MIGRATION.md',
+    'MIGRATION.ru.md',
+    'examples',
+  ]);
   const result = spawnSync('npm', ['publish', '--tag', publicationTag(version), '--provenance'], { stdio: 'inherit' });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

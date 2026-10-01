@@ -10,12 +10,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createServer } from '../dist/index.js';
 
 const database = JSON.parse(await readFile(new URL('../examples/database.json', import.meta.url), 'utf8'));
 const schema = JSON.parse(await readFile(new URL('../examples/schema.json', import.meta.url), 'utf8'));
 const packageSource = { name: 'test-api', version: '1.0.0' };
-const packagePath = new URL('../package.json', import.meta.url).pathname;
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
 const url = (path, query = {}) => `${path}?${new URLSearchParams(Object.entries(query).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))}`;
 const setup = async (t, data = database, model = schema, options = {}) => {
   const facade = await createServer({

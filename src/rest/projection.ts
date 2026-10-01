@@ -1,6 +1,7 @@
 import type { Engine, PreparedList } from '../core/engine.js';
 import type { Actor } from '../core/lifecycle/options.js';
 import type { Entity, Node } from '../core/model.js';
+import { QueryBudget } from '../core/query/budget.js';
 import { childrenOf } from '../core/query/options.js';
 import { isRef, type Ref, resolveField } from '../core/records.js';
 import type { JsonObject, JsonPrimitive, JsonValue } from '../core/types.js';
@@ -28,8 +29,8 @@ export interface ScopedPage {
 /** Проверяет дерево выбора и заранее подготавливает фильтры, сортировку и пагинацию вложенных списков.
  * @example Выбор без аргументов у одиночной записи → { scope, plans: Map(0) }; неверное поле → ошибка.
  */
-export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false): { scope: Scope; plans: Map<TupleScope | Node, PreparedList> } {
-  validateScope(entity.root, options.scope, list);
+export function validateRest(engine: Engine, entity: Entity, options: RestOptions, list = false, budget?: QueryBudget): { scope: Scope; plans: Map<TupleScope | Node, PreparedList> } {
+  validateScope(entity.root, options.scope, list, 0, budget);
   const plans = new Map<TupleScope | Node, PreparedList>();
   if (list && !isUnionScope(options.scope)) plans.set(options.scope, engine.prepareOptions(entity.root, options.scope[1]));
   const visit = (node: Node, scope: Scope): void => {
@@ -53,18 +54,20 @@ export function validateRest(engine: Engine, entity: Entity, options: RestOption
 /** Выполняет обычный или объединённый scope списка, сохраняя порядок частей и первую запись с каждым ключом.
  * @example Две части с id 1, затем id 1 и 2 → данные [1, 2], total 2.
  */
-export function listScope(engine: Engine, records: Ref[], node: Node, scope: Scope, plans: Map<TupleScope | Node, PreparedList>, planKey?: TupleScope | Node): ScopedPage {
+export function listScope(engine: Engine, records: Ref[], node: Node, scope: Scope, plans: Map<TupleScope | Node, PreparedList>, planKey?: TupleScope | Node, budget?: QueryBudget): ScopedPage {
+  budget?.consume();
   if (!isUnionScope(scope)) {
     const key = planKey ?? scope;
     const prepared = plans.get(key) ?? engine.prepareOptions(node, scope[1]);
     plans.set(key, prepared);
-    const page = engine.list(records, node, scope[1], prepared);
+    const page = engine.list(records, node, scope[1], prepared, budget);
     return { data: page.data.map((ref) => ({ ref, scope })), total: page.total };
   }
   const seen = new Set<unknown>();
   const data: ScopedPage['data'] = [];
   for (const item of scope.union) {
-    for (const entry of listScope(engine, records, node, item, plans).data) {
+    for (const entry of listScope(engine, records, node, item, plans, undefined, budget).data) {
+      budget?.consume();
       const key = entry.ref.node === entry.ref.entity.root ? entry.ref.value[entry.ref.entity.primary] : entry.ref.value;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -76,8 +79,10 @@ export function listScope(engine: Engine, records: Ref[], node: Node, scope: Sco
 /** Строит новый объект из выбранных полей, разворачивая связи и обрабатывая вложенные списки.
  * @example Запись { id: '1', name: 'Анна' } и выбор [{ name: true }] → { name: 'Анна' }.
  */
-export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<TupleScope | Node, PreparedList>(), actor?: Actor): JsonObject {
+export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans = new Map<TupleScope | Node, PreparedList>(), actor?: Actor, budget = new QueryBudget()): JsonObject {
   if (isUnionScope(scope)) throw new Error('scope union cannot select a single record');
+  ref.context.budget = budget;
+  budget.record();
   const output: JsonObject = Object.create(null);
   const children = childrenOf(ref.node);
   for (const [key, node] of Object.entries(children)) {
@@ -86,16 +91,33 @@ export function project(engine: Engine, ref: Ref, scope: Scope = ownScope, plans
     const value = resolveField(ref, node, false, actor);
     const selection = scopeFor(scope, key);
     if (value === undefined) continue;
-    if (isRef(value)) output[key] = project(engine, value, selection, plans, actor);
+    budget.field(key);
+    if (isRef(value)) output[key] = project(engine, value, selection, plans, actor, budget);
     else if (Array.isArray(value)) {
       if (value.every(isRef) && (value.length > 0 || node.relation || node.base === 'object')) {
-        const page = listScope(engine, value, node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection);
-        output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor)), total: page.total };
-      } else output[key] = value.map((item) => (isRef(item) ? project(engine, item, selection, plans, actor) : structuredClone(item))) as JsonValue;
-    } else output[key] = structuredClone(value) as JsonValue;
+        const page = listScope(engine, value, node, selection, plans, isUnionScope(selection) ? undefined : selection === ownScope ? node : selection, budget);
+        budget.field('data');
+        budget.field('total');
+        budget.scalar(page.total);
+        output[key] = { data: page.data.map((entry) => project(engine, entry.ref, entry.scope, plans, actor, budget)), total: page.total };
+      } else
+        output[key] = value.map((item) => {
+          if (isRef(item)) return project(engine, item, selection, plans, actor, budget);
+          budget.scalar(item);
+          return structuredClone(item);
+        }) as JsonValue;
+    } else {
+      budget.scalar(value);
+      output[key] = structuredClone(value) as JsonValue;
+    }
   }
   // При выведенной модели добавляем исходные скаляры, которые не удалось описать.
   if (!ref.context.model.explicit && scope[0]['*'] === true)
-    for (const [key, value] of Object.entries(ref.value)) if (!Object.hasOwn(output, key) && wildcardValue(children[key], value)) output[key] = structuredClone(value);
+    for (const [key, value] of Object.entries(ref.value))
+      if (!Object.hasOwn(output, key) && wildcardValue(children[key], value)) {
+        budget.field(key);
+        budget.scalar(value);
+        output[key] = structuredClone(value);
+      }
   return output;
 }
