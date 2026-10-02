@@ -1,8 +1,8 @@
-# Migrating from 0.9.0 to 1.0.0-rc.9
+# Migrating from 0.9.0 to 1.0.0
 
 [Русский](MIGRATION.ru.md) · [Current README](README.md)
 
-This guide compares `v0.9.0` with `1.0.0-rc.9` and also covers the relation changes since RC6. Update configuration and clients together. Node.js 22 or newer is still required. Back up the database, config, schema, uploaded files and metadata before migrating.
+This guide covers the move from `0.9.0` to `1.0.0`. Update configuration and clients together. Node.js 22 or newer is required. Back up the database, configuration, schema, uploaded files and metadata before migrating. If you already use a 1.0 release candidate, see [upgrading from a release candidate](#upgrading-from-a-release-candidate).
 
 ## 1. Choose whether you need a schema
 
@@ -14,7 +14,7 @@ export default { database: { path: './database.json' } };
 ```
 
 ```js
-// 1.0.0-rc.9
+// 1.0.0
 export default { storage: 'file', database: { source: './database.json' } };
 ```
 
@@ -22,7 +22,7 @@ This keeps schemaless REST and relations inferred from stored `...Id` / `...Ids`
 
 ## 2. Convert configuration
 
-| 0.9.0 | 1.0.0-rc.9 |
+| 0.9.0 | 1.0.0 |
 |---|---|
 | `database.path` | `storage: 'file'` and `database.source` |
 | `database.data` | `storage: 'memory'` and `database.source` |
@@ -56,7 +56,7 @@ Relative paths still resolve from the config directory in the CLI, and from the 
 
 ## 3. Replace schema overrides with complete models
 
-In 0.9.0, `$schema` supplemented field types inferred from data. It was not the current model/relation format. Each collection now needs a model with `collection`, `fields`, and exactly one top-level primary key of type `string` or `number`.
+In 0.9.0, `$schema` supplemented field types inferred from data. In 1.0.0, each collection needs a model with `collection`, `fields`, and exactly one top-level primary key of type `string` or `number`.
 
 | Old override | New definition |
 |---|---|
@@ -106,7 +106,7 @@ Every explicit relation needs both declarations and a `keyOn` value. `current` s
 - Self-relations pair `Genre.parents: { type: 'Genre[]', keyOn: 'current' }` with `Genre.children: { type: 'Genre[]', keyOn: 'related' }`; both use stored `Genre.parentIds`.
 - Multiple relations between the same models require disambiguation: inverse `Country.birthUsers` uses `target: 'birthCountryId'`, and `Country.residenceUsers` uses `target: 'residenceCountryId'`. Ambiguous or missing pairs fail schema loading.
 - Declare existing keys explicitly, as above, if clients read, filter, sort or write them. Inferred keys remain in storage but are hidden from both APIs and OpenAPI, even when selected by name.
-- RC7 also infers source arrays for lists targeting **non-primary** fields. For example, `publishers` with `keyOn: 'current'` and `target: 'code'` infers `publisherCodes: { type: 'string[]' }` when `Publisher.code` is a string. Explicitly declare the key if it must be exposed in the API. If RC6 stored this automatically inferred key as a scalar, convert existing values to arrays, for example `"A"` to `["A"]`, before upgrading. An explicitly declared scalar key retains its type.
+- List relations targeting **non-primary** fields also infer arrays of storage keys. For example, `publishers` with `keyOn: 'current'` and `target: 'code'` infers `publisherCodes: { type: 'string[]' }` when `Publisher.code` is a string. Declare the key in `fields` if clients need direct access. Explicitly declared scalar keys retain their type.
 
 Repair dangling direct references before startup. Writes now validate references; deleting a referenced target is restricted by default. Choose `onDelete: 'cascade'` deliberately where deleting a target should delete referring records. An inverse with no explicit `onDelete` does not add its own restriction.
 
@@ -116,13 +116,13 @@ Do not regenerate IDs while converting the schema. Existing string IDs remain va
 
 `generated` is not implied by `primary`. Without it, clients must supply the primary key on create. With it, clients must omit generated fields; sending them is rejected instead of ignored as in 0.9.0.
 
-Old application fields must be declared or deliberately removed from copied data. A custom archive flag does not automatically become soft deletion. Enabling lifecycle or auth features reserves their system field names, so rename conflicting application fields first.
+Declare existing application fields in the new schema, or remove them from the copy you are migrating. A custom archive flag does not automatically become soft deletion. Auth, timestamps and soft deletion reserve their system field names; rename conflicting application fields before enabling them.
 
 ## 4. Select APIs and update startup commands
 
 If root `api` is omitted, the server uses `['rest']`, or `['rest', 'graphql']` when `graphql` is configured. To expose the database only through GraphQL, set `api: ['graphql']` and add `graphql: {}`. A model inherits root `api` or narrows it; model `api: []` hides that model. Root `api: []` is invalid. Related models must enable the same APIs.
 
-The `graphql` section and root GraphQL flag must be enabled together. Auth and files remain REST services and appear only in OpenAPI. OpenAPI can describe these services on a GraphQL-only database server.
+If you set root `api` explicitly, include `graphql` when the configuration has a `graphql` section and omit it otherwise. Auth and files remain REST services and appear only in OpenAPI. OpenAPI can describe these services even when the database is available only through GraphQL.
 
 | Old CLI | New CLI |
 |---|---|
@@ -170,15 +170,13 @@ Update response readers as well:
 
 `PATCH` merges top-level fields; a supplied nested plain object replaces that object while preserving protected fields. `PUT` replaces writable fields, preserving primary, generated, read-only and system values. Required fields must be supplied for creation/replacement unless they have defaults.
 
-Relation values are objects, for example `country: { id: '1' }`, not scalar IDs. **Starting with RC7, an object containing only the primary key is a reference in POST, PUT and PATCH.** It preserves the target's fields, dates and author values. Adding other fields invokes an update: PUT replaces the target and requires its mandatory fields; POST/PATCH update supplied fields. Changing an inverse relation still requires permission for every record whose stored key changes. Declared storage keys, such as `countryId`, can also change links directly. Do not send the relation and its storage key in the same object.
-
-**When upgrading from RC6:** key-only objects no longer update the target, change its audit values or require ownership of an unchanged target. If an existing client intends to update or replace the target, include the fields to change. Declared storage keys remain available for link-only writes.
+Relation values are objects, for example `country: { id: '1' }`, not scalar IDs. An object containing only the primary key is a reference in POST, PUT and PATCH. It preserves the target's fields, timestamps and ownership. Adding other fields updates the target: PUT replaces it and requires its mandatory fields without defaults; POST/PATCH update supplied fields. Changing an inverse relation requires permission for every record whose stored key changes. Declared storage keys, such as `countryId`, can also change links directly. Do not send the relation and its storage key in the same object.
 
 Omitted inverse (`keyOn: 'related'`) relations survive PUT. Explicit `users: []` changes users' foreign keys to detach them; it can fail if those keys are required or the caller lacks permission. Nested changes are atomic, and modifying a shared target affects every record referring to it.
 
-Auth, timestamps and soft deletion are new, optional features. To first preserve unauthenticated writes and physical deletion, omit `auth` and leave `timestamps` / `softDelete` disabled (their defaults).
+Auth, timestamps and soft deletion are optional. To keep writes available without login and retain physical deletion during the first migration, omit `auth` and leave `timestamps` and `softDelete` disabled, as they are by default.
 
-If enabling auth, create a separate auth user store and migrate ownership deliberately. Old records without `createdById` can be changed only by administrators. The ownership field is server-managed through the API; prepare ownership in the copied database before startup if ordinary users must edit existing records. Auth does not close read endpoints or file operations. In RC8, file storage persists hashed sessions in the auth user file and restores unexpired sessions after a restart. Existing users without `sessions` remain valid. When manually changing a password hash, also clear that user's `sessions`.
+If enabling auth, create a separate user store and set ownership for existing records. Only administrators can change records without `createdById`. The server manages ownership through the API, so set it in the copied database before startup if ordinary users must edit those records. Reads and file operations remain public. File storage saves hashed sessions in the user file and restores unexpired sessions after a restart. Existing users without `sessions` remain valid. Stop the server before manually changing a password hash, and clear that user's `sessions` at the same time.
 
 With `softDelete`, DELETE retains records, lists hide deleted records by default, direct primary-key reads can retrieve them, and successful PUT/PATCH restores them. There is no automatic conversion of an old application archive flag. See the [lifecycle rules](README.md#record-dates-deletion-and-ownership) before enabling this feature.
 
@@ -186,12 +184,12 @@ With `softDelete`, DELETE retains records, lists hide deleted records by default
 
 `createServer(config)` now takes exactly one argument. Remove the old second `{ files: false }` argument and omit `files` from the config to disable the feature.
 
-`facade.openapi()` and `facade.graphql()` return documents without writing `target`. They require their respective config sections; OpenAPI also needs package metadata and a schema. Use CLI generation flags or explicit writers:
+`facade.openapi()` and `facade.graphql()` return documents without writing `target`. Both methods require `database.schema` and their respective configuration sections. OpenAPI also requires `package.source`. Use CLI generation flags or explicit writers:
 
 ```js
 import { createServer } from '@kollors/deep-json-server';
 import { writeOpenapi } from '@kollors/deep-json-server/openapi';
-import config from './server.config.js';
+import config from './server.config.mjs';
 
 const facade = await createServer(config);
 await writeOpenapi(await facade.openapi(), './generated/openapi.yaml');
@@ -202,10 +200,20 @@ await app.close();
 
 Schema generation alone does not validate existing database records. Call `ready()`, `inject()` or `listen()` to initialize HTTP and check data. Regenerate clients from the new OpenAPI/GraphQL documents after changing models and queries.
 
-## 8. Validate the cutover and keep rollback data
+## 8. Check the migration and prepare rollback
 
-1. Pin the chosen RC version and migrate a **copy** of the 0.9.0 files. Run generation, then initialize the HTTP server to validate data too.
+1. Pin `@kollors/deep-json-server@1.0.0` and migrate a **copy** of the 0.9.0 files. Generate the schemas, then initialize the HTTP server to validate the stored data.
 2. Check representative reads: defaults, explicit foreign keys, nested lists, filters and pagination. Check create, PATCH, PUT, link changes and deletion using disposable copied records.
 3. If enabling auth, test an owner, an administrator and an ordinary non-owner against old records. Confirm uploaded files remain accessible through the retained metadata path.
-4. Stop every old server process before switching: RC8 replaces the old lock directory with native OS locks and readable `<source-name>-lock.json` files for the database, auth, upload root and file metadata. Old and new lock protocols do not coordinate. Run one process per writable store and stop it before manual edits.
+4. Stop all old server processes before switching. Version 1.0.0 locks the database, auth users, upload root and file metadata with native OS locks and readable `<source-name>-lock.json` files. Use one process per writable store and stop it before manual edits.
 5. Keep the original package version, config, schema, data and file metadata together for rollback. Restore them together; do not point 0.9.0 at data already modified by the new server. Include new increment counters (`<database>.counters.json`) and soft-delete restoration metadata in subsequent backups when used.
+
+## Upgrading from a release candidate
+
+RC9 and 1.0.0 use the same API and stored-data formats. If you use an earlier RC, check the following changes and compare your configuration and schema with the current README:
+
+- **Before RC6:** explicit relations now require declarations on both models, with `keyOn: 'current'` on the side that stores the key and `keyOn: 'related'` on its inverse. Follow the paired-model example in section 3.
+- **Before RC7:** nested objects containing only a primary key now link an existing record without updating its fields, dates or owner. Include the fields to change when you intend to update the target. Automatically inferred list keys targeting non-primary fields are now arrays; convert scalar values from earlier versions to arrays, for example `"A"` to `["A"]`. Explicitly declared key types are unchanged.
+- **Before RC8:** stop all old processes before upgrading. Native locks and `<source-name>-lock.json` files replace the earlier lock protocol; old and new versions cannot coordinate their locks. File-backed auth sessions are now saved with users, and users without `sessions` remain valid. For a primary key named `data`, GraphQL update/replace mutations use `key` for its value and `data` for the input object; regenerate affected clients.
+
+See [the changelog](CHANGELOG.md) for the full RC history.

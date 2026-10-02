@@ -1,9 +1,21 @@
 # Changelog
 
+## 1.0.0
+
+First stable release of the 1.0 API, based on RC9. There are no API or stored-data format changes from RC9.
+
+- Define models, validation and paired relations in one schema for REST, GraphQL and OpenAPI.
+- Select fields, filter, sort and paginate root and nested lists with REST `scope` or GraphQL.
+- Enable authentication, owner and administrator permissions, persistent file-backed sessions, timestamps and soft deletion through configuration.
+- Upload, download, rename and delete files using disk or memory storage. Native OS locks prevent competing servers from writing to shared disk stores and recover after crashes.
+- Verify types, lint, test coverage, dependency security and installed-package behavior on Linux, Windows and macOS with Node.js 22, 24 and 26.
+
+The configuration, CLI and REST query format differ from 0.9.0. Follow the [migration guide](MIGRATION.md) or [Russian guide](MIGRATION.ru.md), and stop old server processes before upgrading.
+
 ## 1.0.0-rc.9
 
 - Update vulnerable Fastify, fast-uri and brace-expansion versions within compatible ranges.
-- Check runtime dependencies with npm audit before the full verification and publication pipeline. RC9 includes all RC8 storage, auth, query and cross-platform fixes.
+- Check runtime dependencies with `npm audit` before the full verification and publication pipeline. RC9 includes all RC8 storage, auth, query and cross-platform fixes.
 
 ## 1.0.0-rc.8
 
@@ -46,13 +58,13 @@ When upgrading from an earlier RC, stop all old server processes before starting
 ## 1.0.0-rc.3
 
 - Keep relation keys inferred from `source` in stored records while hiding them from REST, GraphQL, and OpenAPI unless declared explicitly in model `fields`.
-- Clarified relation key selection with and without a model schema in both READMEs.
+- Clarify relation key selection with and without a model schema in both READMEs.
 
 ## 1.0.0-rc.2
 
-- Added root schema `api` to select REST, GraphQL, or both for database routes, and per-model `api` selection with matching formats. Authentication and file routes remain REST endpoints; OpenAPI includes only enabled REST routes.
-- GraphQL-only server configurations no longer require package metadata. OpenAPI keeps authentication and file routes when no database model enables REST.
-- Added installed-package coverage for per-model API selection and checks for code examples in both READMEs.
+- Add root schema `api` to select REST, GraphQL, or both for database routes, and per-model `api` selection with matching formats. Authentication and file routes remain REST endpoints; OpenAPI includes only enabled REST routes.
+- Remove the package metadata requirement for GraphQL-only server configurations. Keep authentication and file routes in OpenAPI when no database model enables REST.
+- Add installed-package coverage for per-model API selection and checks for code examples in both READMEs.
 
 ## 1.0.0-rc.1
 

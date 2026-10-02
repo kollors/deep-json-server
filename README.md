@@ -4,21 +4,19 @@
 
 [Release notes](CHANGELOG.md) · [Migration from 0.9.0](MIGRATION.md)
 
-A JSON mock server with REST, GraphQL, related records, file uploads and schema exports. Supports user login, owner and administrator permissions, record timestamps and soft deletion. Requires Node.js 22 or newer.
-
-**Breaking changes in 1.0.0.** See the [migration guide](MIGRATION.md) when upgrading from 0.9.0. The REST `scope` wildcard selects only scalar fields that do not store relation keys. Arrays, objects, relations and explicitly declared relation keys must be selected explicitly. With auth enabled, record permissions are available through the virtual `actions` field.
+A JSON server for building mock APIs with REST, GraphQL, relations, file uploads and schema exports. Supports authentication, owner and administrator permissions, timestamps and soft deletion. Requires Node.js 22 or newer.
 
 ## Installation
 
 ```sh
-npm install @kollors/deep-json-server@rc
+npm install @kollors/deep-json-server
 ```
 
-To install this release candidate, use `@1.0.0-rc.9`.
+To pin version 1.0.0, use `npm install @kollors/deep-json-server@1.0.0`.
 
 ## Quick start
 
-Create two files in the same directory.
+Create two files in the same directory. The configuration file uses `.mjs` because it is an ES module. For a `.js` file, set `"type": "module"` in your project's `package.json`.
 
 `database.json`:
 
@@ -30,23 +28,25 @@ Create two files in the same directory.
 }
 ```
 
-`server.config.js`:
+`server.config.mjs`:
 
 ```js
 export default { storage: 'file', database: { source: './database.json' } };
 ```
 
 ```sh
-npx deep-json-server server.config.js
+npx deep-json-server server.config.mjs
 ```
 
 The user list is available at `http://127.0.0.1:4001/users`.
 
-Add a [model schema](#model-schema) to define relations and validation. See [queries](#queries-and-responses), [authentication](#authentication), [soft deletion](#record-dates-deletion-and-ownership), [files](#files) and the [programmatic API](#programmatic-api) for more.
+Add a [model schema](#model-schema) to define relations and validation. The sections below cover [queries](#queries-and-responses), [authentication](#authentication), [soft deletion](#record-dates-deletion-and-ownership), [files](#files) and the [programmatic API](#programmatic-api).
 
 ## Configuration
 
-With `storage: 'file'`, provide paths for every source and the schema. With `'memory'`, provide data directly. Use the same mode throughout the configuration. Add `auth` or `files` to enable those REST services. Add `graphql` to configure the GraphQL endpoint and `openapi` to serve the REST specification. `graphql: {}` and `openapi: {}` use default endpoint paths; add `target` to export a schema. GraphQL must also be enabled by root `api` in the model schema.
+With `storage: 'file'`, provide paths for every source and the schema. With `'memory'`, provide data directly. Use the same mode throughout the configuration.
+
+Add `auth` or `files` to enable those REST services. Add `graphql` to configure the GraphQL endpoint and `openapi` to serve the REST specification. `graphql: {}` and `openapi: {}` use default endpoint paths; add `target` to export a schema. With a `graphql` section, an explicit root `api` must include `graphql`. If root `api` is omitted, the server uses `['rest', 'graphql']`.
 
 ```js
 export default {
@@ -113,7 +113,7 @@ Set the root `api` in `schema.json`:
 }
 ```
 
-Use `"api": ["rest"]` with `openapi: {}` for REST and its OpenAPI description, or `["rest", "graphql"]` with both sections for both database APIs. The `graphql` section is required exactly when the schema root includes `graphql`. OpenAPI describes database routes only when REST is enabled; authentication and file routes are included whenever their sections are configured.
+Use `"api": ["rest"]` with `openapi: {}` for REST and its OpenAPI description, or `["rest", "graphql"]` with both sections for both database APIs. If you set the schema's root `api` explicitly, include `graphql` if and only if the configuration has a `graphql` section. If root `api` is omitted, the server derives it from the configuration. OpenAPI describes database routes only when REST is enabled; authentication and file routes are included whenever their sections are configured.
 
 ### CLI
 
@@ -188,9 +188,13 @@ Model definitions belong in `models`. The schema root accepts `models`, `api`, `
 
 Explicit `['rest']` enables database REST routes; `['graphql']` enables GraphQL operations; `['rest', 'graphql']` enables both. OpenAPI describes REST routes when `openapi` is configured. Root `api: []` is invalid; `[]` is allowed only at the model level.
 
-A model without its own `api` inherits the root value. A model can override it with `['rest']`, `['graphql']`, both, or `[]` to hide it from both. A model cannot enable an API absent from root `api`. OpenAPI includes models with REST enabled. GraphQL generation needs at least one GraphQL model; REST OpenAPI generation needs at least one REST model. On a GraphQL-only server, OpenAPI can still describe configured auth and file routes. Related models must allow the same API. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+A model without its own `api` inherits the root value. A model can override it with `['rest']`, `['graphql']`, both, or `[]` to hide it from both. A model cannot enable an API absent from root `api`.
 
-Thus an explicit root `"api": ["rest", "graphql"]` enables both APIs for models that inherit the root setting. The array order does not matter.
+OpenAPI includes models with REST enabled. GraphQL generation needs at least one GraphQL model; REST OpenAPI generation needs at least one REST model. On a GraphQL-only server, OpenAPI can still describe configured auth and file routes.
+
+Related models must allow the same API. Model names must be valid identifiers; type and operation collisions cause errors. `and`, `or` and `not` are reserved filter names.
+
+The order of values in `api` does not matter.
 
 For example, with root `api: ['rest', 'graphql']`, a model set to `api: ['rest']` has REST routes and OpenAPI paths but no GraphQL operations; a model set to `api: ['graphql']` has GraphQL operations but no REST routes or OpenAPI paths.
 
@@ -232,7 +236,11 @@ String and numeric constraints on `string[]`/`number[]` apply to every element. 
 
 Each `enum` value must match the field type and its constraints. Use `nullable: true` to allow `null` for the field; do not include `null` in `enum`. Invalid values are rejected when the schema is loaded.
 
-Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation. Generated fields must be declared at the top level, are excluded from input types and cannot have `default`. Replacing a record preserves generated values and read-only fields, including nested objects. Setting a nullable parent to `null` is rejected if it would remove stored read-only descendants. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
+Each model requires exactly one primary key of type `string` or `number`, declared at the top level. The name is arbitrary: `id`, `username`, `code`. If `generated` is omitted, the client supplies the value on creation.
+
+Generated fields must be declared at the top level, are excluded from input types and cannot have `default`.
+
+Replacing a record preserves generated values and read-only fields, including nested objects. Setting a nullable parent to `null` is rejected if it would remove stored read-only descendants. To protect fields inside an array, mark the entire array or its containing object as `readOnly`. Objects containing only server-managed fields are output-only.
 
 For example, a `LocalUser` with primary key `username` and `password: {"type":"string","required":true,"writeOnly":true}` has `localUser(username: ...)` and `/localUsers/{username}`. A `writeOnly` field accepts input and is excluded from responses, `scope`, filters and ordering.
 
@@ -257,7 +265,11 @@ On the `current` side, `target` defaults to the related model's primary key. `so
 
 `source` is always a path in the current model, and `target` is always a path in the model named by `type`. For an inverse relation, the paths are swapped: `Country.users` has `source: "id"` and `target: "countryId"`. Specify a path when the stored key has a custom name. If multiple relations connect the same models, disambiguate the inverse declarations, for example `Country.birthUsers = {"type":"User[]","keyOn":"related","target":"birthCountryId"}` and `Country.residenceUsers = {"type":"User[]","keyOn":"related","target":"residenceCountryId"}`. Missing, inconsistent, or ambiguous pairs fail when the schema loads.
 
-Relation keys remain in the database even when they are absent from `fields`. On the `current` side, a `source` field can be omitted when the target key type is known: the server infers an array of keys for a list relation or a scalar key for a single relation. This applies to primary and non-primary target fields. An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available. Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
+Relation keys remain in the database even when they are absent from `fields`. On the `current` side, the key named by `source` need not be declared in `fields` if the target key type is known: the server infers an array of keys for a list relation or a scalar key for a single relation. This applies to primary and non-primary target fields.
+
+An inferred key is internal: REST and GraphQL cannot read, select, filter, sort or write it directly, and OpenAPI does not describe it. The relation itself remains available.
+
+Declare the key in `fields`, for example `"countryId": { "type": "string" }`, to expose it in the APIs. An ambiguous mapping also requires an explicit declaration.
 
 For example, `publishers: { "type": "Publisher[]", "keyOn": "current", "target": "code" }` infers `publisherCodes: { "type": "string[]" }` when `Publisher.code` is a string, even if the primary key is `Publisher.id`. Explicitly declared storage key types are preserved.
 
@@ -275,6 +287,8 @@ Omitting a `related` relation from `PUT` leaves its existing links unchanged, be
 Cascading deletion runs as one operation, including cyclic relations. A validation failure cancels the entire operation. A `related` inverse without `onDelete` does not restrict deletion merely because the other side stores a key; set `onDelete` on that inverse to define an additional rule.
 
 ## Example database
+
+The database below uses the full [example schema](examples/schema.json). It includes movies, genres and publishers in addition to the users and countries shown in the smaller schema above.
 
 ```json
 {
@@ -368,7 +382,7 @@ Cascading deletion runs as one operation, including cyclic relations. A validati
 
 ## Queries and responses
 
-The movie, actor and genre examples use the full [example schema](examples/schema.json). Run them with the [example configuration](examples/server.config.js):
+Run the examples below with the [example configuration](examples/server.config.js):
 
 ```sh
 npx deep-json-server examples/server.config.js
@@ -384,7 +398,9 @@ Primitive arrays are returned as plain arrays. Every object list accepts optiona
 
 Use `page` and `pageSize` in `pager`. The default is the first page with the size from `server.pageSize`. Both values must be positive integers; `pageSize` is limited by `server.maxPageSize`. Out-of-range pages return empty `data` with the total matching record count in `total`.
 
-`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Conditions in the same object must all match. `and` and `or` take arrays of conditions; `not` takes one condition and can also be used inside a field filter. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`. String `contains`, `startsWith` and `endsWith` ignore case; `eq`, `ne` and `in` compare exact values. For strings, `gt`, `gte`, `lt` and `lte` use the same case-insensitive, numeric-aware order as sorting. A field condition is an object containing an operator, such as `{ "id": { "eq": "1" } }`.
+`where` uses field operators `eq`, `ne`, `in`, string `contains`/`startsWith`/`endsWith`, and comparisons `gt`, `gte`, `lt`, `lte`. Conditions in the same object must all match. `and` and `or` take arrays of conditions; `not` takes one condition and can also be used inside a field filter. Arrays support `some`, `every`, `none`; primitive arrays also support `contains`, `in`.
+
+String `contains`, `startsWith` and `endsWith` ignore case; `eq`, `ne` and `in` compare exact values. For strings, `gt`, `gte`, `lt` and `lte` use the same case-insensitive, numeric-aware order as sorting. A field condition is an object containing an operator, such as `{ "id": { "eq": "1" } }`.
 
 ```json
 {
@@ -417,7 +433,7 @@ When REST is enabled by root `api`, `GET /` lists only REST-enabled models: `{ "
 | PATCH | `/users/{id}` | `userUpdate` |
 | DELETE | `/users/{id}` | `userDelete` |
 
-The path parameter name follows the primary key. POST, PUT and PATCH accept a JSON record object. PUT replaces the record while retaining its key and server-managed fields. PATCH merges fields at the top level; supplied nested objects are replaced while preserving their read-only fields. Creation and replacement require all mandatory fields. Updates validate supplied values and the final record. Missing records return `404`; conflicts return `409`.
+The path parameter name follows the primary key. POST, PUT and PATCH accept a JSON record object. PUT replaces the record while retaining its key and server-managed fields. PATCH merges fields at the top level; supplied nested objects are replaced while preserving their read-only fields. Creation and replacement require all writable mandatory fields without defaults. Updates validate supplied values and the final record. Missing records return `404`; conflicts return `409`.
 
 POST returns the created record with status `201`; PUT, PATCH and DELETE return the updated or deleted record with status `200`. REST errors use `{ "error": "Error description" }`.
 
@@ -448,7 +464,11 @@ const params = new URLSearchParams({ scope: JSON.stringify(scope) });
 const response = await fetch(`/users?${params}`);
 ```
 
-Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object. `"*": true` includes only scalar fields of the current model that do not store relation keys. Arrays, objects, relations, their keys and `writeOnly` fields are not included by the wildcard. With a schema, a relation key can be selected as `{ "*": true, "countryId": true }` only if it is declared in `fields`. Without a schema, a key present in stored records can be selected explicitly even if omitted from `*`; the wildcard omits it when the server infers a relation from its name and an existing collection.
+Select scalars and primitive arrays with `true`, and objects or relations with their own scope arrays. Without arguments, the array contains only the fields object.
+
+`"*": true` includes only scalar fields of the current model that do not store relation keys. Arrays, objects, relations, their keys and `writeOnly` fields are not included by the wildcard.
+
+With a schema, a relation key can be selected as `{ "*": true, "countryId": true }` only if it is declared in `fields`. Without a schema, a key present in stored records can be selected explicitly even if omitted from `*`; the wildcard omits it when the server infers a relation from its name and an existing collection.
 
 For example, select a movie's own fields, its actors' users and sorted genres:
 
@@ -472,9 +492,22 @@ For example, select a movie's own fields, its actors' users and sorted genres:
 
 Omitting `scope` returns scalar fields, as with `[{"*":true}]`. An empty selection `[{}]` returns an object without fields. Lists retain the `{ data, total }` response structure.
 
-Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept. For embedded object arrays without primary keys, each source element is kept once, even if several parts select it. Distinct elements with equal contents remain separate. Single-record queries and mutation responses can set arguments on their embedded lists. Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
+Arguments are available only on lists. A list can instead use `{ "union": [scope, ...] }`: each part is a normal list scope, parts run in array order, and the first record for each primary key is kept.
 
-REST and GraphQL also enforce a shared budget for each request: at most 1,000 selection nodes, 10,000 expanded records, 100,000 accounted execution steps, and a conservative JSON size estimate of 8 MiB. Nested lists, `union` parts and GraphQL aliases consume the same budget. Exceeding a limit returns REST `400` or GraphQL `INVALID_QUERY`; reduce selected fields, nesting or page sizes. REST mutations roll back if their response projection exceeds the budget.
+For embedded object arrays without primary keys, each source element is kept once, even if several parts select it. Distinct elements with equal contents remain separate.
+
+Single-record queries and mutation responses can set arguments on their embedded lists.
+
+Parameters are validated even on empty data; an invalid response selection rolls back record changes. Invalid scopes return `400`. The JSON length limit is 10,000 characters; selection depth is limited to 32 levels.
+
+REST and GraphQL limit the total work per request:
+
+- 1,000 nodes in the field-selection tree.
+- 10,000 records expanded into the response.
+- 100,000 counted processing steps, including filtering and sorting.
+- 8 MiB for the estimated JSON response size.
+
+Nested lists, `union` parts and GraphQL aliases share these limits. The size estimate includes a margin for JSON encoding, so a request may reach the limit before its actual response reaches 8 MiB. Exceeding a limit returns REST `400` or GraphQL `INVALID_QUERY`; reduce selected fields, nesting or page sizes. REST mutations roll back if building their response exceeds a limit.
 
 ### Nested writes
 
@@ -504,11 +537,15 @@ Content-Type: application/json
 | An object with a primary key and other fields | PATCH updates supplied fields; PUT replaces the related record |
 | An object without a primary key | Create a related record with defaults and a generated key |
 
-The key name and type follow the target model. An object containing only that key is a reference in POST, PUT and PATCH; it does not require the target's other mandatory fields. Adding other fields makes it an update: PUT requires all mandatory fields and removes omitted optional fields or resets them to defaults; POST/PATCH update supplied fields. Replacement preserves primary keys, generated values and `readOnly` fields. A missing target is an error; creating a nested record without a key requires an autogenerated primary key. Declared storage keys, for example `countryId`, can also change links directly.
+The key name and type follow the target model. An object containing only that key is a reference in POST, PUT and PATCH; it does not require the target's other mandatory fields.
+
+Adding other fields makes it an update: PUT requires writable mandatory fields without defaults and removes omitted optional fields or resets them to defaults; POST/PATCH update supplied fields. Replacement preserves primary keys, generated values and `readOnly` fields.
+
+A missing target is an error; creating a nested record without a key requires an autogenerated primary key. Declared storage keys, for example `countryId`, can also change links directly.
 
 A supplied list replaces the relation's membership. PATCH preserves omitted relations. PUT replaces the current record's writable fields, including its own relation keys, but preserves omitted `keyOn: "related"` links whose keys live in other records. `[]` clears a list and `null` clears a nullable single relation. Removing a link does not delete the related record. Required single relations must remain linked; required list relations may be empty.
 
-When the storage key is declared in `fields`, use either the relation field or its key in an object, for example `genres` or `genreIds`. Supplying both fields returns `400 INVALID_INPUT`, even when their key sets match:
+When the storage key is declared in `fields`, use either the relation field or its key in an object, for example `genres` or `genreIds`. Supplying both fields returns REST `400` or GraphQL `INVALID_INPUT`, even when their key sets match:
 
 ```json
 {
@@ -519,7 +556,7 @@ When the storage key is declared in `fields`, use either the relation field or i
 
 The server rejects both fields together and rolls back the operation. Relation fields accept objects only; a declared key such as `genreIds` changes links without creating or updating related records. Reverse relations update the target key. If a target path crosses an array and the server cannot identify one element to attach, provide the array with the intended keys explicitly. Protected keys cannot be changed.
 
-All nested changes belong to the main record's transaction. A validation error, missing record or invalid response selection rolls back the entire operation. Updating a shared record affects every record linked to it.
+All nested writes belong to the main record's transaction. A validation error or missing target rolls back all changes. In REST, an invalid response selection also rolls back the write. GraphQL checks selections before writing, but an error while resolving a committed mutation's result does not undo it; see [GraphQL](#graphql). Updating a shared record affects every record linked to it.
 
 GraphQL accepts typed objects in relation fields. To change only links, including in a replace mutation, pass objects containing only primary keys or use a declared storage key such as `genreIds`. Required fields for nested creation or replacement with additional fields are checked at runtime. For example:
 
@@ -541,7 +578,7 @@ mutation {
 Set `database.schema`, include `graphql` in the schema's root `api`, and add `graphql: {}` to the configuration:
 
 ```sh
-npx deep-json-server server.config.js
+npx deep-json-server server.config.mjs
 ```
 
 Send requests to `/graphql` using POST with `Content-Type: application/json` and a body of `{ "query": "…", "variables": {} }`. Change the path through `graphql.endpoint`.
@@ -577,9 +614,9 @@ When the primary key is named `data`, Update/Replace mutations accept its value 
 
 String primary keys use GraphQL `ID`; ordinary strings use `String`, numbers use `Float`, and pagination parameters use `Int`. Schema enums preserve valid string labels; other values receive `VALUE_0`, `VALUE_1`, etc. String lengths, formats and other model constraints are validated by the server during request execution. Introspection is available for exploring the schema. Selected list arguments are validated before executing mutations.
 
-Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`, `CONFLICT`, `UNAUTHENTICATED`, `FORBIDDEN` or `INTERNAL_ERROR`. GraphQL syntax and type errors appear in the standard `errors` array. Query depth is limited to 32 levels. The request budgets described for REST also apply to GraphQL. Selection limits and list arguments are checked before mutations run. Errors while resolving a mutation result, including runtime budget exhaustion, do not undo a mutation that has already committed; query the record to check its state before retrying.
+Errors include `extensions.code`: `INVALID_INPUT`, `INVALID_QUERY`, `NOT_FOUND`, `CONFLICT`, `UNAUTHENTICATED`, `FORBIDDEN` or `INTERNAL_ERROR`. GraphQL syntax and type errors appear in the standard `errors` array. Query depth is limited to 32 levels. The request limits described for REST also apply to GraphQL. Selection limits and list arguments are checked before mutations run. Errors while resolving a mutation result, including exceeding a request limit, do not undo a mutation that has already committed; query the record to check its state before retrying.
 
-A GraphQL operation containing several mutation fields is not one transaction: fields execute in order, and earlier committed changes remain if a later result fails. Runtime budget exhaustion returns `data: null` and stops subsequent mutation fields, but `data: null` does not mean writes were rolled back. Recover the saved state with a smaller query. Automatically retrying a create mutation with a generated key can create a second record.
+A GraphQL operation containing several mutation fields is not one transaction: fields execute in order, and earlier committed changes remain if a later result fails. Exceeding a request limit during execution returns `data: null` and stops subsequent mutation fields. Check the saved state with a smaller query before retrying: `data: null` does not indicate a rollback, and retrying a create mutation with a generated key can create a second record.
 
 ## OpenAPI and schema exports
 
@@ -598,13 +635,13 @@ export default {
 ```
 
 ```bash
-npx deep-json-server server.config.js --generate-only
-npx deep-json-server server.config.js --generate
+npx deep-json-server server.config.mjs --generate-only
+npx deep-json-server server.config.mjs --generate
 ```
 
 `--generate-only` exports and exits; `--generate` starts the server after exporting. Configuration sections select the formats. Each selected format requires its own `target`. The OpenAPI HTTP endpoint returns JSON; file exports from `writeOpenapi()` and the CLI are YAML. Missing sections, missing targets or generation errors fail the command before server startup.
 
-Export does not open the database, user records or files. Every selected `target` is checked before writing and cannot overwrite the configuration, database, schema, users, counters or file metadata.
+Schema generation does not load database records, auth users or uploaded files. Every selected `target` is checked before writing and cannot overwrite the configuration, database, schema, users, locks, counters or file metadata.
 
 ## Authentication
 
@@ -639,7 +676,7 @@ export default {
 };
 ```
 
-Start with `npx deep-json-server server.config.js`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`, and `sessions` defaults to `[]`, so existing user files remain valid. Passwords use salted scrypt hashes.
+Start with `npx deep-json-server server.config.mjs`. Each initial user needs a unique string `id`, a unique `username` and a `passwordHash` created by the helper. `isAdmin` defaults to `false`, and `sessions` defaults to `[]`, so existing user files remain valid. Passwords use salted scrypt hashes.
 
 With `storage: 'memory'`, pass an array in `auth.source`:
 
@@ -662,7 +699,7 @@ export default {
 
 Auth users and their sessions are stored together in `auth.source`, separately from the database. Each entry in a user's `sessions` array contains `{ tokenHash, expiresAt }`: `tokenHash` is the SHA-256 hash of the access token as 64 lowercase hexadecimal characters, and `expiresAt` is an absolute Unix timestamp in milliseconds. Raw tokens are never stored, and auth responses expose neither password hashes nor session records. Token hashes must be unique across all users.
 
-With `storage: 'file'`, login, logout and user changes are saved to the same JSON file before a successful response. Valid sessions survive server restarts: the client can keep using its existing token. A password change and removal of that user's sessions are saved together. A failed write leaves the previous users and sessions unchanged. Restart the server after editing the file manually; if you replace a password hash manually, also clear that user's `sessions`.
+With `storage: 'file'`, changes to users and sessions are saved to the JSON file before a successful response. Valid sessions survive server restarts: the client can keep using its existing token. A password change and removal of that user's sessions are saved together. A failed write leaves the previous users and sessions unchanged. Stop the server before editing the file manually; if you replace a password hash, also clear that user's `sessions`, then start the server again.
 
 With `storage: 'memory'`, the supplied user array is not modified. Every startup loads the initial users and sessions again. Sessions created at runtime disappear on restart; unexpired sessions supplied in the initial data are restored, including any that were logged out during the previous run. The client still needs the corresponding raw token; it cannot recover it from `tokenHash`.
 
@@ -717,7 +754,7 @@ query {
 
 `actions` is available on root and related model records, including mutation results. It cannot be written, filtered or ordered. Plain embedded objects and auth user responses do not receive it.
 
-When `openapi` is configured, its document describes auth routes, optional Bearer authentication on record reads, required authentication on record changes and the `actions` response field. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.js --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when reading permissions or changing records. GraphQL and OpenAPI require `database.schema`.
+When `openapi` is configured, its document describes auth routes, optional Bearer authentication on record reads, required authentication on record changes and the `actions` response field. In Swagger UI, paste a token from login into **Authorize**. For schema exports, enable auth in the configuration and run `npx deep-json-server server.config.mjs --generate-only`; the users file is not read during generation. Auth methods are exposed through REST. GraphQL checks the same token when reading permissions or changing records. GraphQL and OpenAPI require `database.schema`.
 
 ## Record dates, deletion and ownership
 
@@ -758,7 +795,7 @@ Precedence: model → schema root → `false`. Explicit `false` disables an inhe
 
 Dates are UTC ISO 8601 strings. New records receive the same creation and update time and, with auth, the authenticated user's ID as creator and editor. PUT/PATCH preserve the creator and creation time. DELETE updates the deletion fields and the enabled last-update fields. Existing records with unknown dates or authors expose `null`. These fields are read-only in REST and GraphQL; embedded plain objects do not receive their own audit fields. Previously stored audit values are retained when their features are disabled.
 
-With soft deletion, DELETE retains the record in the database. Repeating DELETE on an already deleted record leaves its deletion details unchanged. Fetching by primary key returns deleted records too. A successful PUT/PATCH restores the record by clearing `deletedAt` and `deletedById`. An empty PATCH restores it without replacing other fields; PUT requires all mandatory fields.
+With soft deletion, DELETE retains the record in the database. Repeating DELETE on an already deleted record leaves its deletion details unchanged. Fetching by primary key returns deleted records too. A successful PUT/PATCH restores the record by clearing `deletedAt` and `deletedById`. An empty PATCH restores it without replacing other fields; PUT follows the usual replacement rules.
 
 Lists return active records by default. To select deleted records, specify `deletedAt` in `where`:
 
@@ -775,7 +812,11 @@ Cascade deletion follows `onDelete` and each affected model's `softDelete`. Rest
 
 Restoration metadata is stored with the records and survives restarts; include it when backing up the database. The internal `djsDeletion` field is reserved and is not exposed by either API.
 
-With auth, any authenticated user can create records. Updating, deleting and restoring require ownership through `createdById` or `isAdmin: true`. Only administrators can change unowned records. Administrator edits preserve the original owner. The rules cover nested writes, changes to relation storage keys, cascades and restoration. Linking a record through a primary-key-only object or a declared storage key does not require owning the unchanged target. A nested object with additional fields requires permission to update it. Changing inverse links still requires permission for every record whose stored key changes. Each mutation is atomic: denied changes leave all affected records unchanged.
+With auth, any authenticated user can create records. Updating, deleting and restoring require ownership through `createdById` or `isAdmin: true`. Only administrators can change unowned records. Administrator edits preserve the original owner. The rules cover nested writes, changes to relation storage keys, cascades and restoration.
+
+Linking a record through a primary-key-only object or a declared storage key does not require owning the unchanged target. A nested object with additional fields requires permission to update it. Changing inverse links still requires permission for every record whose stored key changes.
+
+Each record change, including its nested writes, is atomic: a permission failure leaves all records affected by that change unchanged. In GraphQL, this applies to each mutation field; see [GraphQL](#graphql) for operations with several mutation fields.
 
 REST returns 401 for an invalid or missing token and 403 for insufficient permissions. GraphQL applies the same rules to mutations and returns `UNAUTHENTICATED` or `FORBIDDEN`; obtain the token through REST login and send `Authorization: Bearer <token>`. GraphQL reads remain public, as do OPTIONS requests and every file operation.
 
@@ -794,7 +835,7 @@ export default {
 Start the server:
 
 ```bash
-npx deep-json-server server.config.js
+npx deep-json-server server.config.mjs
 ```
 
 For temporary tests, choose `storage: 'memory'` and pass an array in `files.source`. Each initial record contains `name`, `mimeType`, binary `content` as a `Uint8Array`, and an optional `directory`. Uploaded files then remain in memory until the process exits.
@@ -854,7 +895,7 @@ Content-Type: application/json
 
 In disk mode, the binary is stored at `<files.source>/<directory>/<name>`. Metadata defaults to `<files.source>/.files.json`; set `files.metadata` for another location. Directories and the metadata file are created when needed.
 
-Use one server process per writable disk source. A second server sharing the database, auth users, file storage directory or metadata fails at startup. Locks are single JSON files next to their sources: `database.json` uses `database-lock.json`, with the last extension removed from the configured source name. A lock records its type, process ID and owner token. Closing the server removes the lock files; after a crash the operating system releases the locks and the next server reuses the abandoned files. Disk locking uses the native `fs-native-extensions` dependency; memory storage and schema generation do not load it. Symbolic-link sources lock both the original entry and its target. Stop the server before editing stored files or metadata manually. Paths inside the file storage directory cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file.
+Paths inside the file storage directory cannot contain symbolic links. Uploads and renames cannot overwrite the database, its lock, counters, schema, auth users, loaded configuration or metadata file. Stop the server before editing stored files or metadata manually. Shared disk sources are protected by the locks described under [data storage](#data-storage).
 
 Send the file as a binary request body. In a browser, use `xhr.send(file)` and track progress through `XMLHttpRequest.upload.onprogress`. The default maximum size is 100 MiB and can be changed through `server.maxFileSize`. Missing or unsafe headers and paths return `400`, an exceeded limit returns `413`, and a missing, malformed, or Fastify-unsupported `Content-Type` returns `400` or `415`, depending on which validation stage rejects it.
 
@@ -862,7 +903,7 @@ Send the file as a binary request body. In a browser, use `xhr.send(file)` and t
 
 ```js
 import { createServer } from '@kollors/deep-json-server/server';
-import config from './server.config.js';
+import config from './server.config.mjs';
 
 const facade = await createServer(config);
 const server = facade.fastify();
@@ -870,9 +911,9 @@ await server.listen();
 // await server.close();
 ```
 
-The `openapi()` and `graphql()` methods return schemas and require `database.schema`. `fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup.
+`fastify()` returns the server instance for configuration and startup. The database and enabled services initialize on `ready()`, `listen()` or the first `inject()`; initialization errors stop startup.
 
-`createServer(config)` takes the same configuration object as the CLI. When `openapi` is configured, `package.source` is required. The `openapi()` and `graphql()` methods require their respective sections. They return schemas without writing files.
+`createServer(config)` takes the same configuration object as the CLI. The `openapi()` and `graphql()` methods require `database.schema` and their respective configuration sections. OpenAPI also requires `package.source`. Both methods return schema documents without writing files.
 
 The returned Fastify instance accepts standard `listen()` options, including a Unix socket path. Calling `listen()` without options uses `server.host` and `server.port`.
 
@@ -890,11 +931,15 @@ await writeGraphql(sdl, './generated/schema.graphql');
 
 Standalone generators accept a schema path or object without a server configuration. If root `api` is omitted, `generateOpenapi()` defaults it to REST and `generateGraphql()` to GraphQL. Explicit root and model `api` values still apply; the selected format must have an enabled model. Timestamps and soft deletion come from the schema. `{ auth: true }` adds ownership and `actions` fields; OpenAPI also describes auth routes and token requirements. `hashPassword()` is available from the root package.
 
-`generateOpenapi()` requires `packagePath` and also accepts `host`, `port`, `pageSize` and `maxPageSize`. It reads OpenAPI metadata from that package. Pass a schema object instead of a path if preferred. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
+`generateOpenapi()` requires `packagePath` and also accepts `host`, `port`, `pageSize` and `maxPageSize`. It reads OpenAPI metadata from that package. Servers and generators use their own copy of the model. Pagination sizes must be positive integers; `pageSize` cannot exceed `maxPageSize`.
 
 ## Data storage
 
-Updates run sequentially within one server instance and are validated on a copy of the data before saving. Use one server process per database file. `increment` counters are stored next to the database in `<database path>.counters.json`; keep that file with the database. Numbers are reserved before the data write, so a failed write can leave gaps but cannot reuse a reserved number.
+Updates run sequentially within one server instance and are validated on a copy of the data before saving. `increment` counters are stored next to the database in `<database path>.counters.json`; keep that file with the database. Numbers are reserved before the data write, so a failed write can leave gaps but cannot reuse a reserved number.
+
+Use one server process per writable disk source. A second server sharing the database, auth users, file storage directory or metadata fails at startup. Each lock is a JSON file next to its source: `database.json` uses `database-lock.json`. The name drops the source's last extension and adds `-lock.json`. The file records the lock type, process ID and owner token.
+
+Closing the server removes the lock files. After a crash, the operating system releases the locks and the next server reuses the abandoned files. Disk locking uses the native `fs-native-extensions` dependency; memory storage and schema generation do not load it. For a symbolic-link source, the server locks both the link path and its target. Stop the server before editing any stored source manually.
 
 ## Development
 
@@ -905,8 +950,10 @@ npm ci
 npm run verify
 ```
 
-`npm run verify` checks types, code style, test coverage and installation from the package archive.
+`npm run verify` checks runtime dependencies with `npm audit`, then runs type checks, lint, coverage-gated tests and installation checks against the package archive. The installed-package checks cover public types, CLI startup over HTTP and recovery after a process crash.
 
-To publish a prerelease, update the version in `package.json` and `package-lock.json` (the runtime and CLI read it from package metadata), then push the commit to `main`. GitHub Actions creates its `v<version>` tag and publishes through trusted publishing to the `alpha`, `beta` or `rc` channel. Stable versions publish to `latest` from an explicitly pushed version tag.
+For a prerelease, update the version in `package.json` and `package-lock.json`, then push the commit to `main`. For a stable release, also push its `v<version>` tag, such as `v1.0.0`. The runtime and CLI read the version from package metadata.
+
+GitHub Actions runs the full verification on Linux, Windows and macOS with Node.js 22, 24 and 26. Publication starts only when all nine jobs pass. Prereleases receive a version tag automatically and publish to `alpha`, `beta` or `rc`; stable versions publish to `latest`. npm authenticates the workflow through trusted publishing, so it does not need a stored npm token.
 
 License: MIT.
